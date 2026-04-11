@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CC Switch 深链接测试</title>
+    <title>bianma-app 深链接测试</title>
     <style>
         * {
             margin: 0;
@@ -323,8 +323,8 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔗 CC Switch 深链接测试</h1>
-            <p>点击下方链接测试深链接导入功能</p>
+            <h1>🔗 bianma-app 深链接测试</h1>
+            <p>点击下方链接测试 `bianma://` 深链接导入功能</p>
         </div>
 
         <div class="content">
@@ -634,7 +634,7 @@
             <div class="section">
                 <h2>🚀 深链接生成器</h2>
                 <p style="color: #7f8c8d; margin-bottom: 24px;">
-                    填写参数信息，自动生成深链接并导入到 CC Switch
+                    填写参数信息，自动生成 `bianma://` 深链接并导入到 bianma-app
                 </p>
                 <!-- MCP Servers 生成器 -->
                 <div class="generator-section">
@@ -846,11 +846,12 @@
             <div class="info-box">
                 <h4>⚠️ 使用注意事项</h4>
                 <ul>
-                    <li><strong>首次点击</strong>：浏览器会询问是否允许打开 CC Switch，请点击"允许"或"打开"</li>
+                    <li><strong>首次点击</strong>：浏览器会询问是否允许打开 bianma-app，请点击"允许"或"打开"</li>
                     <li><strong>macOS 用户</strong>：可能需要在"系统设置" → "隐私与安全性"中允许应用</li>
                     <li><strong>测试 API Key</strong>：示例中的 API Key 仅用于测试格式，无法实际使用</li>
                     <li><strong>导入确认</strong>：点击链接后会弹出确认对话框，API Key 会被掩码显示（前4位+****）</li>
-                    <li><strong>编辑配置</strong>：导入后可以在 CC Switch 中随时编辑或删除配置</li>
+                    <li><strong>编辑配置</strong>：导入后可以在 bianma-app 中随时编辑或删除配置</li>
+                    <li><strong>兼容范围</strong>：新链接请统一使用 `bianma://`；历史 scheme 仅用于 legacy compatibility 校验。</li>
                 </ul>
             </div>
 
@@ -1528,7 +1529,7 @@ requires_openai_auth = true`;
 
                 // 验证协议
                 if (!['bianma:','ccswitch:'].includes(url.protocol)) {
-                    alert('❌ 无效的深链接协议！必须以 bianma:// 开头，旧 ccswitch:// 也兼容');
+                    alert('❌ 无效的深链接协议！请使用 bianma://；旧 scheme 仅用于兼容校验');
                     return;
                 }
 
