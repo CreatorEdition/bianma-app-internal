@@ -2,9 +2,13 @@
 
 This directory contains the Flatpak manifest for `bianma-app`, used to convert the generated `.deb` artifact into an installable `.flatpak` package via CI or local builds.
 
+This document is a packaging and compatibility note for maintainers. It is not the current public installation guide or the current formal distribution entry for desktop users.
+
 > Public brand: `bianma-app`. The `com.ccswitch.desktop`, `cc-switch.deb`, and `CC-Switch-Linux.flatpak` identifiers documented below are retained only for Flatpak compatibility and existing tooling continuity.
 
 The manifest and app ID still use the legacy `com.ccswitch.desktop` names so existing Flatpak tooling stays compatible, even though the runtime it installs is bianma-app.
+
+If you are looking for end-user install guidance, use the public README and user manual instead of this file.
 
 ## Dependencies
 
