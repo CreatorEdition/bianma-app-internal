@@ -19,7 +19,7 @@ This public repository documents the open-source core, community layer, compatib
 
 - Public brand: `bianma-app`
 - Primary public URI scheme: `bianma://`
-- Legacy `ccswitch://`: migration and backward compatibility only
+- Migration compatibility details: see the [migration compatibility guide (ZH)](../zh/5-faq/5.5-migration-compatibility.md)
 
 ## Key Links
 
