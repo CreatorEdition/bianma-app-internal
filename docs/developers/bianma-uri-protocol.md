@@ -83,11 +83,9 @@ Not publicly supported:
 
 If a tool is not listed as supported, do not treat it as publicly supported.
 
-## Legacy Compatibility
+## Migration Note
 
-`ccswitch://` is kept only for migration and backward compatibility.
-New public integrations should use `bianma://`.
-
-Legacy behavior is described only in migration/compatibility documentation:
+`ccswitch://` remains only as a migration compatibility alias.
+New public integrations should use `bianma://`, and legacy behavior should be referenced only from migration documentation:
 
 - [Migration compatibility guide (ZH)](../user-manual/zh/5-faq/5.5-migration-compatibility.md)
