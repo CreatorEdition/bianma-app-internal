@@ -734,8 +734,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "cc-switch"
-version = "3.12.3"
+name = "bianma-app"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "arboard",

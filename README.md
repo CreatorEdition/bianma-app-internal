@@ -2,6 +2,10 @@
 
 bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等多种 AI 编码工具的统一命令行入口，集中管理扩展、代理与配置。所有对外推广、文档与开发体验都以 bianma-app 为品牌锚点。
 
+## 仓库状态
+
+`bianma-app` 现在是 Bianma 的唯一正式开源主仓。后续源码、公开协作、Release、Updater 与二进制分发默认都以本仓为准；历史 `bianma-app-product` 仅作为迁移源与待归档目录。
+
 ## 快速开始
 1. 安装 [Node.js 18+](https://nodejs.org/) 与 `pnpm`。
 2. 进入仓库后运行 `pnpm install` 以拉取依赖。
