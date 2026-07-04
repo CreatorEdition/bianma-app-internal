@@ -53,6 +53,41 @@ vi.mock("@/components/providers/ProviderList", () => ({
   ),
 }));
 
+vi.mock("@/components/providers/ProviderWorkspacePanel", () => ({
+  ProviderWorkspacePanel: ({
+    providers,
+    currentProviderId,
+    onSwitch,
+    onEdit,
+    onDuplicate,
+    onConfigureUsage,
+    onOpenWebsite,
+    onCreate,
+  }: any) => {
+    const provider =
+      providers[currentProviderId] ?? Object.values(providers)[0] ?? null;
+
+    return (
+      <div>
+        <div data-testid="provider-list">{JSON.stringify(providers)}</div>
+        <div data-testid="current-provider">{currentProviderId}</div>
+        <button onClick={() => provider && onSwitch(provider)}>switch</button>
+        <button onClick={() => provider && onEdit(provider)}>edit</button>
+        <button onClick={() => provider && onDuplicate(provider)}>
+          duplicate
+        </button>
+        <button onClick={() => provider && onConfigureUsage(provider)}>
+          usage
+        </button>
+        <button onClick={() => onOpenWebsite("https://example.com")}>
+          open-website
+        </button>
+        <button onClick={() => onCreate?.()}>create</button>
+      </div>
+    );
+  },
+}));
+
 vi.mock("@/components/providers/AddProviderDialog", () => ({
   AddProviderDialog: ({ open, onOpenChange, onSubmit, appId }: any) =>
     open ? (

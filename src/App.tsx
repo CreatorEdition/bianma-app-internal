@@ -53,7 +53,7 @@ import {
   LAST_VIEW_STORAGE_KEY,
 } from "@/lib/storageKeys";
 import { AppSwitcher } from "@/components/AppSwitcher";
-import { ProviderList } from "@/components/providers/ProviderList";
+import { ProviderWorkspacePanel } from "@/components/providers/ProviderWorkspacePanel";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -820,15 +820,13 @@ function App() {
                     transition={{ duration: 0.15 }}
                     className="space-y-4"
                   >
-                    <ProviderList
+                    <ProviderWorkspacePanel
+                      activeApp={activeApp}
                       providers={providers}
                       currentProviderId={currentProviderId}
-                      appId={activeApp}
                       isLoading={isLoading}
                       isProxyRunning={isProxyRunning}
-                      isProxyTakeover={
-                        isProxyRunning && isCurrentAppTakeoverActive
-                      }
+                      isCurrentAppTakeoverActive={isCurrentAppTakeoverActive}
                       activeProviderId={activeProviderId}
                       onSwitch={switchProvider}
                       onEdit={(provider) => {
@@ -861,6 +859,10 @@ function App() {
                       onSetAsDefault={
                         activeApp === "openclaw" ? setAsDefaultModel : undefined
                       }
+                      onOpenProxySettings={() => {
+                        setSettingsDefaultTab("proxy");
+                        setCurrentView("settings");
+                      }}
                     />
                   </motion.div>
                 </AnimatePresence>

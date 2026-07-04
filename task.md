@@ -24,6 +24,7 @@
 - ✅ 已完成（2026-07-05）：应用级 localStorage 主键切换兼容小切片；`last-app`、`last-view` 与更新提醒关闭版本已切换到 `bianma-*` 主键，并保留旧键自动迁移清理。
 - ✅ 已完成（2026-07-05）：ProviderWorkspacePanel 前置依赖切片 1，补齐公开仓所需的 ProviderMeta 收藏/模型发现协议字段与 providerConfigUtils 最小连接信息导出。
 - ✅ 已完成（2026-07-05）：ProviderWorkspacePanel 前置依赖切片 2，给 ProviderList 增加最小 displayMode 支持；single 模式禁用搜索浮层快捷键与拖拽上下文，仅渲染传入供应商卡片。
+- ✅ 已完成（2026-07-05）：迁移 ProviderWorkspacePanel 主 UI 切片；默认 providers 分支已接入工作台面板，保留搜索、收藏、键盘导航、模型发现、测速与单卡详情能力，未迁移合作方权重排序和内部 shell 变量。
 
 ## 维护边界
 
