@@ -6,6 +6,7 @@ use crate::services::ProviderService;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tauri::AppHandle;
@@ -39,18 +40,111 @@ pub async fn open_external(app: AppHandle, url: String) -> Result<bool, String> 
 
 #[tauri::command]
 pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
-    // Use spawn_blocking to avoid blocking the async runtime
-    // Clipboard access can block on some platforms and may have thread/loop constraints
     tokio::task::spawn_blocking(move || {
-        let mut clipboard =
-            arboard::Clipboard::new().map_err(|e| format!("访问系统剪贴板失败: {e}"))?;
-        clipboard
-            .set_text(text)
-            .map_err(|e| format!("写入系统剪贴板失败: {e}"))?;
-        Ok(true)
+        copy_text_with_arboard(&text).or_else(|primary_error| {
+            copy_text_to_clipboard_native(&text).map_err(|fallback_error| {
+                format!("写入系统剪贴板失败: {primary_error}; 原生命令兜底也失败: {fallback_error}")
+            })
+        })?;
+        Ok::<bool, String>(true)
     })
     .await
     .map_err(|e| format!("剪贴板任务执行失败: {e}"))?
+}
+
+fn copy_text_with_arboard(text: &str) -> Result<(), String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("访问系统剪贴板失败: {e}"))?;
+    clipboard
+        .set_text(text)
+        .map_err(|e| format!("写入系统剪贴板失败: {e}"))
+}
+
+fn run_clipboard_command_with_input(
+    program: &str,
+    args: &[&str],
+    input: &[u8],
+) -> Result<(), String> {
+    let mut command = std::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("启动剪贴板命令 {program} 失败: {e}"))?;
+
+    let Some(mut stdin) = child.stdin.take() else {
+        return Err(format!("无法写入剪贴板命令 {program} 的标准输入"));
+    };
+
+    stdin
+        .write_all(input)
+        .map_err(|e| format!("写入剪贴板命令 {program} 失败: {e}"))?;
+    drop(stdin);
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("等待剪贴板命令 {program} 结束失败: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "剪贴板命令 {program} 退出失败，状态码: {:?}",
+            status.code()
+        ))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_clipboard_command(program: &str, args: &[&str], text: &str) -> Result<(), String> {
+    run_clipboard_command_with_input(program, args, text.as_bytes())
+}
+
+#[cfg(target_os = "windows")]
+fn copy_text_to_clipboard_native(text: &str) -> Result<(), String> {
+    let mut input = vec![0xFF, 0xFE];
+    for code_unit in text.encode_utf16() {
+        input.extend_from_slice(&code_unit.to_le_bytes());
+    }
+    run_clipboard_command_with_input("clip", &[], &input)
+}
+
+#[cfg(target_os = "macos")]
+fn copy_text_to_clipboard_native(text: &str) -> Result<(), String> {
+    run_clipboard_command("pbcopy", &[], text)
+}
+
+#[cfg(target_os = "linux")]
+fn copy_text_to_clipboard_native(text: &str) -> Result<(), String> {
+    let candidates: [(&str, &[&str]); 3] = [
+        ("wl-copy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+    ];
+    let mut errors = Vec::new();
+
+    for (program, args) in candidates {
+        match run_clipboard_command(program, args, text) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    Err(format!(
+        "没有可用的剪贴板命令，已尝试 wl-copy/xclip/xsel: {}",
+        errors.join("; ")
+    ))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn copy_text_to_clipboard_native(_text: &str) -> Result<(), String> {
+    Err("当前平台不支持复制到剪贴板".to_string())
 }
 
 /// 检查更新

@@ -26,6 +26,7 @@
 - ✅ 已完成（2026-07-05）：ProviderWorkspacePanel 前置依赖切片 2，给 ProviderList 增加最小 displayMode 支持；single 模式禁用搜索浮层快捷键与拖拽上下文，仅渲染传入供应商卡片。
 - ✅ 已完成（2026-07-05）：迁移 ProviderWorkspacePanel 主 UI 切片；默认 providers 分支已接入工作台面板，保留搜索、收藏、键盘导航、模型发现、测速与单卡详情能力，未迁移合作方权重排序和内部 shell 变量。
 - ✅ 已完成（2026-07-05）：修复 ProviderWorkspacePanel 审核问题；收口模型发现协议切换后的自动重入，确保旧请求不覆盖新协议结果且同 provider/protocol 不重复自动发现。
+- ✅ 已完成（2026-07-05）：迁移剪贴板兼容兜底最小切片；`copy_text_to_clipboard` 保留 `arboard` 主路径，并在失败时使用系统命令写入剪贴板。
 
 ## 维护边界
 
