@@ -159,9 +159,27 @@ const renderApp = (AppComponent: ComponentType) => {
 describe("App integration with MSW", () => {
   beforeEach(() => {
     resetProviderState();
+    localStorage.clear();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
   });
+
+  it(
+    "migrates legacy last app and view keys on startup",
+    async () => {
+      localStorage.setItem("cc-switch-last-app", "codex");
+      localStorage.setItem("cc-switch-last-view", "providers");
+
+      const { default: App } = await import("@/App");
+      renderApp(App);
+
+      expect(localStorage.getItem("bianma-last-app")).toBe("codex");
+      expect(localStorage.getItem("cc-switch-last-app")).toBeNull();
+      expect(localStorage.getItem("bianma-last-view")).toBe("providers");
+      expect(localStorage.getItem("cc-switch-last-view")).toBeNull();
+    },
+    10000,
+  );
 
   it("covers basic provider flows via real hooks", async () => {
     const { default: App } = await import("@/App");

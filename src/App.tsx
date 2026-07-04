@@ -41,10 +41,17 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { cn } from "@/lib/utils";
 import { isWindows, isLinux } from "@/lib/platform";
+import { BIANMA_DISPLAY_NAME, BIANMA_GITHUB_REPOSITORY_URL } from "@/lib/brand";
 import {
-  BIANMA_DISPLAY_NAME,
-  BIANMA_GITHUB_REPOSITORY_URL,
-} from "@/lib/brand";
+  readCompatibleStorage,
+  writeCompatibleStorage,
+} from "@/lib/storageCompat";
+import {
+  LAST_APP_LEGACY_STORAGE_KEYS,
+  LAST_APP_STORAGE_KEY,
+  LAST_VIEW_LEGACY_STORAGE_KEYS,
+  LAST_VIEW_STORAGE_KEY,
+} from "@/lib/storageKeys";
 import { AppSwitcher } from "@/components/AppSwitcher";
 import { ProviderList } from "@/components/providers/ProviderList";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
@@ -101,7 +108,6 @@ const DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28; // px
 const HEADER_HEIGHT = 64; // px
 const CONTENT_TOP_OFFSET = DRAG_BAR_HEIGHT + HEADER_HEIGHT;
 
-const STORAGE_KEY = "cc-switch-last-app";
 const VALID_APPS: AppId[] = [
   "claude",
   "codex",
@@ -111,14 +117,15 @@ const VALID_APPS: AppId[] = [
 ];
 
 const getInitialApp = (): AppId => {
-  const saved = localStorage.getItem(STORAGE_KEY) as AppId | null;
+  const saved = readCompatibleStorage(LAST_APP_STORAGE_KEY, [
+    ...LAST_APP_LEGACY_STORAGE_KEYS,
+  ]) as AppId | null;
   if (saved && VALID_APPS.includes(saved)) {
     return saved;
   }
   return "claude";
 };
 
-const VIEW_STORAGE_KEY = "cc-switch-last-view";
 const VALID_VIEWS: View[] = [
   "providers",
   "settings",
@@ -136,7 +143,9 @@ const VALID_VIEWS: View[] = [
 ];
 
 const getInitialView = (): View => {
-  const saved = localStorage.getItem(VIEW_STORAGE_KEY) as View | null;
+  const saved = readCompatibleStorage(LAST_VIEW_STORAGE_KEY, [
+    ...LAST_VIEW_LEGACY_STORAGE_KEYS,
+  ]) as View | null;
   if (saved && VALID_VIEWS.includes(saved)) {
     return saved;
   }
@@ -153,7 +162,9 @@ function App() {
   const [isAddOpen, setIsAddOpen] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(VIEW_STORAGE_KEY, currentView);
+    writeCompatibleStorage(LAST_VIEW_STORAGE_KEY, currentView, [
+      ...LAST_VIEW_LEGACY_STORAGE_KEYS,
+    ]);
   }, [currentView]);
 
   const { data: settingsData } = useSettingsQuery();
