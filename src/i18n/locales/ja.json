@@ -1,7 +1,7 @@
 {
   "app": {
-    "title": "CC Switch",
-    "description": "Claude Code・Codex・Gemini CLI のためのオールインワンアシスタント"
+    "title": "bianma.ai",
+    "description": "Claude Code・Codex・Gemini CLI・OpenCode・OpenClaw のためのローカル AI コーディング制御面"
   },
   "common": {
     "add": "追加",
