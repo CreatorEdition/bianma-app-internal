@@ -133,6 +133,18 @@ export interface AuthBinding {
   accountId?: string;
 }
 
+// 模型发现协议提示
+export type ProviderProtocolHint = "openai" | "anthropic";
+
+// 通用模型发现结果
+export interface DiscoveredModel {
+  id: string;
+  name: string;
+  provider?: string;
+  contextWindow?: number;
+  ownedBy?: string;
+}
+
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息

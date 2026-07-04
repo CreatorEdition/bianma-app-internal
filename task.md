@@ -19,6 +19,7 @@
 - ✅ 已完成（2026-07-04）：切片 2 清理公开可见品牌入口；主 UI、About 面板、Windows 覆盖窗口标题与 Flatpak 用户可见元数据已统一到 `bianma.ai` / `CreatorEdition/bianma-app`。
 - ✅ 已完成（2026-07-04）：切片 3 清理 i18n 应用标题；中英日 `app.title` 与 `app.description` 已统一到 `bianma.ai` 和本地 AI 编码控制面口径。
 - ✅ 已完成（2026-07-05）：迁移 Provider 批量延迟测速最小切片；已补齐缓存表、DAO、Tauri 命令与前端 API 基础能力，未迁移 ProviderWorkspacePanel 大 UI。
+- ✅ 已完成（2026-07-05）：补齐 Provider Workspace 未来依赖的通用模型发现 API 基础能力；新增 `fetch_provider_models` 命令、结构化错误、前端类型与 API 包装，未迁移 ProviderWorkspacePanel 大 UI。
 
 ## 维护边界
 

@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  DiscoveredModel,
   Provider,
+  ProviderProtocolHint,
   UniversalProvider,
   UniversalProvidersMap,
 } from "@/types";
+import { modelFetchApi } from "./model-fetch";
 import type { AppId } from "./types";
 
 export interface ProviderSortUpdate {
@@ -40,6 +43,12 @@ export interface TestProvidersLatencyResponse {
   total: number;
   success: number;
   failed: number;
+}
+
+export interface DiscoverProviderModelsOptions {
+  baseUrl: string;
+  apiKey?: string;
+  protocolHint?: ProviderProtocolHint;
 }
 
 export const providersApi = {
@@ -185,6 +194,15 @@ export const providersApi = {
     appType: AppId,
   ): Promise<ProviderLatencyResult[]> {
     return await invoke("get_cached_latency_results", { appType });
+  },
+
+  /**
+   * 通用模型发现包装，供后续 Provider Workspace 使用。
+   */
+  async discoverModels(
+    options: DiscoverProviderModelsOptions,
+  ): Promise<DiscoveredModel[]> {
+    return await modelFetchApi.fetchProviderModels(options);
   },
 };
 
