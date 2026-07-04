@@ -30,6 +30,13 @@ export interface Provider {
   inFailoverQueue?: boolean;
 }
 
+export type ProviderAppId =
+  | "claude"
+  | "codex"
+  | "gemini"
+  | "opencode"
+  | "openclaw";
+
 export interface AppConfig {
   providers: Record<string, Provider>;
   current: string;
@@ -184,6 +191,12 @@ export interface ProviderMeta {
   providerType?: string;
   // GitHub Copilot 关联账号 ID（旧字段，保留兼容读取）
   githubAccountId?: string;
+  // 是否收藏该服务商
+  favoriteProvider?: boolean;
+  // 按应用维度记录收藏模型
+  favoriteModelsByApp?: Partial<Record<ProviderAppId, string[]>>;
+  // 模型发现协议偏好
+  modelDiscoveryProtocol?: ProviderProtocolHint;
 }
 
 // Skill 同步方式

@@ -22,6 +22,7 @@
 - ✅ 已完成（2026-07-05）：补齐 Provider Workspace 未来依赖的通用模型发现 API 基础能力；新增 `fetch_provider_models` 命令、结构化错误、前端类型与 API 包装，未迁移 ProviderWorkspacePanel 大 UI。
 - ✅ 已完成（2026-07-05）：迁移 Provider Workspace 前置依赖的 storageCompat 最小切片；仅补齐本地存储兼容工具与必要单测，未迁移 ProviderWorkspacePanel 大 UI。
 - ✅ 已完成（2026-07-05）：应用级 localStorage 主键切换兼容小切片；`last-app`、`last-view` 与更新提醒关闭版本已切换到 `bianma-*` 主键，并保留旧键自动迁移清理。
+- ✅ 已完成（2026-07-05）：ProviderWorkspacePanel 前置依赖切片 1，补齐公开仓所需的 ProviderMeta 收藏/模型发现协议字段与 providerConfigUtils 最小连接信息导出。
 
 ## 维护边界
 
