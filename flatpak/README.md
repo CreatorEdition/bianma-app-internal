@@ -11,8 +11,12 @@ If you are looking for end-user install guidance, use the public README and user
 The installed runtime is `bianma-app`, but the current Flatpak packaging pipeline still keeps these legacy identifiers for tooling continuity:
 
 - App ID: `com.ccswitch.desktop`
+- Desktop file: `com.ccswitch.desktop.desktop`
+- Desktop Exec / binary: `cc-switch`
 - Intermediate deb name: `cc-switch.deb`
 - Exported bundle name: `CC-Switch-Linux.flatpak`
+
+User-facing Flatpak metadata now uses `bianma.ai` and links to `CreatorEdition/bianma-app`; the identifiers above remain compatibility handles for existing tooling and package consumers.
 
 ## Dependencies
 

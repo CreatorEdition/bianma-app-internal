@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import { getVersion } from "@tauri-apps/api/app";
 import { settingsApi } from "@/lib/api";
 import {
+  BIANMA_DISPLAY_NAME,
   BIANMA_GITHUB_RELEASES_URL,
   getBianmaReleaseTagUrl,
 } from "@/lib/brand";
@@ -334,9 +335,13 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <img src={appIcon} alt="CC Switch" className="h-5 w-5" />
+              <img
+                src={appIcon}
+                alt={BIANMA_DISPLAY_NAME}
+                className="h-5 w-5"
+              />
               <h4 className="text-lg font-semibold text-foreground">
-                CC Switch
+                {BIANMA_DISPLAY_NAME}
               </h4>
             </div>
             <div className="flex items-center gap-2">

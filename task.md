@@ -16,6 +16,7 @@
 - ✅ 已完成（2026-04-12）：收束开发者协议文档与 Flatpak 兼容文档中的 legacy 标识说明，统一改为兼容标识清单与迁移导向。
 - ✅ 已完成（2026-07-04）：单仓完全开源收口，`bianma-app` 改为后续唯一正式开发、发布与 updater 目标仓；基础 manifest 已同步到 `bianma-app / 0.0.1 / CreatorEdition/bianma-app`。
 - ✅ 已完成（2026-07-04）：切片 1 清理开源单仓发布身份与 release/updater 残留；前端 release 链接与 Rust fallback 更新入口已指向 `CreatorEdition/bianma-app`，公开 `release.yml` 已改为安全预检占位，不再声明由 `bianma-app-product` 私有仓承接。
+- ✅ 已完成（2026-07-04）：切片 2 清理公开可见品牌入口；主 UI、About 面板、Windows 覆盖窗口标题与 Flatpak 用户可见元数据已统一到 `bianma.ai` / `CreatorEdition/bianma-app`。
 
 ## 维护边界
 
@@ -29,6 +30,7 @@
 - ⚠️ 需要分批审计 `bianma-app-product` 与本仓差异，确认哪些代码、文档与发布配置应合入。
 - ⚠️ 合入前必须复查密钥、私有 URL、签名配置、内部任务记录与未公开合作方材料。
 - ⚠️ 正式公开打包发布仍需后续门禁：签名与 notarization、版本号策略、`latest.json` 生成、跨平台构建矩阵、release artifact 上传和人工发布审批。
+- ⚠️ Flatpak 的 `com.ccswitch.desktop`、`com.ccswitch.desktop.desktop`、`Exec=cc-switch`、`cc-switch.deb` 与历史导出包名仍作为兼容标识保留，避免破坏既有打包链路和已安装用户迁移路径。
 
 ## 说明
 

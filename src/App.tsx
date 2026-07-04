@@ -41,7 +41,10 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { cn } from "@/lib/utils";
 import { isWindows, isLinux } from "@/lib/platform";
-import { BIANMA_GITHUB_REPOSITORY_URL } from "@/lib/brand";
+import {
+  BIANMA_DISPLAY_NAME,
+  BIANMA_GITHUB_REPOSITORY_URL,
+} from "@/lib/brand";
 import { AppSwitcher } from "@/components/AppSwitcher";
 import { ProviderList } from "@/components/providers/ProviderList";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
@@ -977,7 +980,7 @@ function App() {
                         : "text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300",
                     )}
                   >
-                    CC Switch
+                    {BIANMA_DISPLAY_NAME}
                   </a>
                 </div>
                 <Button

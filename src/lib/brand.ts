@@ -1,3 +1,4 @@
+export const BIANMA_DISPLAY_NAME = "bianma.ai";
 export const BIANMA_GITHUB_OWNER = "CreatorEdition";
 export const BIANMA_GITHUB_REPO = "bianma-app";
 export const BIANMA_GITHUB_REPOSITORY = `${BIANMA_GITHUB_OWNER}/${BIANMA_GITHUB_REPO}`;
