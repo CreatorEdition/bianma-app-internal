@@ -306,4 +306,70 @@ describe("ProviderList Component", () => {
       screen.getByText("No providers match your search."),
     ).toBeInTheDocument();
   });
+
+  it("keeps the search shortcut and sortable card props in full mode", () => {
+    const provider = createProvider({ id: "full", name: "Full Mode" });
+
+    useDragSortMock.mockReturnValue({
+      sortedProviders: [provider],
+      sensors: [],
+      handleDragEnd: vi.fn(),
+    });
+
+    renderWithQueryClient(
+      <ProviderList
+        providers={{ full: provider }}
+        currentProviderId="full"
+        appId="claude"
+        onSwitch={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onDuplicate={vi.fn()}
+        onOpenWebsite={vi.fn()}
+      />,
+    );
+
+    fireEvent.keyDown(window, { key: "f", metaKey: true });
+
+    expect(
+      screen.getByPlaceholderText("Search name, notes, or URL..."),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("drag-attr-full")).toHaveTextContent("full");
+    expect(useSortableMock).toHaveBeenCalledWith({ id: "full" });
+  });
+
+  it("renders provider cards without search, sort shell, or drag context in single mode", () => {
+    const provider = createProvider({ id: "single", name: "Single Mode" });
+
+    useDragSortMock.mockReturnValue({
+      sortedProviders: [provider],
+      sensors: [],
+      handleDragEnd: vi.fn(),
+    });
+
+    renderWithQueryClient(
+      <ProviderList
+        providers={{ single: provider }}
+        currentProviderId="single"
+        appId="claude"
+        onSwitch={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onDuplicate={vi.fn()}
+        onOpenWebsite={vi.fn()}
+        displayMode="single"
+      />,
+    );
+
+    expect(screen.getByTestId("provider-card-single")).toBeInTheDocument();
+    expect(screen.getByTestId("drag-attr-single")).toHaveTextContent("none");
+    expect(screen.queryByTestId("provider-sort-manual")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "f", metaKey: true });
+
+    expect(
+      screen.queryByPlaceholderText("Search name, notes, or URL..."),
+    ).not.toBeInTheDocument();
+    expect(useSortableMock).not.toHaveBeenCalled();
+  });
 });
