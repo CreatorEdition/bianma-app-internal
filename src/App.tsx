@@ -41,6 +41,7 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { cn } from "@/lib/utils";
 import { isWindows, isLinux } from "@/lib/platform";
+import { BIANMA_GITHUB_REPOSITORY_URL } from "@/lib/brand";
 import { AppSwitcher } from "@/components/AppSwitcher";
 import { ProviderList } from "@/components/providers/ProviderList";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
@@ -966,7 +967,7 @@ function App() {
               <div className="flex items-center gap-2">
                 <div className="relative inline-flex items-center">
                   <a
-                    href="https://github.com/farion1231/cc-switch"
+                    href={BIANMA_GITHUB_REPOSITORY_URL}
                     target="_blank"
                     rel="noreferrer"
                     className={cn(

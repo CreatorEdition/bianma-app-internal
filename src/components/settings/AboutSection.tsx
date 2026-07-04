@@ -22,6 +22,10 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { getVersion } from "@tauri-apps/api/app";
 import { settingsApi } from "@/lib/api";
+import {
+  BIANMA_GITHUB_RELEASES_URL,
+  getBianmaReleaseTagUrl,
+} from "@/lib/brand";
 import { useUpdate } from "@/contexts/UpdateContext";
 import { relaunchApp } from "@/lib/updater";
 import { Badge } from "@/components/ui/badge";
@@ -240,15 +244,11 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           : "";
 
       if (!displayVersion) {
-        await settingsApi.openExternal(
-          "https://github.com/farion1231/cc-switch/releases",
-        );
+        await settingsApi.openExternal(BIANMA_GITHUB_RELEASES_URL);
         return;
       }
 
-      await settingsApi.openExternal(
-        `https://github.com/farion1231/cc-switch/releases/tag/${displayVersion}`,
-      );
+      await settingsApi.openExternal(getBianmaReleaseTagUrl(displayVersion));
     } catch (error) {
       console.error("[AboutSection] Failed to open release notes", error);
       toast.error(t("settings.openReleaseNotesFailed"));

@@ -1,14 +1,15 @@
-name: Public Release Disabled
+name: Public Release Preflight
 
 on:
   workflow_dispatch:
 
 jobs:
-  disabled:
+  preflight:
     runs-on: ubuntu-22.04
     steps:
-      - name: Explain current policy
+      - name: Explain release boundary
         run: |
-          echo "bianma-app 当前不是正式发布仓。"
-          echo "正式构建、release 和 updater 由私有仓 bianma-app-product 承接。"
-          echo "如需恢复公开发布链路，必须先单独完成仓库边界治理。"
+          echo "bianma-app 是 Bianma 唯一正式开源主仓。"
+          echo "本 workflow 当前只做公开发布预检占位，不创建 release、不上传 updater artifact。"
+          echo "正式打包发布仍需后续补齐签名、版本号、latest.json、跨平台构建与人工门禁。"
+          echo "禁止再把 release/updater 口径回退到 bianma-app-product 私有仓承接。"
