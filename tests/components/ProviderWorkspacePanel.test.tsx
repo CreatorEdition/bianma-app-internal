@@ -1,10 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderWorkspacePanel } from "@/components/providers/ProviderWorkspacePanel";
 import type { AppId } from "@/lib/api";
-import type { Provider } from "@/types";
+import type { DiscoveredModel, Provider } from "@/types";
 
 const updateProviderMock = vi.fn();
 const discoverModelsMock = vi.fn();
@@ -274,6 +274,19 @@ describe("ProviderWorkspacePanel", () => {
     expect(onSwitch).toHaveBeenCalledWith(baseProviders.p2);
   });
 
+  it("switches the focused row on Enter without bubbling to stale selection", () => {
+    const onSwitch = vi.fn();
+    renderPanel({ onSwitch });
+
+    const targetRow = screen.getByTestId("service-row-p2");
+    targetRow.focus();
+    fireEvent.keyDown(targetRow, { key: "Enter" });
+
+    expect(screen.getByTestId("detail-provider-id")).toHaveTextContent("p2");
+    expect(onSwitch).toHaveBeenCalledTimes(1);
+    expect(onSwitch).toHaveBeenCalledWith(baseProviders.p2);
+  });
+
   it("loads discovered models for the selected provider", async () => {
     renderPanel();
 
@@ -281,6 +294,50 @@ describe("ProviderWorkspacePanel", () => {
       expect(discoverModelsMock).toHaveBeenCalled();
       expect(screen.getByText("Claude Sonnet 4")).toBeInTheDocument();
     });
+  });
+
+  it("ignores stale model discovery results after protocol changes", async () => {
+    let resolveFirst: (models: DiscoveredModel[]) => void = () => undefined;
+    let resolveSecond: (models: DiscoveredModel[]) => void = () => undefined;
+    const firstRequest = new Promise<DiscoveredModel[]>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const secondRequest = new Promise<DiscoveredModel[]>((resolve) => {
+      resolveSecond = resolve;
+    });
+
+    discoverModelsMock
+      .mockReset()
+      .mockImplementationOnce(() => firstRequest)
+      .mockImplementationOnce(() => secondRequest);
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(discoverModelsMock).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "OpenAI" }));
+
+    await waitFor(() => {
+      expect(discoverModelsMock).toHaveBeenCalledTimes(2);
+    });
+
+    await act(async () => {
+      resolveSecond([{ id: "fresh-model", name: "Fresh Model" }]);
+      await secondRequest;
+    });
+
+    expect(screen.getByText("Fresh Model")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirst([{ id: "stale-model", name: "Stale Model" }]);
+      await firstRequest;
+    });
+
+    expect(screen.getByText("Fresh Model")).toBeInTheDocument();
+    expect(screen.queryByText("Stale Model")).not.toBeInTheDocument();
+    expect(discoverModelsMock).toHaveBeenCalledTimes(2);
   });
 
   it("renders single-card ProviderList region", () => {

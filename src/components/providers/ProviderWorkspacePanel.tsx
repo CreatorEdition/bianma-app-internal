@@ -200,6 +200,10 @@ export function ProviderWorkspacePanel({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const discoveryRequestSeqRef = useRef<Record<string, number>>({});
+  const discoveryByProviderIdRef = useRef<
+    Record<string, ProviderDiscoveryState>
+  >({});
   const activeProviderApp = activeApp as ProviderAppId;
   const { sortedProviders } = useDragSort(providers, activeApp);
   const { data: openclawDefaultModel } = useOpenClawDefaultModel(
@@ -231,6 +235,20 @@ export function ProviderWorkspacePanel({
   const [latencyResults, setLatencyResults] = useState<
     Record<string, LatencySummary>
   >({});
+
+  const setProviderDiscoveryState = useCallback(
+    (providerId: string, state: ProviderDiscoveryState) => {
+      discoveryByProviderIdRef.current = {
+        ...discoveryByProviderIdRef.current,
+        [providerId]: state,
+      };
+      setDiscoveryByProviderId((previous) => ({
+        ...previous,
+        [providerId]: state,
+      }));
+    },
+    [],
+  );
 
   useEffect(() => {
     const storedSort = readCompatibleStorage(storageKeys.sort, [
@@ -355,12 +373,22 @@ export function ProviderWorkspacePanel({
     return getProviderConnectionDetails(selectedProvider, activeProviderApp);
   }, [activeProviderApp, selectedProvider]);
 
+  const selectedDiscoveryState = selectedProvider
+    ? discoveryByProviderId[selectedProvider.id]
+    : undefined;
   const selectedDiscoveryProtocol = useMemo(() => {
     if (!selectedProvider) {
       return undefined;
     }
-    return inferProviderProtocolHint(selectedProvider, activeProviderApp);
-  }, [activeProviderApp, selectedProvider]);
+    return (
+      selectedDiscoveryState?.protocolHint ??
+      inferProviderProtocolHint(selectedProvider, activeProviderApp)
+    );
+  }, [
+    activeProviderApp,
+    selectedDiscoveryState?.protocolHint,
+    selectedProvider,
+  ]);
 
   const canDiscoverModels =
     DISCOVERY_SUPPORTED_APPS.includes(activeProviderApp);
@@ -371,9 +399,6 @@ export function ProviderWorkspacePanel({
         : [],
     [activeProviderApp, selectedProvider],
   );
-  const selectedDiscoveryState = selectedProvider
-    ? discoveryByProviderId[selectedProvider.id]
-    : undefined;
   const discoveredModels = useMemo(() => {
     if (!selectedProvider) {
       return [];
@@ -459,22 +484,21 @@ export function ProviderWorkspacePanel({
       const resolvedProtocol = protocolHint ?? connection.protocolHint;
 
       if (!connection.baseUrl || !resolvedProtocol) {
-        setDiscoveryByProviderId((previous) => ({
-          ...previous,
-          [provider.id]: {
-            status: "error",
-            models: previous[provider.id]?.models ?? [],
-            protocolHint: resolvedProtocol,
-            error: t("provider.discoveryMissingConfig", {
-              defaultValue: "缺少可发现模型的接口地址或协议提示",
-            }),
-          },
-        }));
+        discoveryRequestSeqRef.current[provider.id] =
+          (discoveryRequestSeqRef.current[provider.id] ?? 0) + 1;
+        setProviderDiscoveryState(provider.id, {
+          status: "error",
+          models: discoveryByProviderIdRef.current[provider.id]?.models ?? [],
+          protocolHint: resolvedProtocol,
+          error: t("provider.discoveryMissingConfig", {
+            defaultValue: "缺少可发现模型的接口地址或协议提示",
+          }),
+        });
         return;
       }
 
       if (!force) {
-        const existing = discoveryByProviderId[provider.id];
+        const existing = discoveryByProviderIdRef.current[provider.id];
         if (
           existing &&
           existing.protocolHint === resolvedProtocol &&
@@ -484,14 +508,15 @@ export function ProviderWorkspacePanel({
         }
       }
 
-      setDiscoveryByProviderId((previous) => ({
-        ...previous,
-        [provider.id]: {
-          status: "loading",
-          models: previous[provider.id]?.models ?? [],
-          protocolHint: resolvedProtocol,
-        },
-      }));
+      const requestSeq =
+        (discoveryRequestSeqRef.current[provider.id] ?? 0) + 1;
+      discoveryRequestSeqRef.current[provider.id] = requestSeq;
+
+      setProviderDiscoveryState(provider.id, {
+        status: "loading",
+        models: discoveryByProviderIdRef.current[provider.id]?.models ?? [],
+        protocolHint: resolvedProtocol,
+      });
 
       try {
         const models = await providersApi.discoverModels({
@@ -500,28 +525,30 @@ export function ProviderWorkspacePanel({
           protocolHint: resolvedProtocol,
         });
 
-        setDiscoveryByProviderId((previous) => ({
-          ...previous,
-          [provider.id]: {
-            status: "success",
-            models: dedupeAndSortModels(models),
-            protocolHint: resolvedProtocol,
-          },
-        }));
+        if (discoveryRequestSeqRef.current[provider.id] !== requestSeq) {
+          return;
+        }
+
+        setProviderDiscoveryState(provider.id, {
+          status: "success",
+          models: dedupeAndSortModels(models),
+          protocolHint: resolvedProtocol,
+        });
       } catch (error) {
+        if (discoveryRequestSeqRef.current[provider.id] !== requestSeq) {
+          return;
+        }
+
         const message = error instanceof Error ? error.message : String(error);
-        setDiscoveryByProviderId((previous) => ({
-          ...previous,
-          [provider.id]: {
-            status: "error",
-            models: previous[provider.id]?.models ?? [],
-            protocolHint: resolvedProtocol,
-            error: message,
-          },
-        }));
+        setProviderDiscoveryState(provider.id, {
+          status: "error",
+          models: discoveryByProviderIdRef.current[provider.id]?.models ?? [],
+          protocolHint: resolvedProtocol,
+          error: message,
+        });
       }
     },
-    [activeProviderApp, discoveryByProviderId, t],
+    [activeProviderApp, setProviderDiscoveryState, t],
   );
 
   useEffect(() => {
@@ -551,8 +578,13 @@ export function ProviderWorkspacePanel({
       return;
     }
 
-    void discoverModelsForProvider(selectedProvider);
-  }, [canDiscoverModels, discoverModelsForProvider, selectedProvider]);
+    void discoverModelsForProvider(selectedProvider, selectedDiscoveryProtocol);
+  }, [
+    canDiscoverModels,
+    discoverModelsForProvider,
+    selectedDiscoveryProtocol,
+    selectedProvider,
+  ]);
 
   const handleTestProvidersLatency = useCallback(async () => {
     setIsTestingLatency(true);
@@ -653,13 +685,16 @@ export function ProviderWorkspacePanel({
 
       if (event.key === "Enter" && currentIndex >= 0) {
         event.preventDefault();
-        onSwitch(visibleProviders[currentIndex]);
+        const provider = visibleProviders[currentIndex];
+        if (provider.id !== currentProviderId) {
+          onSwitch(provider);
+        }
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onSwitch, selectedProviderId, visibleProviders]);
+  }, [currentProviderId, onSwitch, selectedProviderId, visibleProviders]);
 
   const handleToggleProviderFavorite = useCallback(
     (provider: Provider) => {
@@ -929,7 +964,14 @@ export function ProviderWorkspacePanel({
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        handleCardClick(provider.id);
+                        event.stopPropagation();
+                        setSelectedProviderId(provider.id);
+                        if (
+                          event.key === "Enter" &&
+                          provider.id !== currentProviderId
+                        ) {
+                          onSwitch(provider);
+                        }
                       }
                     }}
                     data-testid={`service-row-${provider.id}`}
