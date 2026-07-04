@@ -18,6 +18,7 @@
 - ✅ 已完成（2026-07-04）：切片 1 清理开源单仓发布身份与 release/updater 残留；前端 release 链接与 Rust fallback 更新入口已指向 `CreatorEdition/bianma-app`，公开 `release.yml` 已改为安全预检占位，不再声明由 `bianma-app-product` 私有仓承接。
 - ✅ 已完成（2026-07-04）：切片 2 清理公开可见品牌入口；主 UI、About 面板、Windows 覆盖窗口标题与 Flatpak 用户可见元数据已统一到 `bianma.ai` / `CreatorEdition/bianma-app`。
 - ✅ 已完成（2026-07-04）：切片 3 清理 i18n 应用标题；中英日 `app.title` 与 `app.description` 已统一到 `bianma.ai` 和本地 AI 编码控制面口径。
+- ✅ 已完成（2026-07-05）：迁移 Provider 批量延迟测速最小切片；已补齐缓存表、DAO、Tauri 命令与前端 API 基础能力，未迁移 ProviderWorkspacePanel 大 UI。
 
 ## 维护边界
 

@@ -919,6 +919,8 @@ pub fn run() {
             commands::fetch_models_for_config,
             // ours: endpoint speed test + custom endpoint management
             commands::test_api_endpoints,
+            commands::test_providers_latency,
+            commands::get_cached_latency_results,
             commands::get_custom_endpoints,
             commands::add_custom_endpoint,
             commands::remove_custom_endpoint,

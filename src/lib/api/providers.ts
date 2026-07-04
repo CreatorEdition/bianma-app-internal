@@ -25,6 +25,23 @@ export interface OpenTerminalOptions {
   cwd?: string;
 }
 
+export interface ProviderLatencyResult {
+  providerId: string;
+  providerName: string;
+  baseUrl: string;
+  latencyMs: number | null;
+  status: number | null;
+  error: string | null;
+  testedAt: number;
+}
+
+export interface TestProvidersLatencyResponse {
+  results: ProviderLatencyResult[];
+  total: number;
+  success: number;
+  failed: number;
+}
+
 export const providersApi = {
   async getAll(appId: AppId): Promise<Record<string, Provider>> {
     return await invoke("get_providers", { app: appId });
@@ -142,6 +159,32 @@ export const providersApi = {
    */
   async importOpenClawFromLive(): Promise<number> {
     return await invoke("import_openclaw_providers_from_live");
+  },
+
+  /**
+   * 批量测试 Provider 延迟，并缓存最近一次结果。
+   */
+  async testProvidersLatency(
+    appType: AppId,
+    providerIds?: string[],
+    timeoutSecs?: number,
+  ): Promise<TestProvidersLatencyResponse> {
+    return await invoke("test_providers_latency", {
+      request: {
+        appType,
+        providerIds,
+        timeoutSecs,
+      },
+    });
+  },
+
+  /**
+   * 获取最近一次 Provider 延迟测速缓存。
+   */
+  async getCachedLatencyResults(
+    appType: AppId,
+  ): Promise<ProviderLatencyResult[]> {
+    return await invoke("get_cached_latency_results", { appType });
   },
 };
 
