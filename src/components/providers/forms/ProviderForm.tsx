@@ -6,7 +6,6 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
 import { providersApi, type AppId } from "@/lib/api";
 import type {
@@ -53,6 +52,7 @@ import GeminiConfigEditor from "./GeminiConfigEditor";
 import JsonEditor from "@/components/JsonEditor";
 import { Label } from "@/components/ui/label";
 import { ProviderPresetSelector } from "./ProviderPresetSelector";
+import { ProviderKeyField } from "./ProviderKeyField";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
 import { CodexFormFields } from "./CodexFormFields";
@@ -1338,137 +1338,41 @@ export function ProviderForm({
           form={form}
           beforeNameSlot={
             appId === "opencode" && !isAnyOmoCategory ? (
-              <div className="space-y-2">
-                <Label htmlFor="opencode-key">
-                  {t("opencode.providerKey")}
-                  <span className="text-destructive ml-1">*</span>
-                </Label>
-                <Input
-                  id="opencode-key"
-                  value={opencodeForm.opencodeProviderKey}
-                  onChange={(e) =>
-                    opencodeForm.setOpencodeProviderKey(
-                      e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
-                    )
-                  }
-                  placeholder={t("opencode.providerKeyPlaceholder")}
-                  disabled={
-                    isProviderKeyLocked || isProviderKeyLockStateLoading
-                  }
-                  className={
-                    (additiveExistingProviderKeys.includes(
-                      opencodeForm.opencodeProviderKey,
-                    ) &&
-                      !isProviderKeyLocked) ||
-                    (opencodeForm.opencodeProviderKey.trim() !== "" &&
-                      !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                        opencodeForm.opencodeProviderKey,
-                      ))
-                      ? "border-destructive"
-                      : ""
-                  }
-                />
-                {additiveExistingProviderKeys.includes(
-                  opencodeForm.opencodeProviderKey,
-                ) &&
-                  !isProviderKeyLocked && (
-                    <p className="text-xs text-destructive">
-                      {t("opencode.providerKeyDuplicate")}
-                    </p>
-                  )}
-                {opencodeForm.opencodeProviderKey.trim() !== "" &&
-                  !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                    opencodeForm.opencodeProviderKey,
-                  ) && (
-                    <p className="text-xs text-destructive">
-                      {t("opencode.providerKeyInvalid")}
-                    </p>
-                  )}
-                {!(
-                  additiveExistingProviderKeys.includes(
-                    opencodeForm.opencodeProviderKey,
-                  ) && !isProviderKeyLocked
-                ) &&
-                  (opencodeForm.opencodeProviderKey.trim() === "" ||
-                    /^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                      opencodeForm.opencodeProviderKey,
-                    )) && (
-                    <p className="text-xs text-muted-foreground">
-                      {isProviderKeyLocked
-                        ? t("opencode.providerKeyLockedHint", {
-                            defaultValue:
-                              "该供应商已添加到应用配置中，供应商标识不可修改",
-                          })
-                        : t("opencode.providerKeyHint")}
-                    </p>
-                  )}
-              </div>
+              <ProviderKeyField
+                inputId="opencode-key"
+                label={t("opencode.providerKey")}
+                value={opencodeForm.opencodeProviderKey}
+                placeholder={t("opencode.providerKeyPlaceholder")}
+                existingKeys={additiveExistingProviderKeys}
+                isLocked={isProviderKeyLocked}
+                isLoading={isProviderKeyLockStateLoading}
+                duplicateMessage={t("opencode.providerKeyDuplicate")}
+                invalidMessage={t("opencode.providerKeyInvalid")}
+                hintMessage={t("opencode.providerKeyHint")}
+                lockedHintMessage={t("opencode.providerKeyLockedHint", {
+                  defaultValue:
+                    "该供应商已添加到应用配置中，供应商标识不可修改",
+                })}
+                onChange={opencodeForm.setOpencodeProviderKey}
+              />
             ) : appId === "openclaw" ? (
-              <div className="space-y-2">
-                <Label htmlFor="openclaw-key">
-                  {t("openclaw.providerKey")}
-                  <span className="text-destructive ml-1">*</span>
-                </Label>
-                <Input
-                  id="openclaw-key"
-                  value={openclawForm.openclawProviderKey}
-                  onChange={(e) =>
-                    openclawForm.setOpenclawProviderKey(
-                      e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
-                    )
-                  }
-                  placeholder={t("openclaw.providerKeyPlaceholder")}
-                  disabled={
-                    isProviderKeyLocked || isProviderKeyLockStateLoading
-                  }
-                  className={
-                    (additiveExistingProviderKeys.includes(
-                      openclawForm.openclawProviderKey,
-                    ) &&
-                      !isProviderKeyLocked) ||
-                    (openclawForm.openclawProviderKey.trim() !== "" &&
-                      !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                        openclawForm.openclawProviderKey,
-                      ))
-                      ? "border-destructive"
-                      : ""
-                  }
-                />
-                {additiveExistingProviderKeys.includes(
-                  openclawForm.openclawProviderKey,
-                ) &&
-                  !isProviderKeyLocked && (
-                    <p className="text-xs text-destructive">
-                      {t("openclaw.providerKeyDuplicate")}
-                    </p>
-                  )}
-                {openclawForm.openclawProviderKey.trim() !== "" &&
-                  !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                    openclawForm.openclawProviderKey,
-                  ) && (
-                    <p className="text-xs text-destructive">
-                      {t("openclaw.providerKeyInvalid")}
-                    </p>
-                  )}
-                {!(
-                  additiveExistingProviderKeys.includes(
-                    openclawForm.openclawProviderKey,
-                  ) && !isProviderKeyLocked
-                ) &&
-                  (openclawForm.openclawProviderKey.trim() === "" ||
-                    /^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                      openclawForm.openclawProviderKey,
-                    )) && (
-                    <p className="text-xs text-muted-foreground">
-                      {isProviderKeyLocked
-                        ? t("openclaw.providerKeyLockedHint", {
-                            defaultValue:
-                              "该供应商已添加到应用配置中，供应商标识不可修改",
-                          })
-                        : t("openclaw.providerKeyHint")}
-                    </p>
-                  )}
-              </div>
+              <ProviderKeyField
+                inputId="openclaw-key"
+                label={t("openclaw.providerKey")}
+                value={openclawForm.openclawProviderKey}
+                placeholder={t("openclaw.providerKeyPlaceholder")}
+                existingKeys={additiveExistingProviderKeys}
+                isLocked={isProviderKeyLocked}
+                isLoading={isProviderKeyLockStateLoading}
+                duplicateMessage={t("openclaw.providerKeyDuplicate")}
+                invalidMessage={t("openclaw.providerKeyInvalid")}
+                hintMessage={t("openclaw.providerKeyHint")}
+                lockedHintMessage={t("openclaw.providerKeyLockedHint", {
+                  defaultValue:
+                    "该供应商已添加到应用配置中，供应商标识不可修改",
+                })}
+                onChange={openclawForm.setOpenclawProviderKey}
+              />
             ) : undefined
           }
         />
