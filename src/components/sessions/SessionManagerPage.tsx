@@ -47,6 +47,11 @@ import { SessionItem } from "./SessionItem";
 import { SessionMessageItem } from "./SessionMessageItem";
 import { SessionTocDialog, SessionTocSidebar } from "./SessionToc";
 import {
+  getDeletableSessions,
+  getDeleteResultSummary,
+  toDeleteSessionOptions,
+} from "./deleteUtils";
+import {
   formatSessionTitle,
   formatTimestamp,
   getBaseName,
@@ -227,20 +232,17 @@ export function SessionManagerPage({ appId }: { appId: string }) {
       return;
     }
 
-    const targets = deleteTargets.filter((session) => session.sourcePath);
+    const targets = getDeletableSessions(deleteTargets);
+    const deleteOptions = toDeleteSessionOptions(targets);
     setDeleteTargets(null);
 
-    if (targets.length === 0) {
+    if (deleteOptions.length === 0) {
       return;
     }
 
-    if (targets.length === 1) {
+    if (deleteOptions.length === 1) {
       const [target] = targets;
-      await deleteSessionMutation.mutateAsync({
-        providerId: target.providerId,
-        sessionId: target.sessionId,
-        sourcePath: target.sourcePath!,
-      });
+      await deleteSessionMutation.mutateAsync(deleteOptions[0]);
       setSelectedSessionKeys((current) => {
         const next = new Set(current);
         next.delete(getSessionKey(target));
@@ -251,24 +253,8 @@ export function SessionManagerPage({ appId }: { appId: string }) {
 
     setIsBatchDeleting(true);
     try {
-      const results = await sessionsApi.deleteMany(
-        targets.map((session) => ({
-          providerId: session.providerId,
-          sessionId: session.sessionId,
-          sourcePath: session.sourcePath!,
-        })),
-      );
-
-      const deletedKeys = results
-        .filter((result) => result.success)
-        .map(
-          (result) =>
-            `${result.providerId}:${result.sessionId}:${result.sourcePath ?? ""}`,
-        );
-
-      const failedErrors = results
-        .filter((result) => !result.success)
-        .map((result) => result.error || t("common.unknown"));
+      const results = await sessionsApi.deleteMany(deleteOptions);
+      const { deletedKeys, failedErrors } = getDeleteResultSummary(results, t);
 
       if (deletedKeys.length > 0) {
         const deletedKeySet = new Set(deletedKeys);
