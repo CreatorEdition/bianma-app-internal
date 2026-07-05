@@ -175,7 +175,7 @@ mod tests {
         resolve_password_for_request, run_with_webdav_lock, webdav_sync_mutex,
     };
     use crate::error::AppError;
-    use crate::settings::{AppSettings, WebDavSyncSettings};
+    use crate::settings::{AppSettings, WebDavSyncScope, WebDavSyncSettings};
     use serial_test::serial;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -353,5 +353,64 @@ mod tests {
             require_enabled_webdav_settings().expect("enabled settings should be accepted");
         assert!(settings.enabled);
         assert_eq!(settings.base_url, "https://dav.example.com/dav/");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn webdav_sync_save_settings_persists_scope_and_preserves_status() {
+        let test_home = std::env::temp_dir().join("cc-switch-sync-save-scope-test");
+        let _ = std::fs::remove_dir_all(&test_home);
+        std::fs::create_dir_all(&test_home).expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", &test_home);
+
+        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
+        crate::settings::set_webdav_sync_settings(Some(WebDavSyncSettings {
+            enabled: true,
+            base_url: "https://dav.example.com/dav/".to_string(),
+            username: "alice".to_string(),
+            password: "secret".to_string(),
+            remote_root: "cc-switch-sync".to_string(),
+            profile: "default".to_string(),
+            scope: WebDavSyncScope {
+                providers: true,
+                mcp: true,
+                prompts: true,
+            },
+            status: crate::settings::WebDavSyncStatus {
+                last_error: Some("persist-me".to_string()),
+                last_error_source: Some("manual".to_string()),
+                ..Default::default()
+            },
+            ..WebDavSyncSettings::default()
+        }))
+        .expect("seed existing settings");
+
+        let result = super::webdav_sync_save_settings(
+            WebDavSyncSettings {
+                enabled: true,
+                base_url: "https://dav.example.com/dav/".to_string(),
+                username: "alice".to_string(),
+                password: "updated-secret".to_string(),
+                remote_root: "cc-switch-sync".to_string(),
+                profile: "default".to_string(),
+                scope: WebDavSyncScope {
+                    providers: true,
+                    mcp: false,
+                    prompts: true,
+                },
+                ..WebDavSyncSettings::default()
+            },
+            Some(true),
+        )
+        .await;
+
+        assert!(result.is_ok(), "save settings should succeed: {result:?}");
+
+        let saved = crate::settings::get_webdav_sync_settings().expect("read webdav settings");
+        assert!(saved.scope.providers);
+        assert!(!saved.scope.mcp);
+        assert!(saved.scope.prompts);
+        assert_eq!(saved.status.last_error.as_deref(), Some("persist-me"));
+        assert_eq!(saved.status.last_error_source.as_deref(), Some("manual"));
     }
 }

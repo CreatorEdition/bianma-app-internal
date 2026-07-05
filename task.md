@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-05）：实现 WebDAV 自动同步 scope v1 最小切片；仅允许 Providers/MCP/Prompts 作为自动同步触发范围，自动上传与手动上传/下载均继续保持完整快照，不迁入 SessionCloud、providerRuleRegistry/providerRuleCenter、data.bianma.ai、apiKeyPool、Risk Guard、Local Policy、strategy/load-balancing/failover backend、partner/affiliate/referral/sponsor、subscription/quota 或签名发布材料。
 - ✅ 已完成（2026-07-05）：实现 OpenClaw 配置目录 UI wiring 最小切片；仅补齐 Settings 高级目录页、目录 hook、表单 sanitize、保存 payload 与定向测试，默认目录为用户 home 下 `.openclaw`，不迁入 providerRuleRegistry/providerRuleCenter、data.bianma.ai、apiKeyPool、SessionCloud、Risk Guard、Local Policy、strategy/load-balancing/failover backend、partner/affiliate/referral/sponsor、subscription/quota、Pricing/Auth 下线/Settings IA 重组或任何 Risk Guard UI。
 - ✅ 已完成（2026-07-05）：实现 Settings 加载失败可读提示最小切片；仅处理 get_settings / Tauri invoke 不可用的可读错误、useSettings 查询错误透出与 SettingsPage 首次失败重试 UI，不迁入 providerRuleRegistry/providerRuleCenter、data.bianma.ai、apiKeyPool、SessionCloud、Risk Guard、Local Policy、strategy/load-balancing/failover backend、partner/affiliate/referral/sponsor、subscription/quota、Pricing/Auth 下线/Settings IA 重组或 OpenClaw 目录字段。
 - ✅ 已完成（2026-07-05）：收口默认 App 配置目录解析最小切片；优先从 Tauri `get_app_config_path` 返回的 `config.json` 路径派生目录，失败时保留 `.cc-switch` 兼容 fallback，不迁移 product 的 OpenClaw 目录 UI。

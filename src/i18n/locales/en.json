@@ -383,7 +383,26 @@
       "remoteRoot": "Remote Root Directory",
       "profile": "Sync Profile Name",
       "autoSync": "Auto Sync",
-      "autoSyncHint": "When enabled, each database change triggers an automatic WebDAV upload.",
+      "autoSyncHint": "When enabled, changes in the selected scopes trigger automatic WebDAV uploads.",
+      "scope": {
+        "title": "Auto Sync Scope",
+        "description": "Controls which data changes trigger automatic uploads. Once triggered, auto upload still writes a full snapshot.",
+        "options": {
+          "providers": {
+            "label": "Providers",
+            "hint": "Auto-upload when providers or endpoint config changes."
+          },
+          "mcp": {
+            "label": "MCP",
+            "hint": "Auto-upload when MCP server config changes."
+          },
+          "prompts": {
+            "label": "Prompts",
+            "hint": "Auto-upload when prompt config changes."
+          }
+        },
+        "snapshotNotice": "Auto sync scope only affects triggers. It does not trim auto or manual snapshot contents."
+      },
       "test": "Test Connection",
       "testing": "Testing...",
       "testSuccess": "Connection successful",
@@ -424,6 +443,7 @@
       "saved": "Saved",
       "unsavedChanges": "Please save config first",
       "saveBeforeSync": "Save configuration first to enable upload/download.",
+      "manualSnapshotNotice": "Manual upload/download still syncs the full database and skills archive for backup and restore.",
       "fetchingRemote": "Fetching remote info...",
       "fetchRemoteFailed": "Failed to fetch remote info. Please check configuration and network.",
       "confirmDownload": {
@@ -434,6 +454,7 @@
         "dbCompat": "DB compatibility",
         "artifacts": "Contents",
         "legacyNotice": "A legacy remote path was detected. After restoring, the next upload will write to the new v2/db-v6 path.",
+        "scopeNotice": "Auto sync scope does not limit this manual restore; it restores the full snapshot.",
         "warning": "This will overwrite all local data and skill configurations",
         "confirm": "Confirm Restore"
       },
@@ -442,6 +463,7 @@
         "content": "The following will be synced to the WebDAV server:",
         "dbItem": "Database (all provider configs and data)",
         "skillsItem": "Skills (all custom skills)",
+        "scopeNotice": "Auto sync scope does not limit this manual upload; it writes a full snapshot.",
         "targetPath": "Target path",
         "existingData": "Existing cloud data",
         "deviceName": "Uploaded by",

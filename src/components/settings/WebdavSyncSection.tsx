@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -36,6 +37,20 @@ import { settingsApi } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import type { SettingsFormState } from "@/hooks/useSettings";
 import type { RemoteSnapshotInfo, WebDavSyncSettings } from "@/types";
+
+const DEFAULT_WEBDAV_SCOPE = {
+  providers: true,
+  mcp: true,
+  prompts: true,
+} as const;
+
+function normalizeScope(scope?: WebDavSyncSettings["scope"]) {
+  return {
+    providers: scope?.providers ?? DEFAULT_WEBDAV_SCOPE.providers,
+    mcp: scope?.mcp ?? DEFAULT_WEBDAV_SCOPE.mcp,
+    prompts: scope?.prompts ?? DEFAULT_WEBDAV_SCOPE.prompts,
+  };
+}
 
 // ─── WebDAV service presets ─────────────────────────────────
 
@@ -194,6 +209,7 @@ export function WebdavSyncSection({
     remoteRoot: config?.remoteRoot ?? "cc-switch-sync",
     profile: config?.profile ?? "default",
     autoSync: config?.autoSync ?? false,
+    scope: normalizeScope(config?.scope),
   }));
 
   // Preset selector — derived from initial URL, updated on user selection
@@ -252,6 +268,7 @@ export function WebdavSyncSection({
         remoteRoot: nextRemoteRoot,
         profile: nextProfile,
         autoSync: config.autoSync ?? false,
+        scope: normalizeScope(config.scope),
       };
     });
     setPasswordTouched(false);
@@ -323,6 +340,25 @@ export function WebdavSyncSection({
     }
   }, [onAutoSave]);
 
+  const updateScope = useCallback(
+    (key: keyof typeof DEFAULT_WEBDAV_SCOPE, checked: boolean) => {
+      setForm((prev) => ({
+        ...prev,
+        scope: {
+          ...prev.scope,
+          [key]: checked,
+        },
+      }));
+      setDirty(true);
+      setJustSaved(false);
+      if (justSavedTimerRef.current) {
+        clearTimeout(justSavedTimerRef.current);
+        justSavedTimerRef.current = null;
+      }
+    },
+    [],
+  );
+
   const buildSettings = useCallback((): WebDavSyncSettings | null => {
     const baseUrl = form.baseUrl.trim();
     if (!baseUrl) return null;
@@ -335,6 +371,7 @@ export function WebdavSyncSection({
       remoteRoot: form.remoteRoot.trim() || "cc-switch-sync",
       profile: form.profile.trim() || "default",
       autoSync: form.autoSync,
+      scope: { ...form.scope },
     };
   }, [form, passwordTouched]);
 
@@ -682,6 +719,58 @@ export function WebdavSyncSection({
               />
             </div>
           </div>
+
+          <div className="rounded-lg border border-border/70 bg-background/70 p-4">
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-foreground">
+                {t("settings.webdavSync.scope.title")}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t("settings.webdavSync.scope.description")}
+              </p>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              {(
+                ["providers", "mcp", "prompts"] as Array<
+                  keyof typeof DEFAULT_WEBDAV_SCOPE
+                >
+              ).map((scopeKey) => {
+                const checkboxId = `webdav-scope-${scopeKey}`;
+                return (
+                  <label
+                    key={scopeKey}
+                    htmlFor={checkboxId}
+                    className="flex items-start gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2"
+                  >
+                    <Checkbox
+                      id={checkboxId}
+                      checked={form.scope[scopeKey]}
+                      onCheckedChange={(checked) =>
+                        updateScope(scopeKey, checked === true)
+                      }
+                      disabled={isLoading}
+                      className="mt-0.5"
+                    />
+                    <span className="space-y-1">
+                      <span className="block text-xs font-medium text-foreground">
+                        {t(
+                          `settings.webdavSync.scope.options.${scopeKey}.label`,
+                        )}
+                      </span>
+                      <span className="block text-[11px] leading-relaxed text-muted-foreground">
+                        {t(
+                          `settings.webdavSync.scope.options.${scopeKey}.hint`,
+                        )}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+              {t("settings.webdavSync.scope.snapshotNotice")}
+            </p>
+          </div>
         </div>
 
         {/* Last sync time */}
@@ -783,6 +872,9 @@ export function WebdavSyncSection({
             {t("settings.webdavSync.saveBeforeSync")}
           </p>
         )}
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          {t("settings.webdavSync.manualSnapshotNotice")}
+        </p>
       </div>
 
       {/* ─── Upload confirmation dialog ──────────────────── */}
@@ -805,6 +897,9 @@ export function WebdavSyncSection({
                   <li>{t("settings.webdavSync.confirmUpload.dbItem")}</li>
                   <li>{t("settings.webdavSync.confirmUpload.skillsItem")}</li>
                 </ul>
+                <p className="text-xs text-muted-foreground">
+                  {t("settings.webdavSync.confirmUpload.scopeNotice")}
+                </p>
                 <p className="text-muted-foreground">
                   {t("settings.webdavSync.confirmUpload.targetPath")}
                   {": "}
@@ -929,6 +1024,9 @@ export function WebdavSyncSection({
                     {t("settings.webdavSync.confirmDownload.legacyNotice")}
                   </p>
                 )}
+                <p className="text-xs text-muted-foreground">
+                  {t("settings.webdavSync.confirmDownload.scopeNotice")}
+                </p>
                 <p className="text-destructive font-medium">
                   {t("settings.webdavSync.confirmDownload.warning")}
                 </p>

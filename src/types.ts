@@ -230,6 +230,12 @@ export interface WebDavSyncStatus {
   lastRemoteManifestHash?: string | null;
 }
 
+export interface WebDavSyncScope {
+  providers: boolean;
+  mcp: boolean;
+  prompts: boolean;
+}
+
 // WebDAV 同步配置
 export interface WebDavSyncSettings {
   enabled?: boolean;
@@ -239,6 +245,7 @@ export interface WebDavSyncSettings {
   password?: string;
   remoteRoot?: string;
   profile?: string;
+  scope?: WebDavSyncScope;
   status?: WebDavSyncStatus;
 }
 
