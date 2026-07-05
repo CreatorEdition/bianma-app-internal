@@ -33,8 +33,11 @@ import { useEnvBannerActions } from "@/hooks/useEnvBannerActions";
 import { useAppEventSubscriptions } from "@/hooks/useAppEventSubscriptions";
 import { useAppStartupChecks } from "@/hooks/useAppStartupChecks";
 import { useProviderOmoActions } from "@/hooks/useProviderOmoActions";
+import {
+  useAppKeyboardShortcuts,
+  type AppKeyboardShortcutView,
+} from "@/hooks/useAppKeyboardShortcuts";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { isTextEditableTarget } from "@/utils/domUtils";
 import { cn } from "@/lib/utils";
 import { isWindows, isLinux } from "@/lib/platform";
 import { BIANMA_DISPLAY_NAME, BIANMA_GITHUB_REPOSITORY_URL } from "@/lib/brand";
@@ -75,20 +78,7 @@ import ToolsPanel from "@/components/openclaw/ToolsPanel";
 import AgentsDefaultsPanel from "@/components/openclaw/AgentsDefaultsPanel";
 import OpenClawHealthBanner from "@/components/openclaw/OpenClawHealthBanner";
 
-type View =
-  | "providers"
-  | "settings"
-  | "prompts"
-  | "skills"
-  | "skillsDiscovery"
-  | "mcp"
-  | "agents"
-  | "universal"
-  | "sessions"
-  | "workspace"
-  | "openclawEnv"
-  | "openclawTools"
-  | "openclawAgents";
+type View = AppKeyboardShortcutView;
 
 const DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28; // px
 const HEADER_HEIGHT = 64; // px
@@ -279,38 +269,10 @@ function App() {
     t,
   });
 
-  const currentViewRef = useRef(currentView);
-
-  useEffect(() => {
-    currentViewRef.current = currentView;
-  }, [currentView]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "," && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        setCurrentView("settings");
-        return;
-      }
-
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-
-      if (document.body.style.overflow === "hidden") return;
-
-      const view = currentViewRef.current;
-      if (view === "providers") return;
-
-      if (isTextEditableTarget(event.target)) return;
-
-      event.preventDefault();
-      setCurrentView(view === "skillsDiscovery" ? "skills" : "providers");
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, []);
+  useAppKeyboardShortcuts({
+    currentView,
+    setCurrentView,
+  });
 
   const handleOpenWebsite = async (url: string) => {
     try {
