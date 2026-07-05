@@ -60,6 +60,7 @@
 - ✅ 已完成（2026-07-05）：迁移 BasicFormFields 图标选择器可访问性与交互最小切片；已按流程先记录进行中，完成后对齐 Dialog 标题/描述、测试标识、选中即关闭与移除独立完成按钮，并补充定向单测。
 - ✅ 已完成（2026-07-05）：按白名单最小切片迁移 ProviderActions 按钮文案资源化与组件单测；仅移除 6 个指定按钮文案中文 fallback，并补充资源化来源断言。
 - ✅ 已完成（2026-07-05）：按白名单最小切片迁移 ProviderKeyField 编辑态锁定/加载提示行为；仅调整共享字段锁定判定、表单传参与组件单测，未迁移任何明确排除的非目标能力。
+- ✅ 已完成（2026-07-05）：Rust 后端后置同步 AppState 复用最小切片；导入、WebDAV 下载与手动 live sync 均复用当前 AppState，不再通过 Arc<Database> 重新构造 AppState，未迁入 providerRuleRegistry/providerRuleCenter、Risk Guard、SessionCloud、订阅配额或其他 product 私有能力。
 
 ## 维护边界
 
