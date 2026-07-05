@@ -6,6 +6,10 @@ import React, {
   useState,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  readCompatibleStorage,
+  writeCompatibleStorage,
+} from "@/lib/storageCompat";
 
 type Theme = "light" | "dark" | "system";
 
@@ -13,6 +17,7 @@ interface ThemeProviderProps {
   children: React.ReactNode;
   defaultTheme?: Theme;
   storageKey?: string;
+  legacyStorageKeys?: string[];
 }
 
 interface ThemeContextValue {
@@ -27,14 +32,18 @@ const ThemeProviderContext = createContext<ThemeContextValue | undefined>(
 export function ThemeProvider({
   children,
   defaultTheme = "system",
-  storageKey = "cc-switch-theme",
+  storageKey = "bianma-theme",
+  legacyStorageKeys = ["cc-switch-theme"],
 }: ThemeProviderProps) {
   const getInitialTheme = () => {
     if (typeof window === "undefined") {
       return defaultTheme;
     }
 
-    const stored = window.localStorage.getItem(storageKey) as Theme | null;
+    const stored = readCompatibleStorage(
+      storageKey,
+      legacyStorageKeys,
+    ) as Theme | null;
     if (stored === "light" || stored === "dark" || stored === "system") {
       return stored;
     }
@@ -49,8 +58,8 @@ export function ThemeProvider({
       return;
     }
 
-    window.localStorage.setItem(storageKey, theme);
-  }, [theme, storageKey]);
+    writeCompatibleStorage(storageKey, theme, legacyStorageKeys);
+  }, [legacyStorageKeys, storageKey, theme]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
