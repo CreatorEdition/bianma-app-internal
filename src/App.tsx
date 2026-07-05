@@ -29,6 +29,7 @@ import { openclawKeys, useOpenClawHealth } from "@/hooks/useOpenClaw";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { useAutoCompact } from "@/hooks/useAutoCompact";
 import { useAppUiState } from "@/hooks/useAppUiState";
+import { useAppViewGuards } from "@/hooks/useAppViewGuards";
 import { useEnvBannerActions } from "@/hooks/useEnvBannerActions";
 import { useAppEventSubscriptions } from "@/hooks/useAppEventSubscriptions";
 import { useAppStartupChecks } from "@/hooks/useAppStartupChecks";
@@ -172,34 +173,13 @@ function App() {
     openclaw: true,
   };
 
-  const getFirstVisibleApp = (): AppId => {
-    if (visibleApps.claude) return "claude";
-    if (visibleApps.codex) return "codex";
-    if (visibleApps.gemini) return "gemini";
-    if (visibleApps.opencode) return "opencode";
-    if (visibleApps.openclaw) return "openclaw";
-    return "claude"; // fallback
-  };
-
-  useEffect(() => {
-    if (!visibleApps[activeApp]) {
-      setActiveApp(getFirstVisibleApp());
-    }
-  }, [visibleApps, activeApp]);
-
-  // Fallback from sessions view when switching to an app without session support
-  useEffect(() => {
-    if (
-      currentView === "sessions" &&
-      activeApp !== "claude" &&
-      activeApp !== "codex" &&
-      activeApp !== "opencode" &&
-      activeApp !== "openclaw" &&
-      activeApp !== "gemini"
-    ) {
-      setCurrentView("providers");
-    }
-  }, [activeApp, currentView]);
+  useAppViewGuards({
+    activeApp,
+    currentView,
+    visibleApps,
+    setActiveApp,
+    setCurrentView,
+  });
 
   const [envConflicts, setEnvConflicts] = useState<EnvConflict[]>([]);
   const [showEnvBanner, setShowEnvBanner] = useState(false);
