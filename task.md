@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-05）：移除 useSettings 手动保存目录覆盖变化后的额外 live 同步副作用；仅收口公开仓现有 settings 保存、App 配置目录覆盖与托盘刷新行为，不迁移 product 的额外目录、规则中心或供应商策略能力。
 - ✅ 已完成（2026-07-05）：迁移 useSessionListState 最小切片；仅抽取会话页当前搜索、Provider 过滤、选中 key 与 selectedSession 派生逻辑，不迁移 product 的排序模式、SessionListCard 或 Session Cloud。
 - ✅ 已完成（2026-07-05）：迁移 useSessionDeleteActions 最小切片；仅抽取会话页单个/批量删除动作、删除弹窗文案与删除状态管理，不迁移 product 的 Session Cloud 或会话页大重构。
 - ✅ 已完成（2026-07-05）：迁移 useSessionActions 最小切片；仅抽取会话页复制文本与恢复会话动作，保留 macOS 终端启动和非 macOS 复制兜底行为，不迁移 product 的 Session Cloud 或会话页大重构。

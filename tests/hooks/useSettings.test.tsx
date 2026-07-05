@@ -9,7 +9,6 @@ const setAppConfigDirOverrideMock = vi.fn();
 const applyClaudePluginConfigMock = vi.fn();
 const applyClaudeOnboardingSkipMock = vi.fn();
 const clearClaudeOnboardingSkipMock = vi.fn();
-const syncCurrentProvidersLiveMock = vi.fn();
 const updateTrayMenuMock = vi.fn();
 const toastErrorMock = vi.fn();
 const toastSuccessMock = vi.fn();
@@ -56,8 +55,6 @@ vi.mock("@/lib/api", () => ({
       applyClaudeOnboardingSkipMock(...args),
     clearClaudeOnboardingSkip: (...args: unknown[]) =>
       clearClaudeOnboardingSkipMock(...args),
-    syncCurrentProvidersLive: (...args: unknown[]) =>
-      syncCurrentProvidersLiveMock(...args),
   },
   providersApi: {
     updateTrayMenu: (...args: unknown[]) => updateTrayMenuMock(...args),
@@ -120,7 +117,7 @@ describe("useSettings hook", () => {
     applyClaudePluginConfigMock.mockReset();
     applyClaudeOnboardingSkipMock.mockReset();
     clearClaudeOnboardingSkipMock.mockReset();
-    syncCurrentProvidersLiveMock.mockReset();
+    updateTrayMenuMock.mockReset();
     toastErrorMock.mockReset();
     toastSuccessMock.mockReset();
     window.localStorage.clear();
@@ -154,6 +151,7 @@ describe("useSettings hook", () => {
     applyClaudePluginConfigMock.mockResolvedValue(true);
     applyClaudeOnboardingSkipMock.mockResolvedValue(true);
     clearClaudeOnboardingSkipMock.mockResolvedValue(true);
+    updateTrayMenuMock.mockResolvedValue(true);
   });
 
   it("auto-saves and applies Claude onboarding skip when toggled on", async () => {
@@ -262,8 +260,7 @@ describe("useSettings hook", () => {
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(true);
     expect(window.localStorage.getItem("language")).toBe("en");
     expect(toastErrorMock).not.toHaveBeenCalled();
-    // 目录有变化，应触发一次同步当前供应商到 live
-    expect(syncCurrentProvidersLiveMock).toHaveBeenCalledTimes(1);
+    expect(updateTrayMenuMock).toHaveBeenCalledTimes(1);
   });
 
   it("saves settings without restart when directory unchanged", async () => {
@@ -305,8 +302,63 @@ describe("useSettings hook", () => {
     // 状态未改变，不应调用 API
     expect(applyClaudePluginConfigMock).not.toHaveBeenCalled();
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(false);
-    // 目录未变化，不应触发同步
-    expect(syncCurrentProvidersLiveMock).not.toHaveBeenCalled();
+  });
+
+  it("saves provider directory overrides without unrelated write side effects", async () => {
+    serverSettings = {
+      ...serverSettings,
+      enableClaudePluginIntegration: false,
+      skipClaudeOnboarding: true,
+      claudeConfigDir: "/server/claude",
+      codexConfigDir: "/server/codex",
+      geminiConfigDir: "/server/gemini",
+      opencodeConfigDir: "/server/opencode",
+      language: "zh",
+    };
+    useSettingsQueryMock.mockReturnValue({
+      data: serverSettings,
+      isLoading: false,
+    });
+
+    settingsFormMock = createSettingsFormMock({
+      settings: {
+        ...serverSettings,
+        claudeConfigDir: "  /custom/claude  ",
+        codexConfigDir: "  /custom/codex  ",
+        geminiConfigDir: "  /custom/gemini  ",
+        opencodeConfigDir: "  /custom/opencode  ",
+        enableClaudePluginIntegration: false,
+        skipClaudeOnboarding: true,
+        language: "zh",
+      },
+      initialLanguage: "zh",
+    });
+
+    directorySettingsMock = createDirectorySettingsMock({
+      appConfigDir: undefined,
+      initialAppConfigDir: undefined,
+    });
+
+    const { result } = renderHook(() => useSettings());
+
+    let saveResult: { requiresRestart: boolean } | null = null;
+    await act(async () => {
+      saveResult = await result.current.saveSettings();
+    });
+
+    expect(saveResult).toEqual({ requiresRestart: false });
+    expect(mutateAsyncMock).toHaveBeenCalledTimes(1);
+    const payload = mutateAsyncMock.mock.calls[0][0] as Settings;
+    expect(payload.claudeConfigDir).toBe("/custom/claude");
+    expect(payload.codexConfigDir).toBe("/custom/codex");
+    expect(payload.geminiConfigDir).toBe("/custom/gemini");
+    expect(payload.opencodeConfigDir).toBe("/custom/opencode");
+    expect(setAppConfigDirOverrideMock).toHaveBeenCalledWith(null);
+    expect(updateTrayMenuMock).toHaveBeenCalledTimes(1);
+    expect(applyClaudePluginConfigMock).not.toHaveBeenCalled();
+    expect(applyClaudeOnboardingSkipMock).not.toHaveBeenCalled();
+    expect(clearClaudeOnboardingSkipMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   it("shows toast when Claude plugin sync fails but continues flow", async () => {
