@@ -1,8 +1,10 @@
 import { renderHook, act } from "@testing-library/react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useSettingsMetadata } from "@/hooks/useSettingsMetadata";
 
 const isPortableMock = vi.hoisted(() => vi.fn());
+const originalConsoleError = console.error;
+let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null;
 
 vi.mock("@/lib/api", () => ({
   settingsApi: {
@@ -13,6 +15,21 @@ vi.mock("@/lib/api", () => ({
 describe("useSettingsMetadata", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation((...args) => {
+      const [message] = args;
+      if (
+        typeof message === "string" &&
+        message.startsWith("[useSettingsMetadata]")
+      ) {
+        return;
+      }
+      originalConsoleError(...(args as Parameters<typeof console.error>));
+    });
+  });
+
+  afterEach(() => {
+    consoleErrorSpy?.mockRestore();
+    consoleErrorSpy = null;
   });
 
   it("loads portable flag and handles success path", async () => {

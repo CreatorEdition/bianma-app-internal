@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-05）：设置元数据错误路径测试噪声收口小切片；同步 product 参考的 console.error spy，仅屏蔽 `[useSettingsMetadata]` 预期错误日志并在 afterEach 恢复，避免污染其他测试。
 - ✅ 已完成（2026-07-05）：SQL 导出头品牌收口小切片；新导出的 SQL 备份 header 已统一为 `-- bianma.ai SQLite 导出`，导入继续兼容历史 `-- CC Switch SQLite 导出` 文件并补充定向 Rust 单测。
 - ✅ 已完成（2026-07-05）：迁移主题 localStorage 主键兼容小切片；ThemeProvider 默认主键切换到 `bianma-theme`，兼容迁移并清理旧 `cc-switch-theme`，补充新旧键优先级定向单测。
 - ✅ 已完成（2026-07-05）：同步用户手册导入提示默认导出文件名品牌；中英文数据库备份导入提示已统一为 `bianma-export-{时间戳/timestamp}.sql`。
