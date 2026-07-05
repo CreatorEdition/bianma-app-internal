@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSessionSearch } from "@/hooks/useSessionSearch";
 import { useTranslation } from "react-i18next";
 import {
   Copy,
@@ -42,6 +41,10 @@ import { SessionMessageItem } from "./SessionMessageItem";
 import { SessionTocDialog, SessionTocSidebar } from "./SessionToc";
 import { useSessionActions } from "./hooks/useSessionActions";
 import { useSessionDeleteActions } from "./hooks/useSessionDeleteActions";
+import {
+  useSessionListState,
+  type ProviderFilter,
+} from "./hooks/useSessionListState";
 import { useSessionSelectionState } from "./hooks/useSessionSelectionState";
 import {
   formatSessionTitle,
@@ -51,14 +54,6 @@ import {
   getProviderLabel,
   getSessionKey,
 } from "./utils";
-
-type ProviderFilter =
-  | "all"
-  | "codex"
-  | "claude"
-  | "opencode"
-  | "openclaw"
-  | "gemini";
 
 export function SessionManagerPage({ appId }: { appId: string }) {
   const { t } = useTranslation();
@@ -75,45 +70,19 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   const [selectionMode, setSelectionMode] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [search, setSearch] = useState("");
-  const [providerFilter, setProviderFilter] = useState<ProviderFilter>(
-    appId as ProviderFilter,
-  );
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-
-  // 使用 FlexSearch 全文搜索
-  const { search: searchSessions } = useSessionSearch({
-    sessions,
+  const {
+    search,
+    setSearch,
     providerFilter,
+    setProviderFilter,
+    selectedKey,
+    setSelectedKey,
+    filteredSessions,
+    selectedSession,
+  } = useSessionListState({
+    sessions,
+    appId,
   });
-
-  const filteredSessions = useMemo(() => {
-    return searchSessions(search);
-  }, [searchSessions, search]);
-
-  useEffect(() => {
-    if (filteredSessions.length === 0) {
-      setSelectedKey(null);
-      return;
-    }
-    const exists = selectedKey
-      ? filteredSessions.some(
-          (session) => getSessionKey(session) === selectedKey,
-        )
-      : false;
-    if (!exists) {
-      setSelectedKey(getSessionKey(filteredSessions[0]));
-    }
-  }, [filteredSessions, selectedKey]);
-
-  const selectedSession = useMemo(() => {
-    if (!selectedKey) return null;
-    return (
-      filteredSessions.find(
-        (session) => getSessionKey(session) === selectedKey,
-      ) || null
-    );
-  }, [filteredSessions, selectedKey]);
   const { handleCopy, handleResume } = useSessionActions({
     t,
     selectedSession,
