@@ -132,7 +132,7 @@ export function ProviderActions({
             isDefaultModel && "opacity-40 cursor-not-allowed",
           ),
           icon: <Minus className="h-4 w-4" />,
-          text: t("provider.removeFromConfig", { defaultValue: "移除" }),
+          text: t("provider.removeFromConfig"),
         };
       }
       return {
@@ -141,7 +141,7 @@ export function ProviderActions({
         className:
           "bg-emerald-500 hover:bg-emerald-600 dark:bg-emerald-600 dark:hover:bg-emerald-700",
         icon: <Plus className="h-4 w-4" />,
-        text: t("provider.addToConfig", { defaultValue: "添加" }),
+        text: t("provider.addToConfig"),
       };
     }
 
@@ -153,7 +153,7 @@ export function ProviderActions({
           className:
             "bg-blue-100 text-blue-600 hover:bg-blue-200 dark:bg-blue-900/50 dark:text-blue-400 dark:hover:bg-blue-900/70",
           icon: <Check className="h-4 w-4" />,
-          text: t("failover.inQueue", { defaultValue: "已加入" }),
+          text: t("failover.inQueue"),
         };
       }
       return {
@@ -162,7 +162,7 @@ export function ProviderActions({
         className:
           "bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700",
         icon: <Plus className="h-4 w-4" />,
-        text: t("failover.addQueue", { defaultValue: "加入" }),
+        text: t("failover.addQueue"),
       };
     }
 
@@ -209,8 +209,8 @@ export function ProviderActions({
         >
           <Zap className="h-4 w-4" />
           {isDefaultModel
-            ? t("provider.isDefault", { defaultValue: "当前默认" })
-            : t("provider.setAsDefault", { defaultValue: "设为默认" })}
+            ? t("provider.isDefault")
+            : t("provider.setAsDefault")}
         </Button>
       )}
 
