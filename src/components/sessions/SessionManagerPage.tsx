@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSessionSearch } from "@/hooks/useSessionSearch";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   Copy,
   RefreshCw,
@@ -16,12 +14,9 @@ import {
   CheckSquare,
 } from "lucide-react";
 import {
-  useDeleteSessionMutation,
   useSessionMessagesQuery,
   useSessionsQuery,
 } from "@/lib/query";
-import { sessionsApi } from "@/lib/api";
-import type { SessionMeta } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -40,19 +35,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { extractErrorMessage } from "@/utils/errorUtils";
 import { isMac } from "@/lib/platform";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { SessionItem } from "./SessionItem";
 import { SessionMessageItem } from "./SessionMessageItem";
 import { SessionTocDialog, SessionTocSidebar } from "./SessionToc";
 import { useSessionActions } from "./hooks/useSessionActions";
+import { useSessionDeleteActions } from "./hooks/useSessionDeleteActions";
 import { useSessionSelectionState } from "./hooks/useSessionSelectionState";
-import {
-  getDeletableSessions,
-  getDeleteResultSummary,
-  toDeleteSessionOptions,
-} from "./deleteUtils";
 import {
   formatSessionTitle,
   formatTimestamp,
@@ -72,7 +62,6 @@ type ProviderFilter =
 
 export function SessionManagerPage({ appId }: { appId: string }) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   const { data, isLoading, refetch } = useSessionsQuery();
   const sessions = data ?? [];
   const detailRef = useRef<HTMLDivElement | null>(null);
@@ -83,10 +72,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   );
   const [tocDialogOpen, setTocDialogOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [deleteTargets, setDeleteTargets] = useState<SessionMeta[] | null>(
-    null,
-  );
-  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -139,8 +124,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
       selectedSession?.providerId,
       selectedSession?.sourcePath,
     );
-  const deleteSessionMutation = useDeleteSessionMutation();
-  const isDeleting = deleteSessionMutation.isPending || isBatchDeleting;
 
   const {
     selectedSessionKeys,
@@ -155,6 +138,24 @@ export function SessionManagerPage({ appId }: { appId: string }) {
     sessions,
     filteredSessions,
     selectionMode,
+  });
+
+  const {
+    deleteTargets,
+    isBatchDeleting,
+    isDeleting,
+    openBatchDeleteDialog,
+    openSingleDeleteDialog,
+    closeDeleteDialog,
+    handleDeleteConfirm,
+    dialogTitle,
+    dialogMessage,
+    dialogConfirmText,
+  } = useSessionDeleteActions({
+    t,
+    selectedSession,
+    selectedDeletableSessions,
+    removeSelectedKeys,
   });
 
   // 提取用户消息用于目录
@@ -190,89 +191,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
       // 为了代码规范，我们在组件卸载时将 activeMessageIndex 重置 (虽然 React 会处理)
     };
   }, []);
-
-  const handleDeleteConfirm = async () => {
-    if (!deleteTargets || deleteTargets.length === 0 || isDeleting) {
-      return;
-    }
-
-    const targets = getDeletableSessions(deleteTargets);
-    const deleteOptions = toDeleteSessionOptions(targets);
-    setDeleteTargets(null);
-
-    if (deleteOptions.length === 0) {
-      return;
-    }
-
-    if (deleteOptions.length === 1) {
-      const [target] = targets;
-      await deleteSessionMutation.mutateAsync(deleteOptions[0]);
-      removeSelectedKeys([getSessionKey(target)]);
-      return;
-    }
-
-    setIsBatchDeleting(true);
-    try {
-      const results = await sessionsApi.deleteMany(deleteOptions);
-      const { deletedKeys, failedErrors } = getDeleteResultSummary(results, t);
-
-      if (deletedKeys.length > 0) {
-        const deletedKeySet = new Set(deletedKeys);
-        queryClient.setQueryData<SessionMeta[]>(["sessions"], (current) =>
-          (current ?? []).filter(
-            (session) => !deletedKeySet.has(getSessionKey(session)),
-          ),
-        );
-      }
-
-      results
-        .filter((result) => result.success)
-        .forEach((result) => {
-          queryClient.removeQueries({
-            queryKey: ["sessionMessages", result.providerId, result.sourcePath],
-          });
-        });
-
-      removeSelectedKeys(deletedKeys);
-
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-
-      if (deletedKeys.length > 0) {
-        toast.success(
-          t("sessionManager.batchDeleteSuccess", {
-            defaultValue: "已删除 {{count}} 个会话",
-            count: deletedKeys.length,
-          }),
-        );
-      }
-
-      if (failedErrors.length > 0) {
-        toast.error(
-          t("sessionManager.batchDeleteFailed", {
-            defaultValue: "{{failed}} 个会话删除失败",
-            failed: failedErrors.length,
-          }),
-          {
-            description: failedErrors[0],
-          },
-        );
-      }
-    } catch (error) {
-      toast.error(
-        extractErrorMessage(error) ||
-          t("sessionManager.batchDeleteRequestFailed", {
-            defaultValue: "批量删除失败，请稍后重试",
-          }),
-      );
-    } finally {
-      setIsBatchDeleting(false);
-    }
-  };
-
-  const openBatchDeleteDialog = () => {
-    if (selectedDeletableSessions.length === 0) return;
-    setDeleteTargets(selectedDeletableSessions);
-  };
 
   const exitSelectionMode = () => {
     setSelectionMode(false);
@@ -773,9 +691,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                               size="sm"
                               variant="destructive"
                               className="gap-1.5"
-                              onClick={() =>
-                                setDeleteTargets([selectedSession])
-                              }
+                              onClick={openSingleDeleteDialog}
                               disabled={
                                 !selectedSession.sourcePath || isDeleting
                               }
@@ -912,48 +828,13 @@ export function SessionManagerPage({ appId }: { appId: string }) {
       </div>
       <ConfirmDialog
         isOpen={Boolean(deleteTargets)}
-        title={
-          deleteTargets && deleteTargets.length > 1
-            ? t("sessionManager.batchDeleteConfirmTitle", {
-                defaultValue: "批量删除会话",
-              })
-            : t("sessionManager.deleteConfirmTitle", {
-                defaultValue: "删除会话",
-              })
-        }
-        message={
-          deleteTargets && deleteTargets.length > 1
-            ? t("sessionManager.batchDeleteConfirmMessage", {
-                defaultValue:
-                  "将永久删除已选中的 {{count}} 个本地会话记录。\n\n此操作不可恢复。",
-                count: deleteTargets.length,
-              })
-            : deleteTargets?.[0]
-              ? t("sessionManager.deleteConfirmMessage", {
-                  defaultValue:
-                    "将永久删除本地会话“{{title}}”\nSession ID: {{sessionId}}\n\n此操作不可恢复。",
-                  title: formatSessionTitle(deleteTargets[0]),
-                  sessionId: deleteTargets[0].sessionId,
-                })
-              : ""
-        }
-        confirmText={
-          deleteTargets && deleteTargets.length > 1
-            ? t("sessionManager.batchDeleteConfirmAction", {
-                defaultValue: "删除所选会话",
-              })
-            : t("sessionManager.deleteConfirmAction", {
-                defaultValue: "删除会话",
-              })
-        }
+        title={dialogTitle}
+        message={dialogMessage}
+        confirmText={dialogConfirmText}
         cancelText={t("common.cancel", { defaultValue: "取消" })}
         variant="destructive"
         onConfirm={() => void handleDeleteConfirm()}
-        onCancel={() => {
-          if (!isDeleting) {
-            setDeleteTargets(null);
-          }
-        }}
+        onCancel={closeDeleteDialog}
       />
     </TooltipProvider>
   );
