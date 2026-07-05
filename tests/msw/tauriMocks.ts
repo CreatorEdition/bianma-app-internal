@@ -43,6 +43,10 @@ export const emitTauriEvent = (event: string, payload: unknown) => {
   handlers?.forEach((handler) => handler({ payload }));
 };
 
+export const resetTauriEventListeners = () => {
+  listeners.clear();
+};
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: async (
     event: string,
