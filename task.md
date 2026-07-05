@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-05）：迁移剪贴板工具增强与测试最小切片；仅迁移剪贴板纯工具增强，不迁移规则中心、多 key 池、会话云、风险守卫、策略链、合作方推广或签名发布材料。
 - ✅ 已完成（2026-07-05）：移除 useSettings 手动保存目录覆盖变化后的额外 live 同步副作用；仅收口公开仓现有 settings 保存、App 配置目录覆盖与托盘刷新行为，不迁移 product 的额外目录、规则中心或供应商策略能力。
 - ✅ 已完成（2026-07-05）：迁移 useSessionListState 最小切片；仅抽取会话页当前搜索、Provider 过滤、选中 key 与 selectedSession 派生逻辑，不迁移 product 的排序模式、SessionListCard 或 Session Cloud。
 - ✅ 已完成（2026-07-05）：迁移 useSessionDeleteActions 最小切片；仅抽取会话页单个/批量删除动作、删除弹窗文案与删除状态管理，不迁移 product 的 Session Cloud 或会话页大重构。
