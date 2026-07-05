@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-05）：收口默认 App 配置目录解析最小切片；优先从 Tauri `get_app_config_path` 返回的 `config.json` 路径派生目录，失败时保留 `.cc-switch` 兼容 fallback，不迁移 product 的 OpenClaw 目录 UI。
 - ✅ 已完成（2026-07-05）：收口 Rust 运行时品牌常量最小切片；新增公开仓 brand 常量并接入开机自启名称、GitHub User-Agent、release latest URL 与 deep link scheme 判断，未迁移 product release URL、配置目录切换、规则中心、会话云、风险守卫、策略链、合作方推广或签名发布材料。
 - ✅ 已完成（2026-07-05）：抽取本地会话详情卡最小切片；仅将公开仓现有右侧会话详情拆为 SessionDetailCard 并补充组件测试，不迁移 Session Cloud、列表改版、排序模式或远端同步能力。
 - ✅ 已完成（2026-07-05）：抽取公开仓 App 视图保护 Hook；仅迁移可见应用兜底与会话视图保护逻辑，不迁移 product 新导航模型、规则中心、多 key 池、会话云、风险守卫、策略链、合作方推广或签名发布材料。

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { homeDir, join } from "@tauri-apps/api/path";
+import { dirname, homeDir, join } from "@tauri-apps/api/path";
 import { settingsApi, type AppId } from "@/lib/api";
 import type { SettingsFormState } from "./useSettingsForm";
 
@@ -22,6 +22,13 @@ const sanitizeDir = (value?: string | null): string | undefined => {
 };
 
 const computeDefaultAppConfigDir = async (): Promise<string | undefined> => {
+  try {
+    const appConfigPath = await settingsApi.getAppConfigPath();
+    return await dirname(appConfigPath);
+  } catch {
+    // Rust 端路径解析失败时保留历史目录，确保旧安装与测试环境仍可用。
+  }
+
   try {
     const home = await homeDir();
     return await join(home, ".cc-switch");

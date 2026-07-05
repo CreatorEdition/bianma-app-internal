@@ -4,10 +4,14 @@ import { useDirectorySettings } from "@/hooks/useDirectorySettings";
 import type { SettingsFormState } from "@/hooks/useSettingsForm";
 
 const getAppConfigDirOverrideMock = vi.hoisted(() => vi.fn());
+const getAppConfigPathMock = vi.hoisted(() => vi.fn());
 const getConfigDirMock = vi.hoisted(() => vi.fn());
 const selectConfigDirectoryMock = vi.hoisted(() => vi.fn());
 const setAppConfigDirOverrideMock = vi.hoisted(() => vi.fn());
 const homeDirMock = vi.hoisted(() => vi.fn<() => Promise<string>>());
+const dirnameMock = vi.hoisted(() =>
+  vi.fn(async (path: string) => path.split("/").slice(0, -1).join("/")),
+);
 const joinMock = vi.hoisted(() =>
   vi.fn(async (...segments: string[]) => segments.join("/")),
 );
@@ -16,6 +20,7 @@ const toastErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({
   settingsApi: {
     getAppConfigDirOverride: getAppConfigDirOverrideMock,
+    getAppConfigPath: getAppConfigPathMock,
     getConfigDir: getConfigDirMock,
     selectConfigDirectory: selectConfigDirectoryMock,
     setAppConfigDirOverride: setAppConfigDirOverrideMock,
@@ -23,6 +28,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@tauri-apps/api/path", () => ({
+  dirname: dirnameMock,
   homeDir: homeDirMock,
   join: joinMock,
 }));
@@ -59,6 +65,12 @@ describe("useDirectorySettings", () => {
     vi.clearAllMocks();
 
     homeDirMock.mockResolvedValue("/home/mock");
+    getAppConfigPathMock.mockResolvedValue(
+      "/home/mock/.config/bianma/config.json",
+    );
+    dirnameMock.mockImplementation(async (path: string) =>
+      path.split("/").slice(0, -1).join("/"),
+    );
     joinMock.mockImplementation(async (...segments: string[]) =>
       segments.join("/"),
     );
@@ -91,6 +103,47 @@ describe("useDirectorySettings", () => {
       opencode: "/remote/opencode",
     });
   });
+
+  it("uses dirname of app config path as default app config directory", async () => {
+    const { result } = renderHook(() =>
+      useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(getAppConfigPathMock).toHaveBeenCalledTimes(1);
+    expect(dirnameMock).toHaveBeenCalledWith(
+      "/home/mock/.config/bianma/config.json",
+    );
+    expect(joinMock).not.toHaveBeenCalledWith("/home/mock", ".cc-switch");
+    expect(result.current.resolvedDirs.appConfig).toBe(
+      "/home/mock/.config/bianma",
+    );
+  });
+
+  it.each([
+    [
+      "getAppConfigPath",
+      () => getAppConfigPathMock.mockRejectedValueOnce(new Error("missing")),
+    ],
+    ["dirname", () => dirnameMock.mockRejectedValueOnce(new Error("bad path"))],
+  ])(
+    "falls back to legacy app config directory when %s fails",
+    async (_, setupFailure) => {
+      setupFailure();
+
+      const { result } = renderHook(() =>
+        useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
+      );
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      expect(result.current.resolvedDirs.appConfig).toBe(
+        "/home/mock/.cc-switch",
+      );
+      expect(joinMock).toHaveBeenCalledWith("/home/mock", ".cc-switch");
+    },
+  );
 
   it("updates claude directory when browsing succeeds", async () => {
     selectConfigDirectoryMock.mockResolvedValue("/picked/claude");
@@ -178,7 +231,7 @@ describe("useDirectorySettings", () => {
 
     expect(result.current.appConfigDir).toBe("/new/app");
     expect(selectConfigDirectoryMock).toHaveBeenCalledWith(
-      "/home/mock/.cc-switch",
+      "/home/mock/.config/bianma",
     );
   });
 
@@ -208,7 +261,9 @@ describe("useDirectorySettings", () => {
     });
     expect(result.current.resolvedDirs.claude).toBe("/home/mock/.claude");
     expect(result.current.resolvedDirs.codex).toBe("/home/mock/.codex");
-    expect(result.current.resolvedDirs.appConfig).toBe("/home/mock/.cc-switch");
+    expect(result.current.resolvedDirs.appConfig).toBe(
+      "/home/mock/.config/bianma",
+    );
   });
 
   it("resetAllDirectories applies provided resolved values", async () => {
