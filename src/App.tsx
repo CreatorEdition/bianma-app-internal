@@ -28,7 +28,7 @@ import { useProviderActions } from "@/hooks/useProviderActions";
 import { openclawKeys, useOpenClawHealth } from "@/hooks/useOpenClaw";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { useAutoCompact } from "@/hooks/useAutoCompact";
-import { useLastValidValue } from "@/hooks/useLastValidValue";
+import { useAppUiState } from "@/hooks/useAppUiState";
 import { useEnvBannerActions } from "@/hooks/useEnvBannerActions";
 import { useAppEventSubscriptions } from "@/hooks/useAppEventSubscriptions";
 import { useAppStartupChecks } from "@/hooks/useAppStartupChecks";
@@ -134,8 +134,28 @@ function App() {
 
   const [activeApp, setActiveApp] = useState<AppId>(getInitialApp);
   const [currentView, setCurrentView] = useState<View>(getInitialView);
-  const [settingsDefaultTab, setSettingsDefaultTab] = useState("general");
-  const [isAddOpen, setIsAddOpen] = useState(false);
+  const {
+    settingsDefaultTab,
+    isAddOpen,
+    editingProvider,
+    usageProvider,
+    confirmAction,
+    effectiveEditingProvider,
+    effectiveUsageProvider,
+    openGeneralSettings,
+    openProxySettings,
+    openUsageSettings,
+    openAboutSettings,
+    openAddDialog,
+    handleAddDialogOpenChange,
+    openEditDialog,
+    handleEditDialogOpenChange,
+    openUsageModal,
+    closeUsageModal,
+    openDeleteConfirm,
+    openRemoveConfirm,
+    clearConfirmAction,
+  } = useAppUiState({ setCurrentView });
 
   useEffect(() => {
     writeCompatibleStorage(LAST_VIEW_STORAGE_KEY, currentView, [
@@ -181,12 +201,6 @@ function App() {
     }
   }, [activeApp, currentView]);
 
-  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
-  const [usageProvider, setUsageProvider] = useState<Provider | null>(null);
-  const [confirmAction, setConfirmAction] = useState<{
-    provider: Provider;
-    action: "remove" | "delete";
-  } | null>(null);
   const [envConflicts, setEnvConflicts] = useState<EnvConflict[]>([]);
   const [showEnvBanner, setShowEnvBanner] = useState(false);
   const { handleEnvBannerDismiss, handleEnvBannerDeleted } =
@@ -194,9 +208,6 @@ function App() {
       setEnvConflicts,
       setShowEnvBanner,
     });
-
-  const effectiveEditingProvider = useLastValidValue(editingProvider);
-  const effectiveUsageProvider = useLastValidValue(usageProvider);
 
   const toolbarRef = useRef<HTMLDivElement>(null);
   const isToolbarCompact = useAutoCompact(toolbarRef);
@@ -295,7 +306,7 @@ function App() {
     originalId?: string;
   }) => {
     await updateProvider(provider, originalId);
-    setEditingProvider(null);
+    handleEditDialogOpenChange(false);
   };
 
   const handleConfirmAction = async () => {
@@ -328,7 +339,7 @@ function App() {
     } else {
       await deleteProvider(provider.id);
     }
-    setConfirmAction(null);
+    clearConfirmAction();
   };
 
   const generateUniqueProviderCopyKey = (
@@ -568,16 +579,11 @@ function App() {
                       isCurrentAppTakeoverActive={isCurrentAppTakeoverActive}
                       activeProviderId={activeProviderId}
                       onSwitch={switchProvider}
-                      onEdit={(provider) => {
-                        setEditingProvider(provider);
-                      }}
-                      onDelete={(provider) =>
-                        setConfirmAction({ provider, action: "delete" })
-                      }
+                      onEdit={openEditDialog}
+                      onDelete={openDeleteConfirm}
                       onRemoveFromConfig={
                         activeApp === "opencode" || activeApp === "openclaw"
-                          ? (provider) =>
-                              setConfirmAction({ provider, action: "remove" })
+                          ? openRemoveConfirm
                           : undefined
                       }
                       onDisableOmo={
@@ -589,19 +595,16 @@ function App() {
                           : undefined
                       }
                       onDuplicate={handleDuplicateProvider}
-                      onConfigureUsage={setUsageProvider}
+                      onConfigureUsage={openUsageModal}
                       onOpenWebsite={handleOpenWebsite}
                       onOpenTerminal={
                         activeApp === "claude" ? handleOpenTerminal : undefined
                       }
-                      onCreate={() => setIsAddOpen(true)}
+                      onCreate={openAddDialog}
                       onSetAsDefault={
                         activeApp === "openclaw" ? setAsDefaultModel : undefined
                       }
-                      onOpenProxySettings={() => {
-                        setSettingsDefaultTab("proxy");
-                        setCurrentView("settings");
-                      }}
+                      onOpenProxySettings={openProxySettings}
                     />
                   </motion.div>
                 </AnimatePresence>
@@ -721,29 +724,18 @@ function App() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => {
-                    setSettingsDefaultTab("general");
-                    setCurrentView("settings");
-                  }}
+                  onClick={openGeneralSettings}
                   title={t("common.settings")}
                   className="hover:bg-black/5 dark:hover:bg-white/5"
                 >
                   <Settings className="w-4 h-4" />
                 </Button>
-                <UpdateBadge
-                  onClick={() => {
-                    setSettingsDefaultTab("about");
-                    setCurrentView("settings");
-                  }}
-                />
+                <UpdateBadge onClick={openAboutSettings} />
                 {isCurrentAppTakeoverActive && (
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => {
-                      setSettingsDefaultTab("usage");
-                      setCurrentView("settings");
-                    }}
+                    onClick={openUsageSettings}
                     title={t("usage.title", {
                       defaultValue: "使用统计",
                     })}
@@ -1007,7 +999,7 @@ function App() {
                     </div>
 
                     <Button
-                      onClick={() => setIsAddOpen(true)}
+                      onClick={openAddDialog}
                       size="icon"
                       className={`ml-2 ${addActionButtonClass}`}
                     >
@@ -1030,7 +1022,7 @@ function App() {
 
       <AddProviderDialog
         open={isAddOpen}
-        onOpenChange={setIsAddOpen}
+        onOpenChange={handleAddDialogOpenChange}
         appId={activeApp}
         onSubmit={addProvider}
       />
@@ -1038,11 +1030,7 @@ function App() {
       <EditProviderDialog
         open={Boolean(editingProvider)}
         provider={effectiveEditingProvider}
-        onOpenChange={(open) => {
-          if (!open) {
-            setEditingProvider(null);
-          }
-        }}
+        onOpenChange={handleEditDialogOpenChange}
         onSubmit={handleEditProvider}
         appId={activeApp}
         isProxyTakeover={isProxyRunning && isCurrentAppTakeoverActive}
@@ -1054,7 +1042,7 @@ function App() {
           provider={effectiveUsageProvider}
           appId={activeApp}
           isOpen={Boolean(usageProvider)}
-          onClose={() => setUsageProvider(null)}
+          onClose={closeUsageModal}
           onSave={(script) => {
             if (usageProvider) {
               void saveUsageScript(usageProvider, script);
@@ -1082,7 +1070,7 @@ function App() {
             : ""
         }
         onConfirm={() => void handleConfirmAction()}
-        onCancel={() => setConfirmAction(null)}
+        onCancel={clearConfirmAction}
       />
 
       <DeepLinkImportDialog />
