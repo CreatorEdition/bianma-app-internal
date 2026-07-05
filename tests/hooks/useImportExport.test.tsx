@@ -158,10 +158,10 @@ describe("useImportExport Hook", () => {
   });
 
   it("should export successfully with default filename and show path in toast", async () => {
-    saveFileDialogMock.mockResolvedValue("/export.json");
+    saveFileDialogMock.mockResolvedValue("/export.sql");
     exportConfigMock.mockResolvedValue({
       success: true,
-      filePath: "/backup/export.json",
+      filePath: "/backup/export.sql",
     });
 
     const { result } = renderHook(() => useImportExport());
@@ -171,9 +171,12 @@ describe("useImportExport Hook", () => {
     });
 
     expect(saveFileDialogMock).toHaveBeenCalledTimes(1);
-    expect(exportConfigMock).toHaveBeenCalledWith("/export.json");
+    expect(saveFileDialogMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^bianma-export-.*\.sql$/),
+    );
+    expect(exportConfigMock).toHaveBeenCalledWith("/export.sql");
     expect(toastSuccessMock).toHaveBeenCalledWith(
-      expect.stringContaining("/backup/export.json"),
+      expect.stringContaining("/backup/export.sql"),
       expect.objectContaining({ closeButton: true }),
     );
   });
