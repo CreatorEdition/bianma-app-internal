@@ -46,6 +46,7 @@ import { ProviderIcon } from "@/components/ProviderIcon";
 import { SessionItem } from "./SessionItem";
 import { SessionMessageItem } from "./SessionMessageItem";
 import { SessionTocDialog, SessionTocSidebar } from "./SessionToc";
+import { useSessionSelectionState } from "./hooks/useSessionSelectionState";
 import {
   getDeletableSessions,
   getDeleteResultSummary,
@@ -83,9 +84,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [deleteTargets, setDeleteTargets] = useState<SessionMeta[] | null>(
     null,
-  );
-  const [selectedSessionKeys, setSelectedSessionKeys] = useState<Set<string>>(
-    () => new Set(),
   );
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
@@ -139,23 +137,20 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   const deleteSessionMutation = useDeleteSessionMutation();
   const isDeleting = deleteSessionMutation.isPending || isBatchDeleting;
 
-  useEffect(() => {
-    const validKeys = new Set(
-      sessions.map((session) => getSessionKey(session)),
-    );
-    setSelectedSessionKeys((current) => {
-      let changed = false;
-      const next = new Set<string>();
-      current.forEach((key) => {
-        if (validKeys.has(key)) {
-          next.add(key);
-        } else {
-          changed = true;
-        }
-      });
-      return changed ? next : current;
-    });
-  }, [sessions]);
+  const {
+    selectedSessionKeys,
+    deletableFilteredSessions,
+    selectedDeletableSessions,
+    allFilteredSelected,
+    toggleSessionChecked,
+    toggleSelectAll,
+    clearSelection,
+    removeSelectedKeys,
+  } = useSessionSelectionState({
+    sessions,
+    filteredSessions,
+    selectionMode,
+  });
 
   // 提取用户消息用于目录
   const userMessagesToc = useMemo(() => {
@@ -243,11 +238,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
     if (deleteOptions.length === 1) {
       const [target] = targets;
       await deleteSessionMutation.mutateAsync(deleteOptions[0]);
-      setSelectedSessionKeys((current) => {
-        const next = new Set(current);
-        next.delete(getSessionKey(target));
-        return next;
-      });
+      removeSelectedKeys([getSessionKey(target)]);
       return;
     }
 
@@ -273,11 +264,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
           });
         });
 
-      setSelectedSessionKeys((current) => {
-        const next = new Set(current);
-        deletedKeys.forEach((key) => next.delete(key));
-        return next;
-      });
+      removeSelectedKeys(deletedKeys);
 
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
 
@@ -313,83 +300,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
     }
   };
 
-  const deletableFilteredSessions = useMemo(
-    () => filteredSessions.filter((session) => Boolean(session.sourcePath)),
-    [filteredSessions],
-  );
-
-  const selectedSessions = useMemo(
-    () =>
-      sessions.filter((session) =>
-        selectedSessionKeys.has(getSessionKey(session)),
-      ),
-    [sessions, selectedSessionKeys],
-  );
-
-  const selectedDeletableSessions = useMemo(
-    () => selectedSessions.filter((session) => Boolean(session.sourcePath)),
-    [selectedSessions],
-  );
-
-  useEffect(() => {
-    if (!selectionMode) return;
-
-    const visibleKeys = new Set(
-      deletableFilteredSessions.map((session) => getSessionKey(session)),
-    );
-
-    setSelectedSessionKeys((current) => {
-      let changed = false;
-      const next = new Set<string>();
-
-      current.forEach((key) => {
-        if (visibleKeys.has(key)) {
-          next.add(key);
-        } else {
-          changed = true;
-        }
-      });
-
-      return changed ? next : current;
-    });
-  }, [deletableFilteredSessions, selectionMode]);
-
-  const allFilteredSelected =
-    deletableFilteredSessions.length > 0 &&
-    deletableFilteredSessions.every((session) =>
-      selectedSessionKeys.has(getSessionKey(session)),
-    );
-
-  const toggleSessionChecked = (session: SessionMeta, checked: boolean) => {
-    if (!session.sourcePath) return;
-    const key = getSessionKey(session);
-    setSelectedSessionKeys((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(key);
-      } else {
-        next.delete(key);
-      }
-      return next;
-    });
-  };
-
-  const handleToggleSelectAll = () => {
-    setSelectedSessionKeys((current) => {
-      const next = new Set(current);
-      if (allFilteredSelected) {
-        deletableFilteredSessions.forEach((session) =>
-          next.delete(getSessionKey(session)),
-        );
-      } else {
-        deletableFilteredSessions.forEach((session) =>
-          next.add(getSessionKey(session)),
-        );
-      }
-      return next;
-    });
-  };
-
   const openBatchDeleteDialog = () => {
     if (selectedDeletableSessions.length === 0) return;
     setDeleteTargets(selectedDeletableSessions);
@@ -397,7 +307,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
 
   const exitSelectionMode = () => {
     setSelectionMode(false);
-    setSelectedSessionKeys(new Set());
+    clearSelection();
   };
 
   return (
@@ -679,7 +589,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                 variant="ghost"
                                 size="sm"
                                 className="h-7 px-2.5 text-xs whitespace-nowrap"
-                                onClick={handleToggleSelectAll}
+                                onClick={toggleSelectAll}
                               >
                                 {allFilteredSelected
                                   ? t("sessionManager.clearFilteredSelection", {
@@ -694,7 +604,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                               variant="ghost"
                               size="sm"
                               className="h-7 px-2.5 text-xs whitespace-nowrap"
-                              onClick={() => setSelectedSessionKeys(new Set())}
+                              onClick={clearSelection}
                             >
                               {t("sessionManager.clearSelection", {
                                 defaultValue: "清空已选",

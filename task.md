@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-05）：迁移 useSessionSelectionState 最小切片；仅抽取会话页批量选择纯 UI 状态、过滤收窄清理与选择 key 移除逻辑，不迁移 product 的 Session Cloud 或会话页大重构。
 - ✅ 已完成（2026-07-05）：迁移 useAppKeyboardShortcuts 最小切片；仅抽取公开仓 App 内已有 Ctrl/Cmd+`,` 与 Escape 回退逻辑，保留当前视图回退规则和可编辑目标/弹窗锁定跳过行为，未迁移 product 新导航模型。
 - ✅ 已完成（2026-07-05）：迁移 useProviderOmoActions 最小切片；仅抽取 App 内已有 OMO / OMO Slim 停用 mutation 与 toast 逻辑，保持 ProviderWorkspacePanel 传参条件不变，新增公开仓 hook 定向测试。
 - ✅ 已完成（2026-07-05）：迁移 App startup checks 抽取最小切片；仅抽取启动环境变量冲突检查、配置迁移 toast、skills 迁移 toast/invalidate 与 activeApp 切换冲突合并逻辑，新增公开仓 useAppStartupChecks 与定向 hook 测试。
