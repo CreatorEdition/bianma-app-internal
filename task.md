@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-05）：迁移 App startup checks 抽取最小切片；仅抽取启动环境变量冲突检查、配置迁移 toast、skills 迁移 toast/invalidate 与 activeApp 切换冲突合并逻辑，新增公开仓 useAppStartupChecks 与定向 hook 测试。
 - ✅ 已完成（2026-07-05）：迁移 useEnvBannerActions 最小切片；仅抽取 EnvWarningBanner dismiss/deleted 动作与对应定向测试，App.tsx 仅替换 EnvWarningBanner 的 dismiss/deleted 回调，未迁移 product 的 App 大结构。
 - ✅ 已完成（2026-07-05）：收口 useEnvBannerActions 测试隔离与 App 集成测试冷启动稳定化；定向组合测试不再因模块级 mock 污染或 App 动态导入耗时超时失败。
 - ✅ 已完成（2026-07-05）：迁移 App 事件订阅抽取最小切片；仅抽取 provider-switched、universal-provider-synced 与 webdav-sync-status-updated 三段订阅逻辑，新增公开仓 useAppEventSubscriptions 与定向 hook 测试。
