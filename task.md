@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-05）：按白名单最小切片迁移 Failover 前端 tooltip 资源化与组件单测；仅移除 FailoverToggle 与 FailoverPriorityBadge 内 tooltip 中文 fallback，并补充资源化 tooltip 与切换 action 参数定向单测。
 - ✅ 已完成（2026-07-05）：按白名单最小切片迁移 ProxyToggle tooltip 资源化与组件单测；移除组件内 tooltip 中文 fallback，确认中英日已有资源 key，并补充 inactive/active/broken 与切换动作定向单测。
 - ✅ 已完成（2026-07-05）：迁移会话删除纯工具最小切片；新增 deleteUtils 复用删除目标过滤、删除参数映射与批量结果汇总逻辑，SessionManagerPage 已替换内联实现并补充定向单测。
 - ✅ 已完成（2026-04-12）：清理公开深链接测试页 `deplink.html` 的品牌口径，统一页面标题、说明文案与使用提示到 `bianma-app` / `bianma://` 主语境。
