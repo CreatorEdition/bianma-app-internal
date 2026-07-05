@@ -1,7 +1,7 @@
 import { Suspense, type ComponentType } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { providersApi } from "@/lib/api/providers";
 import {
   resetProviderState,
@@ -13,6 +13,7 @@ import { emitTauriEvent } from "../msw/tauriMocks";
 
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
+let App: ComponentType;
 
 vi.mock("sonner", () => ({
   toast: {
@@ -191,7 +192,13 @@ const renderApp = (AppComponent: ComponentType) => {
   );
 };
 
+const APP_IMPORT_TIMEOUT_MS = 20000;
+
 describe("App integration with MSW", () => {
+  beforeAll(async () => {
+    App = (await import("@/App")).default;
+  }, APP_IMPORT_TIMEOUT_MS);
+
   beforeEach(() => {
     resetProviderState();
     localStorage.clear();
@@ -199,25 +206,19 @@ describe("App integration with MSW", () => {
     toastErrorMock.mockReset();
   });
 
-  it(
-    "migrates legacy last app and view keys on startup",
-    async () => {
-      localStorage.setItem("cc-switch-last-app", "codex");
-      localStorage.setItem("cc-switch-last-view", "providers");
+  it("migrates legacy last app and view keys on startup", () => {
+    localStorage.setItem("cc-switch-last-app", "codex");
+    localStorage.setItem("cc-switch-last-view", "providers");
 
-      const { default: App } = await import("@/App");
-      renderApp(App);
+    renderApp(App);
 
-      expect(localStorage.getItem("bianma-last-app")).toBe("codex");
-      expect(localStorage.getItem("cc-switch-last-app")).toBeNull();
-      expect(localStorage.getItem("bianma-last-view")).toBe("providers");
-      expect(localStorage.getItem("cc-switch-last-view")).toBeNull();
-    },
-    10000,
-  );
+    expect(localStorage.getItem("bianma-last-app")).toBe("codex");
+    expect(localStorage.getItem("cc-switch-last-app")).toBeNull();
+    expect(localStorage.getItem("bianma-last-view")).toBe("providers");
+    expect(localStorage.getItem("cc-switch-last-view")).toBeNull();
+  });
 
   it("covers basic provider flows via real hooks", async () => {
-    const { default: App } = await import("@/App");
     renderApp(App);
 
     await waitFor(() =>
@@ -274,7 +275,6 @@ describe("App integration with MSW", () => {
   });
 
   it("shows toast when auto sync fails in background", async () => {
-    const { default: App } = await import("@/App");
     renderApp(App);
 
     await waitFor(() =>
@@ -313,7 +313,6 @@ describe("App integration with MSW", () => {
     setCurrentProviderId("openclaw", "deepseek");
     setLiveProviderIds("openclaw", ["deepseek-copy"]);
 
-    const { default: App } = await import("@/App");
     renderApp(App);
 
     fireEvent.click(screen.getByText("switch-openclaw"));
@@ -359,7 +358,6 @@ describe("App integration with MSW", () => {
       .spyOn(providersApi, "getOpenClawLiveProviderIds")
       .mockRejectedValueOnce(new Error("broken config"));
 
-    const { default: App } = await import("@/App");
     renderApp(App);
 
     fireEvent.click(screen.getByText("switch-openclaw"));
