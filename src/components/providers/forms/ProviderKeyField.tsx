@@ -11,12 +11,14 @@ interface ProviderKeyFieldProps {
   value: string;
   placeholder: string;
   existingKeys: string[];
+  isEditMode: boolean;
   isLocked?: boolean;
   isLoading?: boolean;
   duplicateMessage: string;
   invalidMessage: string;
   hintMessage: string;
   lockedHintMessage?: string;
+  loadingMessage?: string;
   onChange: (value: string) => void;
 }
 
@@ -29,16 +31,19 @@ export function ProviderKeyField({
   value,
   placeholder,
   existingKeys,
+  isEditMode,
   isLocked = false,
   isLoading = false,
   duplicateMessage,
   invalidMessage,
   hintMessage,
   lockedHintMessage,
+  loadingMessage,
   onChange,
 }: ProviderKeyFieldProps) {
   const trimmedValue = value.trim();
-  const isDuplicate = existingKeys.includes(value) && !isLocked;
+  const isFieldLocked = isEditMode && (isLocked || isLoading);
+  const isDuplicate = existingKeys.includes(value) && !isFieldLocked;
   const isInvalid = trimmedValue !== "" && !isProviderKeyValid(value);
   const showHint = !isDuplicate && (trimmedValue === "" || !isInvalid);
 
@@ -53,7 +58,7 @@ export function ProviderKeyField({
         value={value}
         onChange={(e) => onChange(normalizeProviderKeyInput(e.target.value))}
         placeholder={placeholder}
-        disabled={isLocked || isLoading}
+        disabled={isFieldLocked}
         className={isDuplicate || isInvalid ? "border-destructive" : ""}
       />
       {isDuplicate && (
@@ -64,7 +69,11 @@ export function ProviderKeyField({
       )}
       {showHint && (
         <p className="text-xs text-muted-foreground">
-          {isLocked && lockedHintMessage ? lockedHintMessage : hintMessage}
+          {isFieldLocked && isLoading && loadingMessage
+            ? loadingMessage
+            : isEditMode && isLocked && lockedHintMessage
+              ? lockedHintMessage
+              : hintMessage}
         </p>
       )}
     </div>

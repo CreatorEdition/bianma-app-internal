@@ -1081,6 +1081,7 @@ export function ProviderForm({
                 value={opencodeForm.opencodeProviderKey}
                 placeholder={t("opencode.providerKeyPlaceholder")}
                 existingKeys={additiveExistingProviderKeys}
+                isEditMode={isEditMode}
                 isLocked={isProviderKeyLocked}
                 isLoading={isProviderKeyLockStateLoading}
                 duplicateMessage={t("opencode.providerKeyDuplicate")}
@@ -1089,6 +1090,9 @@ export function ProviderForm({
                 lockedHintMessage={t("opencode.providerKeyLockedHint", {
                   defaultValue:
                     "该供应商已添加到应用配置中，供应商标识不可修改",
+                })}
+                loadingMessage={t("providerForm.providerKeyStatusLoading", {
+                  defaultValue: "正在加载供应商标识状态，请稍后再试",
                 })}
                 onChange={opencodeForm.setOpencodeProviderKey}
               />
@@ -1099,6 +1103,7 @@ export function ProviderForm({
                 value={openclawForm.openclawProviderKey}
                 placeholder={t("openclaw.providerKeyPlaceholder")}
                 existingKeys={additiveExistingProviderKeys}
+                isEditMode={isEditMode}
                 isLocked={isProviderKeyLocked}
                 isLoading={isProviderKeyLockStateLoading}
                 duplicateMessage={t("openclaw.providerKeyDuplicate")}
@@ -1107,6 +1112,9 @@ export function ProviderForm({
                 lockedHintMessage={t("openclaw.providerKeyLockedHint", {
                   defaultValue:
                     "该供应商已添加到应用配置中，供应商标识不可修改",
+                })}
+                loadingMessage={t("providerForm.providerKeyStatusLoading", {
+                  defaultValue: "正在加载供应商标识状态，请稍后再试",
                 })}
                 onChange={openclawForm.setOpenclawProviderKey}
               />

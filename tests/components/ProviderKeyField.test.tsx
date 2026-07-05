@@ -13,6 +13,7 @@ function renderProviderKeyField(
       value=""
       placeholder="provider-key"
       existingKeys={[]}
+      isEditMode={false}
       duplicateMessage="标识重复"
       invalidMessage="标识无效"
       hintMessage="请输入供应商标识"
@@ -56,10 +57,11 @@ describe("ProviderKeyField", () => {
     expect(screen.queryByText("请输入供应商标识")).not.toBeInTheDocument();
   });
 
-  it("锁定时禁用输入并显示锁定提示", () => {
+  it("编辑态锁定时禁用输入并显示锁定提示", () => {
     renderProviderKeyField({
       value: "openclaw",
       existingKeys: ["openclaw"],
+      isEditMode: true,
       isLocked: true,
     });
 
@@ -68,13 +70,28 @@ describe("ProviderKeyField", () => {
     expect(screen.queryByText("标识重复")).not.toBeInTheDocument();
   });
 
-  it("加载时禁用输入但保留旧提示优先级", () => {
+  it("编辑态加载时禁用输入并优先显示加载提示", () => {
     renderProviderKeyField({
       value: "openclaw",
+      existingKeys: ["openclaw"],
+      isEditMode: true,
       isLoading: true,
+      loadingMessage: "正在加载状态",
     });
 
     expect(screen.getByLabelText(/供应商标识/)).toBeDisabled();
+    expect(screen.getByText("正在加载状态")).toBeInTheDocument();
+    expect(screen.queryByText("标识重复")).not.toBeInTheDocument();
+  });
+
+  it("创建态加载时不禁用输入并显示普通提示", () => {
+    renderProviderKeyField({
+      isLoading: true,
+      loadingMessage: "正在加载状态",
+    });
+
+    expect(screen.getByLabelText(/供应商标识/)).not.toBeDisabled();
     expect(screen.getByText("请输入供应商标识")).toBeInTheDocument();
+    expect(screen.queryByText("正在加载状态")).not.toBeInTheDocument();
   });
 });
