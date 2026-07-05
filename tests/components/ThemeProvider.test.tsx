@@ -3,6 +3,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 
+const invokeMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: invokeMock,
+}));
+
 function ThemeProbe() {
   const { theme } = useTheme();
   return <div data-testid="theme-value">{theme}</div>;
@@ -20,6 +26,7 @@ function renderThemeProvider(
 
 describe("ThemeProvider 存储兼容", () => {
   beforeEach(() => {
+    invokeMock.mockReset();
     localStorage.clear();
     document.documentElement.classList.remove("light", "dark");
     Object.defineProperty(window, "matchMedia", {
