@@ -1771,6 +1771,7 @@
     "label": "图标",
     "colorLabel": "图标颜色",
     "selectIcon": "选择图标",
+    "selectIconDescription": "选择服务商图标，点击后立即应用并关闭窗口",
     "preview": "预览",
     "clickToChange": "点击更换图标",
     "clickToSelect": "点击选择图标",

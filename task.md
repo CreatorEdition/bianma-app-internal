@@ -31,6 +31,7 @@
 - ✅ 已完成（2026-07-05）：迁移 Provider 预设列表工具最小切片；新增 providerPresetUtils，ProviderForm 预设条目构造、分组、分类 key 与标签已改为复用共享工具并补充最小单测。
 - ✅ 已完成（2026-07-05）：迁移 Provider 预设选择应用工具最小切片；新增 providerPresetApplyUtils，ProviderForm 预设选择分支已复用 custom 重置计划与选择结果解析工具并补充最小单测。
 - ✅ 已完成（2026-07-05）：迁移 Provider 提交校验/配置解析工具最小切片；新增 providerSubmitUtils，提交前供应商标识、非官方凭据与 Codex/Gemini/OMO settingsConfig 解析已改为共享工具并补充最小单测。
+- ✅ 已完成（2026-07-05）：迁移 BasicFormFields 图标选择器可访问性与交互最小切片；已按流程先记录进行中，完成后对齐 Dialog 标题/描述、测试标识、选中即关闭与移除独立完成按钮，并补充定向单测。
 
 ## 维护边界
 

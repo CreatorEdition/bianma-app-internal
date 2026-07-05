@@ -16,6 +16,8 @@ import {
   DialogContent,
   DialogTrigger,
   DialogClose,
+  DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { IconPicker } from "@/components/IconPicker";
@@ -57,15 +59,12 @@ export function BasicFormFields({
           <DialogTrigger asChild>
             <button
               type="button"
+              data-testid="provider-icon-trigger"
               className="w-20 h-20 p-3 rounded-xl border-2 border-muted hover:border-primary transition-colors cursor-pointer bg-muted/30 hover:bg-muted/50 flex items-center justify-center"
               title={
                 currentIcon
-                  ? t("providerIcon.clickToChange", {
-                      defaultValue: "点击更换图标",
-                    })
-                  : t("providerIcon.clickToSelect", {
-                      defaultValue: "点击选择图标",
-                    })
+                  ? t("providerIcon.clickToChange")
+                  : t("providerIcon.clickToSelect")
               }
             >
               <ProviderIcon
@@ -82,18 +81,27 @@ export function BasicFormFields({
             overlayClassName="bg-[hsl(var(--background))] backdrop-blur-0"
             className="p-0 sm:rounded-none"
           >
+            <DialogTitle className="sr-only">
+              {t("providerIcon.selectIcon")}
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              {t("providerIcon.selectIconDescription")}
+            </DialogDescription>
             <div className="flex h-full flex-col">
               <div className="flex-shrink-0 py-4 border-b border-border-default bg-muted/40">
                 <div className="px-6 flex items-center gap-4">
                   <DialogClose asChild>
-                    <Button type="button" variant="outline" size="icon">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      data-testid="icon-picker-back"
+                    >
                       <ArrowLeft className="h-4 w-4" />
                     </Button>
                   </DialogClose>
                   <p className="text-lg font-semibold leading-tight">
-                    {t("providerIcon.selectIcon", {
-                      defaultValue: "选择图标",
-                    })}
+                    {t("providerIcon.selectIcon")}
                   </p>
                 </div>
               </div>
@@ -101,16 +109,12 @@ export function BasicFormFields({
                 <div className="space-y-2 px-6 py-6 w-full">
                   <IconPicker
                     value={currentIcon}
-                    onValueChange={handleIconSelect}
+                    onValueChange={(icon) => {
+                      handleIconSelect(icon);
+                      setIconDialogOpen(false);
+                    }}
                     color={effectiveIconColor}
                   />
-                  <div className="flex justify-end gap-2">
-                    <DialogClose asChild>
-                      <Button type="button" variant="outline">
-                        {t("common.done", { defaultValue: "完成" })}
-                      </Button>
-                    </DialogClose>
-                  </div>
                 </div>
               </div>
             </div>

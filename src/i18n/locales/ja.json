@@ -1771,6 +1771,7 @@
     "label": "アイコン",
     "colorLabel": "アイコンカラー",
     "selectIcon": "アイコンを選択",
+    "selectIconDescription": "プロバイダーのアイコンを選択します。選択するとすぐに適用され、ダイアログが閉じます。",
     "preview": "プレビュー",
     "clickToChange": "クリックでアイコンを変更",
     "clickToSelect": "クリックでアイコンを選択",

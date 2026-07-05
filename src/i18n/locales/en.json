@@ -1771,6 +1771,7 @@
     "label": "Icon",
     "colorLabel": "Icon Color",
     "selectIcon": "Select Icon",
+    "selectIconDescription": "Select a provider icon. Selecting one applies it immediately and closes the dialog.",
     "preview": "Preview",
     "clickToChange": "Click to change icon",
     "clickToSelect": "Click to select icon",
