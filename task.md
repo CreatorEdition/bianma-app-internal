@@ -30,6 +30,7 @@
 - ✅ 已完成（2026-07-05）：迁移 Provider 表单 key 输入字段最小切片；新增 providerKeyUtils 与 ProviderKeyField，OpenCode/OpenClaw 供应商标识输入已复用共享字段并补充最小单测。
 - ✅ 已完成（2026-07-05）：迁移 Provider 预设列表工具最小切片；新增 providerPresetUtils，ProviderForm 预设条目构造、分组、分类 key 与标签已改为复用共享工具并补充最小单测。
 - ✅ 已完成（2026-07-05）：迁移 Provider 预设选择应用工具最小切片；新增 providerPresetApplyUtils，ProviderForm 预设选择分支已复用 custom 重置计划与选择结果解析工具并补充最小单测。
+- ✅ 已完成（2026-07-05）：迁移 Provider 提交校验/配置解析工具最小切片；新增 providerSubmitUtils，提交前供应商标识、非官方凭据与 Codex/Gemini/OMO settingsConfig 解析已改为共享工具并补充最小单测。
 
 ## 维护边界
 

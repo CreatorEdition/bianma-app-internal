@@ -41,12 +41,17 @@ import {
   resolvePresetSelection,
   type PresetSelectionResult,
 } from "./providerPresetApplyUtils";
+import {
+  isGithubCopilotProvider,
+  resolveSubmitSettingsConfig,
+  validateNonOfficialCredentials,
+  validateProviderSpecificFields,
+} from "./providerSubmitUtils";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
 import { CodexFormFields } from "./CodexFormFields";
 import { GeminiFormFields } from "./GeminiFormFields";
 import { OmoFormFields } from "./OmoFormFields";
-import { parseOmoOtherFieldsObject } from "@/types/omo";
 import {
   ProviderAdvancedConfig,
   type PricingModelSourceOption,
@@ -652,212 +657,72 @@ export function ProviderForm({
       return;
     }
 
-    if (appId === "opencode" && !isAnyOmoCategory) {
-      const keyPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-      if (!opencodeForm.opencodeProviderKey.trim()) {
-        toast.error(t("opencode.providerKeyRequired"));
-        return;
-      }
-      if (!keyPattern.test(opencodeForm.opencodeProviderKey)) {
-        toast.error(t("opencode.providerKeyInvalid"));
-        return;
-      }
-      if (isProviderKeyLockStateLoading) {
-        toast.error(
-          t("providerForm.providerKeyStatusLoading", {
-            defaultValue: "正在加载供应商标识状态，请稍后再试",
-          }),
-        );
-        return;
-      }
-      if (
-        !isProviderKeyLocked &&
-        additiveExistingProviderKeys.includes(opencodeForm.opencodeProviderKey)
-      ) {
-        toast.error(t("opencode.providerKeyDuplicate"));
-        return;
-      }
-      if (Object.keys(opencodeForm.opencodeModels).length === 0) {
-        toast.error(t("opencode.modelsRequired"));
-        return;
-      }
-    }
-
-    // OpenClaw: validate provider key
-    if (appId === "openclaw") {
-      const keyPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-      if (!openclawForm.openclawProviderKey.trim()) {
-        toast.error(t("openclaw.providerKeyRequired"));
-        return;
-      }
-      if (!keyPattern.test(openclawForm.openclawProviderKey)) {
-        toast.error(t("openclaw.providerKeyInvalid"));
-        return;
-      }
-      if (isProviderKeyLockStateLoading) {
-        toast.error(
-          t("providerForm.providerKeyStatusLoading", {
-            defaultValue: "正在加载供应商标识状态，请稍后再试",
-          }),
-        );
-        return;
-      }
-      if (
-        !isProviderKeyLocked &&
-        additiveExistingProviderKeys.includes(openclawForm.openclawProviderKey)
-      ) {
-        toast.error(t("openclaw.providerKeyDuplicate"));
-        return;
-      }
+    const providerSpecificError = validateProviderSpecificFields({
+      appId,
+      isAnyOmoCategory,
+      isProviderKeyLockStateLoading,
+      isProviderKeyLocked,
+      opencodeProviderKey: opencodeForm.opencodeProviderKey,
+      openclawProviderKey: openclawForm.openclawProviderKey,
+      additiveExistingProviderKeys,
+      opencodeModels: opencodeForm.opencodeModels,
+      t,
+    });
+    if (providerSpecificError) {
+      toast.error(providerSpecificError);
+      return;
     }
 
     // 非官方供应商必填校验：端点和 API Key
     // cloud_provider（如 Bedrock）通过模板变量处理认证，跳过通用校验
     // GitHub Copilot 使用 OAuth 认证，不需要 API Key
-    const isCopilotProvider =
-      templatePreset?.providerType === "github_copilot" ||
-      initialData?.meta?.providerType === "github_copilot" ||
-      baseUrl.includes("githubcopilot.com");
-    // GitHub Copilot 必须先登录才能添加
-    if (isCopilotProvider && !isCopilotAuthenticated) {
-      toast.error(
-        t("copilot.loginRequired", {
-          defaultValue: "请先登录 GitHub Copilot",
-        }),
-      );
+    const isCopilotProvider = isGithubCopilotProvider({
+      templateProviderType: templatePreset?.providerType,
+      initialProviderType: initialData?.meta?.providerType,
+      baseUrl,
+    });
+    const credentialError = validateNonOfficialCredentials({
+      appId,
+      category,
+      isCopilotProvider,
+      isCopilotAuthenticated,
+      baseUrl,
+      apiKey,
+      codexBaseUrl,
+      codexApiKey,
+      geminiBaseUrl,
+      geminiApiKey,
+      t,
+    });
+    if (credentialError) {
+      toast.error(credentialError);
       return;
     }
 
-    if (category !== "official" && category !== "cloud_provider") {
-      if (appId === "claude") {
-        if (!baseUrl.trim()) {
-          toast.error(
-            t("providerForm.endpointRequired", {
-              defaultValue: "非官方供应商请填写 API 端点",
-            }),
-          );
-          return;
-        }
-        if (!isCopilotProvider && !apiKey.trim()) {
-          toast.error(
-            t("providerForm.apiKeyRequired", {
-              defaultValue: "非官方供应商请填写 API Key",
-            }),
-          );
-          return;
-        }
-      } else if (appId === "codex") {
-        if (!codexBaseUrl.trim()) {
-          toast.error(
-            t("providerForm.endpointRequired", {
-              defaultValue: "非官方供应商请填写 API 端点",
-            }),
-          );
-          return;
-        }
-        if (!codexApiKey.trim()) {
-          toast.error(
-            t("providerForm.apiKeyRequired", {
-              defaultValue: "非官方供应商请填写 API Key",
-            }),
-          );
-          return;
-        }
-      } else if (appId === "gemini") {
-        if (!geminiBaseUrl.trim()) {
-          toast.error(
-            t("providerForm.endpointRequired", {
-              defaultValue: "非官方供应商请填写 API 端点",
-            }),
-          );
-          return;
-        }
-        if (!geminiApiKey.trim()) {
-          toast.error(
-            t("providerForm.apiKeyRequired", {
-              defaultValue: "非官方供应商请填写 API Key",
-            }),
-          );
-          return;
-        }
-      }
-    }
-
-    let settingsConfig: string;
-
-    if (appId === "codex") {
-      try {
-        const authJson = JSON.parse(codexAuth);
-        const configObj = {
-          auth: authJson,
-          config: codexConfig ?? "",
-        };
-        settingsConfig = JSON.stringify(configObj);
-      } catch (err) {
-        settingsConfig = values.settingsConfig.trim();
-      }
-    } else if (appId === "gemini") {
-      try {
-        const envObj = envStringToObj(geminiEnv);
-        const configObj = geminiConfig.trim() ? JSON.parse(geminiConfig) : {};
-        const combined = {
-          env: envObj,
-          config: configObj,
-        };
-        settingsConfig = JSON.stringify(combined);
-      } catch (err) {
-        settingsConfig = values.settingsConfig.trim();
-      }
-    } else if (
-      appId === "opencode" &&
-      (category === "omo" || category === "omo-slim")
-    ) {
-      const omoConfig: Record<string, unknown> = {};
-      if (Object.keys(omoDraft.omoAgents).length > 0) {
-        omoConfig.agents = omoDraft.omoAgents;
-      }
-      if (
-        category === "omo" &&
-        Object.keys(omoDraft.omoCategories).length > 0
-      ) {
-        omoConfig.categories = omoDraft.omoCategories;
-      }
-      if (omoDraft.omoOtherFieldsStr.trim()) {
-        try {
-          const otherFields = parseOmoOtherFieldsObject(
-            omoDraft.omoOtherFieldsStr,
-          );
-          if (!otherFields) {
-            toast.error(
-              t("omo.jsonMustBeObject", {
-                field: t("omo.otherFields", {
-                  defaultValue: "Other Config",
-                }),
-                defaultValue: "{{field}} must be a JSON object",
-              }),
-            );
-            return;
-          }
-          omoConfig.otherFields = otherFields;
-        } catch {
-          toast.error(
-            t("omo.invalidJson", {
-              defaultValue: "Other Fields contains invalid JSON",
-            }),
-          );
-          return;
-        }
-      }
-      settingsConfig = JSON.stringify(omoConfig);
-    } else {
-      settingsConfig = values.settingsConfig.trim();
+    const settingsConfigResult = resolveSubmitSettingsConfig({
+      appId,
+      category,
+      rawSettingsConfig: values.settingsConfig,
+      codexAuth,
+      codexConfig,
+      geminiEnv,
+      geminiConfig,
+      envStringToObj,
+      omoAgents: omoDraft.omoAgents,
+      omoCategories: omoDraft.omoCategories,
+      omoOtherFieldsStr: omoDraft.omoOtherFieldsStr,
+      t,
+    });
+    if (!settingsConfigResult.ok) {
+      toast.error(settingsConfigResult.errorMessage);
+      return;
     }
 
     const payload: ProviderFormValues = {
       ...values,
       name: values.name.trim(),
       websiteUrl: values.websiteUrl?.trim() ?? "",
-      settingsConfig,
+      settingsConfig: settingsConfigResult.settingsConfig,
     };
 
     if (appId === "opencode") {
