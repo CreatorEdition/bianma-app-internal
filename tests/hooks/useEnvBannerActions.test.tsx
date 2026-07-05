@@ -4,12 +4,26 @@ import { useEnvBannerActions } from "@/hooks/useEnvBannerActions";
 
 const checkAllEnvConflictsMock = vi.fn();
 
-vi.mock("@/lib/api/env", () => ({
-  checkAllEnvConflicts: (...args: unknown[]) =>
-    checkAllEnvConflictsMock(...args),
-}));
-
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+const renderUseEnvBannerActions = (
+  setEnvConflicts = vi.fn(),
+  setShowEnvBanner = vi.fn(),
+) => {
+  const rendered = renderHook(() =>
+    useEnvBannerActions({
+      setEnvConflicts,
+      setShowEnvBanner,
+      checkAllEnvConflictsFn: checkAllEnvConflictsMock,
+    }),
+  );
+
+  return {
+    ...rendered,
+    setEnvConflicts,
+    setShowEnvBanner,
+  };
+};
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -23,15 +37,7 @@ afterAll(() => {
 
 describe("useEnvBannerActions", () => {
   it("dismisses banner and records session flag", () => {
-    const setEnvConflicts = vi.fn();
-    const setShowEnvBanner = vi.fn();
-
-    const { result } = renderHook(() =>
-      useEnvBannerActions({
-        setEnvConflicts,
-        setShowEnvBanner,
-      }),
-    );
+    const { result, setShowEnvBanner } = renderUseEnvBannerActions();
 
     act(() => {
       result.current.handleEnvBannerDismiss();
@@ -42,8 +48,6 @@ describe("useEnvBannerActions", () => {
   });
 
   it("refreshes conflicts and keeps banner visible when conflicts remain", async () => {
-    const setEnvConflicts = vi.fn();
-    const setShowEnvBanner = vi.fn();
     const conflict = {
       varName: "OPENAI_API_KEY",
       varValue: "test",
@@ -55,12 +59,8 @@ describe("useEnvBannerActions", () => {
       codex: [],
     });
 
-    const { result } = renderHook(() =>
-      useEnvBannerActions({
-        setEnvConflicts,
-        setShowEnvBanner,
-      }),
-    );
+    const { result, setEnvConflicts, setShowEnvBanner } =
+      renderUseEnvBannerActions();
 
     await act(async () => {
       await result.current.handleEnvBannerDeleted();
@@ -71,19 +71,13 @@ describe("useEnvBannerActions", () => {
   });
 
   it("hides banner when no conflicts remain after deletion", async () => {
-    const setEnvConflicts = vi.fn();
-    const setShowEnvBanner = vi.fn();
     checkAllEnvConflictsMock.mockResolvedValueOnce({
       claude: [],
       codex: [],
     });
 
-    const { result } = renderHook(() =>
-      useEnvBannerActions({
-        setEnvConflicts,
-        setShowEnvBanner,
-      }),
-    );
+    const { result, setEnvConflicts, setShowEnvBanner } =
+      renderUseEnvBannerActions();
 
     await act(async () => {
       await result.current.handleEnvBannerDeleted();
@@ -94,16 +88,10 @@ describe("useEnvBannerActions", () => {
   });
 
   it("logs error when refreshing conflicts fails", async () => {
-    const setEnvConflicts = vi.fn();
-    const setShowEnvBanner = vi.fn();
     checkAllEnvConflictsMock.mockRejectedValueOnce(new Error("network failed"));
 
-    const { result } = renderHook(() =>
-      useEnvBannerActions({
-        setEnvConflicts,
-        setShowEnvBanner,
-      }),
-    );
+    const { result, setEnvConflicts, setShowEnvBanner } =
+      renderUseEnvBannerActions();
 
     await act(async () => {
       await result.current.handleEnvBannerDeleted();

@@ -5,11 +5,13 @@ import type { EnvConflict } from "@/types/env";
 interface UseEnvBannerActionsOptions {
   setEnvConflicts: Dispatch<SetStateAction<EnvConflict[]>>;
   setShowEnvBanner: Dispatch<SetStateAction<boolean>>;
+  checkAllEnvConflictsFn?: typeof checkAllEnvConflicts;
 }
 
 export function useEnvBannerActions({
   setEnvConflicts,
   setShowEnvBanner,
+  checkAllEnvConflictsFn = checkAllEnvConflicts,
 }: UseEnvBannerActionsOptions) {
   const handleEnvBannerDismiss = useCallback(() => {
     setShowEnvBanner(false);
@@ -18,7 +20,7 @@ export function useEnvBannerActions({
 
   const handleEnvBannerDeleted = useCallback(async () => {
     try {
-      const allConflicts = await checkAllEnvConflicts();
+      const allConflicts = await checkAllEnvConflictsFn();
       const flatConflicts = Object.values(allConflicts).flat();
       setEnvConflicts(flatConflicts);
       if (flatConflicts.length === 0) {
@@ -30,7 +32,7 @@ export function useEnvBannerActions({
         error,
       );
     }
-  }, [setEnvConflicts, setShowEnvBanner]);
+  }, [checkAllEnvConflictsFn, setEnvConflicts, setShowEnvBanner]);
 
   return {
     handleEnvBannerDismiss,
