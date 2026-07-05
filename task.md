@@ -10,6 +10,7 @@
 
 - ✅ 已完成（2026-07-05）：迁移 useEnvBannerActions 最小切片；仅抽取 EnvWarningBanner dismiss/deleted 动作与对应定向测试，App.tsx 仅替换 EnvWarningBanner 的 dismiss/deleted 回调，未迁移 product 的 App 大结构。
 - ✅ 已完成（2026-07-05）：收口 useEnvBannerActions 测试隔离与 App 集成测试冷启动稳定化；定向组合测试不再因模块级 mock 污染或 App 动态导入耗时超时失败。
+- ✅ 已完成（2026-07-05）：迁移 App 事件订阅抽取最小切片；仅抽取 provider-switched、universal-provider-synced 与 webdav-sync-status-updated 三段订阅逻辑，新增公开仓 useAppEventSubscriptions 与定向 hook 测试。
 - ✅ 已完成（2026-07-05）：设置元数据错误路径测试噪声收口小切片；同步 product 参考的 console.error spy，仅屏蔽 `[useSettingsMetadata]` 预期错误日志并在 afterEach 恢复，避免污染其他测试。
 - ✅ 已完成（2026-07-05）：SQL 导出头品牌收口小切片；新导出的 SQL 备份 header 已统一为 `-- bianma.ai SQLite 导出`，导入继续兼容历史 `-- CC Switch SQLite 导出` 文件并补充定向 Rust 单测。
 - ✅ 已完成（2026-07-05）：迁移主题 localStorage 主键兼容小切片；ThemeProvider 默认主键切换到 `bianma-theme`，兼容迁移并清理旧 `cc-switch-theme`，补充新旧键优先级定向单测。

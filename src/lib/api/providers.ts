@@ -20,6 +20,11 @@ export interface ProviderSwitchEvent {
   providerId: string;
 }
 
+export interface UniversalProviderSyncedEvent {
+  id?: string;
+  appType?: AppId;
+}
+
 export interface SwitchResult {
   warnings: string[];
 }
@@ -117,6 +122,15 @@ export const providersApi = {
     return await listen("provider-switched", (event) => {
       const payload = event.payload as ProviderSwitchEvent;
       handler(payload);
+    });
+  },
+
+  async onUniversalProviderSynced(
+    handler: (event: UniversalProviderSyncedEvent) => void | Promise<void>,
+  ): Promise<UnlistenFn> {
+    return await listen("universal-provider-synced", (event) => {
+      const payload = (event.payload ?? {}) as UniversalProviderSyncedEvent;
+      void handler(payload);
     });
   },
 
