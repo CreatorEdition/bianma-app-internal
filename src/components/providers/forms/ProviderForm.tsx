@@ -16,21 +16,11 @@ import type {
   ClaudeApiFormat,
   ClaudeApiKeyField,
 } from "@/types";
-import type { ProviderPreset } from "@/config/claudeProviderPresets";
-import type { CodexProviderPreset } from "@/config/codexProviderPresets";
-import type { GeminiProviderPreset } from "@/config/geminiProviderPresets";
-import type { OpenCodeProviderPreset } from "@/config/opencodeProviderPresets";
-import {
-  type OpenClawProviderPreset,
-  type OpenClawSuggestedDefaults,
-} from "@/config/openclawProviderPresets";
+import type { OpenClawSuggestedDefaults } from "@/config/openclawProviderPresets";
 import { OpenCodeFormFields } from "./OpenCodeFormFields";
 import { OpenClawFormFields } from "./OpenClawFormFields";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
-import {
-  applyTemplateValues,
-  hasApiKeyField,
-} from "@/utils/providerConfigUtils";
+import { hasApiKeyField } from "@/utils/providerConfigUtils";
 import { mergeProviderMeta } from "@/utils/providerMetaUtils";
 import { getCodexCustomTemplate } from "@/config/codexTemplates";
 import CodexConfigEditor from "./CodexConfigEditor";
@@ -46,6 +36,11 @@ import {
   getPresetEntriesByApp,
   groupPresetEntries,
 } from "./providerPresetUtils";
+import {
+  getCustomPresetResetPlan,
+  resolvePresetSelection,
+  type PresetSelectionResult,
+} from "./providerPresetApplyUtils";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
 import { CodexFormFields } from "./CodexFormFields";
@@ -1087,25 +1082,77 @@ export function ProviderForm({
     initialData,
   });
 
+  const applyPresetSelection = useCallback(
+    (selection: PresetSelectionResult) => {
+      if (selection.appId === "codex") {
+        resetCodexConfig(selection.codexAuth, selection.codexConfig);
+        form.reset(selection.formValues);
+        return;
+      }
+
+      if (selection.appId === "gemini") {
+        resetGeminiConfig(selection.geminiEnv, selection.geminiConfig);
+        form.reset(selection.formValues);
+        return;
+      }
+
+      if (selection.appId === "opencode") {
+        if (selection.isOmoPreset) {
+          omoDraft.resetOmoDraftState();
+        } else {
+          opencodeForm.resetOpencodeState(selection.opencodeConfig);
+        }
+        form.reset(selection.formValues);
+        return;
+      }
+
+      if (selection.appId === "openclaw") {
+        openclawForm.resetOpenclawState(selection.openclawConfig);
+        form.reset(selection.formValues);
+        return;
+      }
+
+      setLocalApiFormat(selection.apiFormat);
+      setLocalApiKeyField(selection.apiKeyField);
+      setLocalIsFullUrl(selection.isFullUrl);
+      form.reset(selection.formValues);
+    },
+    [
+      form,
+      omoDraft,
+      openclawForm,
+      opencodeForm,
+      resetCodexConfig,
+      resetGeminiConfig,
+      setLocalApiFormat,
+      setLocalApiKeyField,
+      setLocalIsFullUrl,
+    ],
+  );
+
   const handlePresetChange = (value: string) => {
     setSelectedPresetId(value);
     if (value === "custom") {
       setActivePreset(null);
       form.reset(defaultValues);
 
-      if (appId === "codex") {
-        const template = getCodexCustomTemplate();
-        resetCodexConfig(template.auth, template.config);
+      const customPresetResetPlan = getCustomPresetResetPlan(appId);
+      if (customPresetResetPlan.codex) {
+        resetCodexConfig(
+          customPresetResetPlan.codex.auth,
+          customPresetResetPlan.codex.config,
+        );
       }
-      if (appId === "gemini") {
+      if (customPresetResetPlan.shouldResetGemini) {
         resetGeminiConfig({}, {});
       }
-      if (appId === "opencode") {
+      if (customPresetResetPlan.shouldResetOpencode) {
         opencodeForm.resetOpencodeState();
+      }
+      if (customPresetResetPlan.shouldResetOmoDraft) {
         omoDraft.resetOmoDraftState();
       }
-      // OpenClaw 自定义模式：重置为空配置
-      if (appId === "openclaw") {
+      if (customPresetResetPlan.shouldResetOpenclaw) {
         openclawForm.resetOpenclawState();
       }
       return;
@@ -1116,124 +1163,15 @@ export function ProviderForm({
       return;
     }
 
-    setActivePreset({
-      id: value,
-      category: entry.preset.category,
-      isPartner: entry.preset.isPartner,
-      partnerPromotionKey: entry.preset.partnerPromotionKey,
+    const selection = resolvePresetSelection({
+      appId,
+      presetId: value,
+      entry,
+      t,
     });
 
-    if (appId === "codex") {
-      const preset = entry.preset as CodexProviderPreset;
-      const auth = preset.auth ?? {};
-      const config = preset.config ?? "";
-
-      resetCodexConfig(auth, config);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify({ auth, config }, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    if (appId === "gemini") {
-      const preset = entry.preset as GeminiProviderPreset;
-      const env = (preset.settingsConfig as any)?.env ?? {};
-      const config = (preset.settingsConfig as any)?.config ?? {};
-
-      resetGeminiConfig(env, config);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(preset.settingsConfig, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    if (appId === "opencode") {
-      const preset = entry.preset as OpenCodeProviderPreset;
-      const config = preset.settingsConfig;
-
-      if (preset.category === "omo" || preset.category === "omo-slim") {
-        omoDraft.resetOmoDraftState();
-        form.reset({
-          name: preset.category === "omo" ? "OMO" : "OMO Slim",
-          websiteUrl: preset.websiteUrl ?? "",
-          settingsConfig: JSON.stringify({}, null, 2),
-          icon: preset.icon ?? "",
-          iconColor: preset.iconColor ?? "",
-        });
-        return;
-      }
-
-      opencodeForm.resetOpencodeState(config);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(config, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    // OpenClaw preset handling
-    if (appId === "openclaw") {
-      const preset = entry.preset as OpenClawProviderPreset;
-      const config = preset.settingsConfig;
-
-      // Update activePreset with suggestedDefaults for OpenClaw
-      setActivePreset({
-        id: value,
-        category: preset.category,
-        isPartner: preset.isPartner,
-        partnerPromotionKey: preset.partnerPromotionKey,
-        suggestedDefaults: preset.suggestedDefaults,
-      });
-
-      openclawForm.resetOpenclawState(config);
-
-      // Update form fields
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(config, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    const preset = entry.preset as ProviderPreset;
-    const config = applyTemplateValues(
-      preset.settingsConfig,
-      preset.templateValues,
-    );
-
-    if (preset.apiFormat) {
-      setLocalApiFormat(preset.apiFormat);
-    } else {
-      setLocalApiFormat("anthropic");
-    }
-
-    setLocalApiKeyField(preset.apiKeyField ?? "ANTHROPIC_AUTH_TOKEN");
-    setLocalIsFullUrl(false);
-
-    form.reset({
-      name: preset.nameKey ? t(preset.nameKey) : preset.name,
-      websiteUrl: preset.websiteUrl ?? "",
-      settingsConfig: JSON.stringify(config, null, 2),
-      icon: preset.icon ?? "",
-      iconColor: preset.iconColor ?? "",
-    });
+    setActivePreset(selection.activePreset);
+    applyPresetSelection(selection);
   };
 
   const settingsConfigErrorField = (

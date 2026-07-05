@@ -29,6 +29,7 @@
 - ✅ 已完成（2026-07-05）：迁移剪贴板兼容兜底最小切片；`copy_text_to_clipboard` 保留 `arboard` 主路径，并在失败时使用系统命令写入剪贴板。
 - ✅ 已完成（2026-07-05）：迁移 Provider 表单 key 输入字段最小切片；新增 providerKeyUtils 与 ProviderKeyField，OpenCode/OpenClaw 供应商标识输入已复用共享字段并补充最小单测。
 - ✅ 已完成（2026-07-05）：迁移 Provider 预设列表工具最小切片；新增 providerPresetUtils，ProviderForm 预设条目构造、分组、分类 key 与标签已改为复用共享工具并补充最小单测。
+- ✅ 已完成（2026-07-05）：迁移 Provider 预设选择应用工具最小切片；新增 providerPresetApplyUtils，ProviderForm 预设选择分支已复用 custom 重置计划与选择结果解析工具并补充最小单测。
 
 ## 维护边界
 
