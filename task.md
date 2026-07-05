@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-05）：SQL 导出头品牌收口小切片；新导出的 SQL 备份 header 已统一为 `-- bianma.ai SQLite 导出`，导入继续兼容历史 `-- CC Switch SQLite 导出` 文件并补充定向 Rust 单测。
 - ✅ 已完成（2026-07-05）：迁移主题 localStorage 主键兼容小切片；ThemeProvider 默认主键切换到 `bianma-theme`，兼容迁移并清理旧 `cc-switch-theme`，补充新旧键优先级定向单测。
 - ✅ 已完成（2026-07-05）：同步用户手册导入提示默认导出文件名品牌；中英文数据库备份导入提示已统一为 `bianma-export-{时间戳/timestamp}.sql`。
 - ✅ 已完成（2026-07-05）：按白名单最小切片迁移 useImportExport 默认导出文件名品牌收口；默认 SQL 导出文件名已从 `cc-switch-export-*` 改为 `bianma-export-*`，并补充 saveFileDialog 默认文件名断言。
