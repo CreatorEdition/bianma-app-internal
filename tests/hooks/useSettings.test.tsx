@@ -5,6 +5,7 @@ import type { Settings } from "@/types";
 
 const mutateAsyncMock = vi.fn();
 const useSettingsQueryMock = vi.fn();
+const refetchSettingsMock = vi.fn();
 const setAppConfigDirOverrideMock = vi.fn();
 const applyClaudePluginConfigMock = vi.fn();
 const applyClaudeOnboardingSkipMock = vi.fn();
@@ -113,6 +114,7 @@ describe("useSettings hook", () => {
   beforeEach(() => {
     mutateAsyncMock.mockReset();
     useSettingsQueryMock.mockReset();
+    refetchSettingsMock.mockReset();
     setAppConfigDirOverrideMock.mockReset();
     applyClaudePluginConfigMock.mockReset();
     applyClaudeOnboardingSkipMock.mockReset();
@@ -135,6 +137,9 @@ describe("useSettings hook", () => {
     useSettingsQueryMock.mockReturnValue({
       data: serverSettings,
       isLoading: false,
+      isError: false,
+      error: null,
+      refetch: refetchSettingsMock,
     });
 
     settingsFormMock = createSettingsFormMock({
@@ -152,6 +157,34 @@ describe("useSettings hook", () => {
     applyClaudeOnboardingSkipMock.mockResolvedValue(true);
     clearClaudeOnboardingSkipMock.mockResolvedValue(true);
     updateTrayMenuMock.mockResolvedValue(true);
+    refetchSettingsMock.mockResolvedValue({});
+  });
+
+  it("exposes settings query error state and refetch handler", async () => {
+    const queryError = new Error("无法连接桌面运行时");
+    useSettingsQueryMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: queryError,
+      refetch: refetchSettingsMock,
+    });
+    settingsFormMock = createSettingsFormMock({
+      settings: null,
+      isLoading: false,
+    });
+
+    const { result } = renderHook(() => useSettings());
+
+    expect(result.current.settingsQueryHasData).toBe(false);
+    expect(result.current.settingsQueryIsError).toBe(true);
+    expect(result.current.settingsQueryError).toBe(queryError);
+
+    await act(async () => {
+      await result.current.refetchSettings();
+    });
+
+    expect(refetchSettingsMock).toHaveBeenCalledTimes(1);
   });
 
   it("auto-saves and applies Claude onboarding skip when toggled on", async () => {

@@ -22,9 +22,13 @@ export interface UseSettingsResult {
   isLoading: boolean;
   isSaving: boolean;
   isPortable: boolean;
+  settingsQueryHasData: boolean;
+  settingsQueryIsError: boolean;
+  settingsQueryError: Error | null;
   appConfigDir?: string;
   resolvedDirs: ResolvedDirectories;
   requiresRestart: boolean;
+  refetchSettings: () => Promise<unknown>;
   updateSettings: (updates: Partial<SettingsFormState>) => void;
   updateDirectory: (app: AppId, value?: string) => void;
   updateAppConfigDir: (value?: string) => void;
@@ -60,8 +64,14 @@ const sanitizeDir = (value?: string | null): string | undefined => {
  */
 export function useSettings(): UseSettingsResult {
   const { t } = useTranslation();
-  const { data } = useSettingsQuery();
+  const settingsQuery = useSettingsQuery();
+  const { data } = settingsQuery;
   const saveMutation = useSaveSettingsMutation();
+
+  const refetchSettings = useCallback(
+    () => settingsQuery.refetch?.() ?? Promise.resolve(null),
+    [settingsQuery],
+  );
 
   // 1️⃣ 表单状态管理
   const {
@@ -398,9 +408,13 @@ export function useSettings(): UseSettingsResult {
     isLoading,
     isSaving: saveMutation.isPending,
     isPortable,
+    settingsQueryHasData: data !== undefined,
+    settingsQueryIsError: Boolean(settingsQuery.isError),
+    settingsQueryError: settingsQuery.error ?? null,
     appConfigDir,
     resolvedDirs,
     requiresRestart,
+    refetchSettings,
     updateSettings,
     updateDirectory,
     updateAppConfigDir,

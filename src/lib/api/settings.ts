@@ -2,6 +2,37 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Settings, WebDavSyncSettings, RemoteSnapshotInfo } from "@/types";
 import type { AppId } from "./types";
 
+const SETTINGS_LOAD_RUNTIME_ERROR =
+  "无法连接桌面运行时，暂时不能读取设置。请确认正在 bianma-app 桌面端中打开设置，并稍后重试。";
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
+const isTauriInvokeUnavailableError = (error: unknown): boolean => {
+  const message = getErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("__tauri__") ||
+    message.includes("__tauri_internals__") ||
+    message.includes("invoke is not a function") ||
+    message.includes("reading 'invoke'") ||
+    message.includes('reading "invoke"') ||
+    message.includes("reading invoke") ||
+    (message.includes("invoke") && message.includes("undefined"))
+  );
+};
+
+const normalizeSettingsLoadError = (error: unknown): Error => {
+  if (!isTauriInvokeUnavailableError(error)) {
+    return error instanceof Error ? error : new Error(getErrorMessage(error));
+  }
+
+  const detail = getErrorMessage(error);
+  return new Error(`${SETTINGS_LOAD_RUNTIME_ERROR} 原始错误：${detail}`);
+};
+
 export interface ConfigTransferResult {
   success: boolean;
   message: string;
@@ -20,7 +51,11 @@ export interface WebDavSyncResult {
 
 export const settingsApi = {
   async get(): Promise<Settings> {
-    return await invoke("get_settings");
+    try {
+      return await invoke("get_settings");
+    } catch (error) {
+      throw normalizeSettingsLoadError(error);
+    }
   },
 
   async save(settings: Settings): Promise<boolean> {

@@ -233,6 +233,10 @@ export const handlers = [
     success(getAppConfigDirOverride()),
   ),
 
+  http.post(`${TAURI_ENDPOINT}/get_app_config_path`, () =>
+    success("/home/mock/.cc-switch/config.json"),
+  ),
+
   http.post(
     `${TAURI_ENDPOINT}/apply_claude_plugin_config`,
     async ({ request }) => {

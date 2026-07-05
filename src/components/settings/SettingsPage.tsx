@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
+  AlertTriangle,
   Loader2,
   Save,
   FolderSearch,
@@ -10,6 +11,7 @@ import {
   HardDriveDownload,
   FlaskConical,
   KeyRound,
+  RefreshCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -68,8 +70,12 @@ export function SettingsPage({
     isLoading,
     isSaving,
     isPortable,
+    settingsQueryHasData,
+    settingsQueryIsError,
+    settingsQueryError,
     appConfigDir,
     resolvedDirs,
+    refetchSettings,
     updateSettings,
     updateDirectory,
     updateAppConfigDir,
@@ -177,11 +183,71 @@ export function SettingsPage({
     [autoSaveSettings, settings, t, updateSettings],
   );
 
-  const isBusy = useMemo(() => isLoading && !settings, [isLoading, settings]);
+  const settingsLoadErrorDetail = useMemo(() => {
+    if (!settingsQueryError) return "";
+    return settingsQueryError.message || String(settingsQueryError);
+  }, [settingsQueryError]);
+
+  const shouldShowSettingsLoadError =
+    settingsQueryIsError && !settingsQueryHasData && !settings;
+
+  const handleRetrySettingsLoad = useCallback(() => {
+    void refetchSettings();
+  }, [refetchSettings]);
+
+  const isBusy = useMemo(
+    () => isLoading && !settings && !shouldShowSettingsLoadError,
+    [isLoading, settings, shouldShowSettingsLoadError],
+  );
 
   return (
     <div className="flex flex-col h-full overflow-hidden px-6">
-      {isBusy ? (
+      {shouldShowSettingsLoadError ? (
+        <div className="flex flex-1 items-center justify-center py-10">
+          <div
+            role="alert"
+            className="w-full max-w-2xl rounded-xl border border-destructive/30 bg-destructive/5 p-6 shadow-sm"
+          >
+            <div className="flex items-start gap-4">
+              <div className="mt-0.5 rounded-full bg-destructive/10 p-2 text-destructive">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1 space-y-3">
+                <div>
+                  <h2 className="text-base font-semibold text-foreground">
+                    {t("settings.loadError.title", {
+                      defaultValue: "设置加载失败",
+                    })}
+                  </h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {t("settings.loadError.description", {
+                      defaultValue:
+                        "无法读取设置。请确认应用已在桌面端正常运行，然后重试。",
+                    })}
+                  </p>
+                </div>
+
+                {settingsLoadErrorDetail ? (
+                  <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/60 bg-background/80 p-3 text-xs text-muted-foreground">
+                    {settingsLoadErrorDetail}
+                  </pre>
+                ) : null}
+
+                <Button
+                  type="button"
+                  onClick={handleRetrySettingsLoad}
+                  className="inline-flex items-center gap-2"
+                >
+                  <RefreshCcw className="h-4 w-4" />
+                  {t("settings.loadError.retry", {
+                    defaultValue: "重试",
+                  })}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : isBusy ? (
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
