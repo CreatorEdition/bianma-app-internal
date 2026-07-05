@@ -371,10 +371,7 @@ export function ProviderForm({
     form.reset(defaultValues);
   }, [defaultValues, form]);
 
-  const presetCategoryLabels = useMemo(
-    () => getPresetCategoryLabels(t),
-    [t],
-  );
+  const presetCategoryLabels = useMemo(() => getPresetCategoryLabels(t), [t]);
 
   const presetEntries = useMemo(() => getPresetEntriesByApp(appId), [appId]);
 
