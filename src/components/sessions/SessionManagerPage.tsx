@@ -46,6 +46,7 @@ import { ProviderIcon } from "@/components/ProviderIcon";
 import { SessionItem } from "./SessionItem";
 import { SessionMessageItem } from "./SessionMessageItem";
 import { SessionTocDialog, SessionTocSidebar } from "./SessionToc";
+import { useSessionActions } from "./hooks/useSessionActions";
 import { useSessionSelectionState } from "./hooks/useSessionSelectionState";
 import {
   getDeletableSessions,
@@ -128,6 +129,10 @@ export function SessionManagerPage({ appId }: { appId: string }) {
       ) || null
     );
   }, [filteredSessions, selectedKey]);
+  const { handleCopy, handleResume } = useSessionActions({
+    t,
+    selectedSession,
+  });
 
   const { data: messages = [], isLoading: isLoadingMessages } =
     useSessionMessagesQuery(
@@ -185,42 +190,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
       // 为了代码规范，我们在组件卸载时将 activeMessageIndex 重置 (虽然 React 会处理)
     };
   }, []);
-
-  const handleCopy = async (text: string, successMessage: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success(successMessage);
-    } catch (error) {
-      toast.error(
-        extractErrorMessage(error) ||
-          t("common.error", { defaultValue: "Copy failed" }),
-      );
-    }
-  };
-
-  const handleResume = async () => {
-    if (!selectedSession?.resumeCommand) return;
-
-    if (!isMac()) {
-      await handleCopy(
-        selectedSession.resumeCommand,
-        t("sessionManager.resumeCommandCopied"),
-      );
-      return;
-    }
-
-    try {
-      await sessionsApi.launchTerminal({
-        command: selectedSession.resumeCommand,
-        cwd: selectedSession.projectDir ?? undefined,
-      });
-      toast.success(t("sessionManager.terminalLaunched"));
-    } catch (error) {
-      const fallback = selectedSession.resumeCommand;
-      await handleCopy(fallback, t("sessionManager.resumeFallbackCopied"));
-      toast.error(extractErrorMessage(error) || t("sessionManager.openFailed"));
-    }
-  };
 
   const handleDeleteConfirm = async () => {
     if (!deleteTargets || deleteTargets.length === 0 || isDeleting) {
