@@ -70,6 +70,7 @@ const createSettingsFormMock = (overrides: Record<string, unknown> = {}) => ({
     skipClaudeOnboarding: true,
     claudeConfigDir: "/claude",
     codexConfigDir: "/codex",
+    openclawConfigDir: "/openclaw",
     language: "zh",
   },
   isLoading: false,
@@ -88,6 +89,9 @@ const createDirectorySettingsMock = (
     appConfig: "/home/mock/.cc-switch",
     claude: "/default/claude",
     codex: "/default/codex",
+    gemini: "/default/gemini",
+    opencode: "/default/opencode",
+    openclaw: "/default/openclaw",
   },
   isLoading: false,
   initialAppConfigDir: undefined,
@@ -131,6 +135,7 @@ describe("useSettings hook", () => {
       skipClaudeOnboarding: true,
       claudeConfigDir: "/server/claude",
       codexConfigDir: "/server/codex",
+      openclawConfigDir: "/server/openclaw",
       language: "zh",
     };
 
@@ -243,6 +248,26 @@ describe("useSettings hook", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
+  it("auto-saves sanitized openclaw directory override in payload", async () => {
+    settingsFormMock = createSettingsFormMock({
+      settings: {
+        ...serverSettings,
+        language: "zh",
+        openclawConfigDir: "  /custom/openclaw  ",
+      },
+    });
+
+    const { result } = renderHook(() => useSettings());
+
+    await act(async () => {
+      await result.current.autoSaveSettings({ showInTray: false });
+    });
+
+    expect(mutateAsyncMock).toHaveBeenCalledTimes(1);
+    const payload = mutateAsyncMock.mock.calls[0][0] as Settings;
+    expect(payload.openclawConfigDir).toBe("/custom/openclaw");
+  });
+
   it("saves settings and flags restart when app config directory changes", async () => {
     serverSettings = {
       ...serverSettings,
@@ -346,6 +371,7 @@ describe("useSettings hook", () => {
       codexConfigDir: "/server/codex",
       geminiConfigDir: "/server/gemini",
       opencodeConfigDir: "/server/opencode",
+      openclawConfigDir: "/server/openclaw",
       language: "zh",
     };
     useSettingsQueryMock.mockReturnValue({
@@ -360,6 +386,7 @@ describe("useSettings hook", () => {
         codexConfigDir: "  /custom/codex  ",
         geminiConfigDir: "  /custom/gemini  ",
         opencodeConfigDir: "  /custom/opencode  ",
+        openclawConfigDir: "  /custom/openclaw  ",
         enableClaudePluginIntegration: false,
         skipClaudeOnboarding: true,
         language: "zh",
@@ -386,6 +413,7 @@ describe("useSettings hook", () => {
     expect(payload.codexConfigDir).toBe("/custom/codex");
     expect(payload.geminiConfigDir).toBe("/custom/gemini");
     expect(payload.opencodeConfigDir).toBe("/custom/opencode");
+    expect(payload.openclawConfigDir).toBe("/custom/openclaw");
     expect(setAppConfigDirOverrideMock).toHaveBeenCalledWith(null);
     expect(updateTrayMenuMock).toHaveBeenCalledTimes(1);
     expect(applyClaudePluginConfigMock).not.toHaveBeenCalled();
@@ -436,6 +464,7 @@ describe("useSettings hook", () => {
       ...serverSettings,
       claudeConfigDir: "  /server/claude  ",
       codexConfigDir: "   ",
+      openclawConfigDir: "  /server/openclaw  ",
       language: "zh",
     };
     useSettingsQueryMock.mockReturnValue({
@@ -467,6 +496,7 @@ describe("useSettings hook", () => {
       undefined,
       undefined, // geminiConfigDir
       undefined, // opencodeConfigDir
+      "/server/openclaw",
     );
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(false);
   });

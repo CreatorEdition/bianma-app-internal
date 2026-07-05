@@ -228,7 +228,7 @@
     "advanced": {
       "configDir": {
         "title": "配置文件目录",
-        "description": "管理 Claude、Codex 和 Gemini 的配置存储路径"
+        "description": "管理 Claude、Codex、Gemini、OpenCode 和 OpenClaw 的配置存储路径"
       },
       "proxy": {
         "title": "本地代理",
@@ -514,7 +514,7 @@
       }
     },
     "configDirectoryOverride": "配置目录覆盖（高级）",
-    "configDirectoryDescription": "在 WSL 等环境使用 Claude Code 或 Codex 的时候，可手动指定为 WSL 里的配置目录，供应商数据与主环境保持一致。",
+    "configDirectoryDescription": "在 WSL 等环境使用 Claude Code、Codex、Gemini、OpenCode 或 OpenClaw 的时候，可手动指定为 WSL 里的配置目录，供应商数据与主环境保持一致。",
     "appConfigDir": "CC Switch 配置目录",
     "appConfigDirDescription": "自定义 CC Switch 的配置存储位置（指定到云同步文件夹即可云同步配置）",
     "browsePlaceholderApp": "例如：C:\\Users\\Administrator\\.cc-switch",
@@ -526,10 +526,13 @@
     "geminiConfigDirDescription": "覆盖 Gemini 配置目录 (.env)。",
     "opencodeConfigDir": "OpenCode 配置目录",
     "opencodeConfigDirDescription": "覆盖 OpenCode 配置目录 (opencode.json)。",
+    "openclawConfigDir": "OpenClaw 配置目录",
+    "openclawConfigDirDescription": "覆盖 OpenClaw 配置目录。",
     "browsePlaceholderClaude": "例如：/home/<你的用户名>/.claude",
     "browsePlaceholderCodex": "例如：/home/<你的用户名>/.codex",
     "browsePlaceholderGemini": "例如：/home/<你的用户名>/.gemini",
     "browsePlaceholderOpencode": "例如：/home/<你的用户名>/.config/opencode",
+    "browsePlaceholderOpenclaw": "例如：/home/<你的用户名>/.openclaw",
     "browseDirectory": "浏览目录",
     "resetDefault": "恢复默认目录（需保存后生效）",
     "checkForUpdates": "检查更新",

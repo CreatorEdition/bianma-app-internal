@@ -54,6 +54,9 @@ const createSettings = (
   enableClaudePluginIntegration: false,
   claudeConfigDir: "/claude/custom",
   codexConfigDir: "/codex/custom",
+  geminiConfigDir: "/gemini/custom",
+  opencodeConfigDir: "/opencode/custom",
+  openclawConfigDir: "/openclaw/custom",
   language: "zh",
   ...overrides,
 });
@@ -80,7 +83,8 @@ describe("useDirectorySettings", () => {
       if (app === "claude") return "/remote/claude";
       if (app === "codex") return "/remote/codex";
       if (app === "gemini") return "/remote/gemini";
-      return "/remote/opencode";
+      if (app === "opencode") return "/remote/opencode";
+      return "/remote/openclaw";
     });
     selectConfigDirectoryMock.mockReset();
   });
@@ -101,6 +105,7 @@ describe("useDirectorySettings", () => {
       codex: "/remote/codex",
       gemini: "/remote/gemini",
       opencode: "/remote/opencode",
+      openclaw: "/remote/openclaw",
     });
   });
 
@@ -166,6 +171,46 @@ describe("useDirectorySettings", () => {
       claudeConfigDir: "/picked/claude",
     });
     expect(result.current.resolvedDirs.claude).toBe("/picked/claude");
+  });
+
+  it("updates openclaw directory when browsing succeeds", async () => {
+    selectConfigDirectoryMock.mockResolvedValue("  /picked/openclaw  ");
+
+    const { result } = renderHook(() =>
+      useDirectorySettings({
+        settings: createSettings({ openclawConfigDir: undefined }),
+        onUpdateSettings,
+      }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.browseDirectory("openclaw");
+    });
+
+    expect(selectConfigDirectoryMock).toHaveBeenCalledWith("/remote/openclaw");
+    expect(onUpdateSettings).toHaveBeenCalledWith({
+      openclawConfigDir: "/picked/openclaw",
+    });
+    expect(result.current.resolvedDirs.openclaw).toBe("/picked/openclaw");
+  });
+
+  it("updates openclaw directory directly", async () => {
+    const { result } = renderHook(() =>
+      useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      result.current.updateDirectory("openclaw", "  /manual/openclaw  ");
+    });
+
+    expect(onUpdateSettings).toHaveBeenCalledWith({
+      openclawConfigDir: "/manual/openclaw",
+    });
+    expect(result.current.resolvedDirs.openclaw).toBe("/manual/openclaw");
   });
 
   it("reports error when directory selection fails", async () => {
@@ -241,6 +286,7 @@ describe("useDirectorySettings", () => {
         settings: createSettings({
           claudeConfigDir: "/custom/claude",
           codexConfigDir: "/custom/codex",
+          openclawConfigDir: "/custom/openclaw",
         }),
         onUpdateSettings,
       }),
@@ -250,6 +296,7 @@ describe("useDirectorySettings", () => {
     await act(async () => {
       await result.current.resetDirectory("claude");
       await result.current.resetDirectory("codex");
+      await result.current.resetDirectory("openclaw");
       await result.current.resetAppConfigDir();
     });
 
@@ -259,8 +306,12 @@ describe("useDirectorySettings", () => {
     expect(onUpdateSettings).toHaveBeenCalledWith({
       codexConfigDir: undefined,
     });
+    expect(onUpdateSettings).toHaveBeenCalledWith({
+      openclawConfigDir: undefined,
+    });
     expect(result.current.resolvedDirs.claude).toBe("/home/mock/.claude");
     expect(result.current.resolvedDirs.codex).toBe("/home/mock/.codex");
+    expect(result.current.resolvedDirs.openclaw).toBe("/home/mock/.openclaw");
     expect(result.current.resolvedDirs.appConfig).toBe(
       "/home/mock/.config/bianma",
     );
@@ -278,6 +329,7 @@ describe("useDirectorySettings", () => {
         "/server/codex",
         "/server/gemini",
         "/server/opencode",
+        "/server/openclaw",
       );
     });
 
@@ -285,5 +337,6 @@ describe("useDirectorySettings", () => {
     expect(result.current.resolvedDirs.codex).toBe("/server/codex");
     expect(result.current.resolvedDirs.gemini).toBe("/server/gemini");
     expect(result.current.resolvedDirs.opencode).toBe("/server/opencode");
+    expect(result.current.resolvedDirs.openclaw).toBe("/server/openclaw");
   });
 });

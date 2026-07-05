@@ -228,7 +228,7 @@
     "advanced": {
       "configDir": {
         "title": "Configuration Directory",
-        "description": "Manage storage paths for Claude, Codex and Gemini configurations"
+        "description": "Manage storage paths for Claude, Codex, Gemini, OpenCode and OpenClaw configurations"
       },
       "proxy": {
         "title": "Local Proxy",
@@ -514,7 +514,7 @@
       }
     },
     "configDirectoryOverride": "Configuration Directory Override (Advanced)",
-    "configDirectoryDescription": "When using Claude Code or Codex in environments like WSL, you can manually specify the configuration directory to the one in WSL to keep provider data consistent with the main environment.",
+    "configDirectoryDescription": "When using Claude Code, Codex, Gemini, OpenCode or OpenClaw in environments like WSL, you can manually specify the configuration directory to the one in WSL to keep provider data consistent with the main environment.",
     "appConfigDir": "CC Switch Configuration Directory",
     "appConfigDirDescription": "Customize the storage location for CC Switch configuration (point to cloud sync folder to enable config sync)",
     "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.cc-switch",
@@ -526,10 +526,13 @@
     "geminiConfigDirDescription": "Override Gemini configuration directory (.env).",
     "opencodeConfigDir": "OpenCode Configuration Directory",
     "opencodeConfigDirDescription": "Override OpenCode configuration directory (opencode.json).",
+    "openclawConfigDir": "OpenClaw Configuration Directory",
+    "openclawConfigDirDescription": "Override OpenClaw configuration directory.",
     "browsePlaceholderClaude": "e.g., /home/<your-username>/.claude",
     "browsePlaceholderCodex": "e.g., /home/<your-username>/.codex",
     "browsePlaceholderGemini": "e.g., /home/<your-username>/.gemini",
     "browsePlaceholderOpencode": "e.g., /home/<your-username>/.config/opencode",
+    "browsePlaceholderOpenclaw": "e.g., /home/<your-username>/.openclaw",
     "browseDirectory": "Browse Directory",
     "resetDefault": "Reset to default directory (takes effect after saving)",
     "checkForUpdates": "Check for Updates",

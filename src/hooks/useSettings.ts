@@ -119,6 +119,7 @@ export function useSettings(): UseSettingsResult {
       sanitizeDir(data?.codexConfigDir),
       sanitizeDir(data?.geminiConfigDir),
       sanitizeDir(data?.opencodeConfigDir),
+      sanitizeDir(data?.openclawConfigDir),
     );
     setRequiresRestart(false);
   }, [
@@ -144,6 +145,9 @@ export function useSettings(): UseSettingsResult {
         const sanitizedOpencodeDir = sanitizeDir(
           mergedSettings.opencodeConfigDir,
         );
+        const sanitizedOpenclawDir = sanitizeDir(
+          mergedSettings.openclawConfigDir,
+        );
         const { webdavSync: _ignoredWebdavSync, ...restSettings } =
           mergedSettings;
 
@@ -153,6 +157,7 @@ export function useSettings(): UseSettingsResult {
           codexConfigDir: sanitizedCodexDir,
           geminiConfigDir: sanitizedGeminiDir,
           opencodeConfigDir: sanitizedOpencodeDir,
+          openclawConfigDir: sanitizedOpenclawDir,
           language: mergedSettings.language,
         };
 
@@ -257,6 +262,9 @@ export function useSettings(): UseSettingsResult {
         const sanitizedOpencodeDir = sanitizeDir(
           mergedSettings.opencodeConfigDir,
         );
+        const sanitizedOpenclawDir = sanitizeDir(
+          mergedSettings.openclawConfigDir,
+        );
         const previousAppDir = initialAppConfigDir;
         const { webdavSync: _ignoredWebdavSync, ...restSettings } =
           mergedSettings;
@@ -267,6 +275,7 @@ export function useSettings(): UseSettingsResult {
           codexConfigDir: sanitizedCodexDir,
           geminiConfigDir: sanitizedGeminiDir,
           opencodeConfigDir: sanitizedOpencodeDir,
+          openclawConfigDir: sanitizedOpenclawDir,
           language: mergedSettings.language,
         };
 
