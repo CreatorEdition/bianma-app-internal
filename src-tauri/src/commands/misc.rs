@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::app_config::AppType;
+use crate::brand::{GITHUB_API_USER_AGENT, RELEASES_LATEST_URL};
 use crate::init_status::{InitErrorPayload, SkillsMigrationPayload};
 use crate::services::ProviderService;
 use once_cell::sync::Lazy;
@@ -18,9 +19,6 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-const BIANMA_RELEASES_LATEST_URL: &str =
-    "https://github.com/CreatorEdition/bianma-app/releases/latest";
 
 /// 打开外部链接
 #[tauri::command]
@@ -152,7 +150,7 @@ fn copy_text_to_clipboard_native(_text: &str) -> Result<(), String> {
 pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
     handle
         .opener()
-        .open_url(BIANMA_RELEASES_LATEST_URL, None::<String>)
+        .open_url(RELEASES_LATEST_URL, None::<String>)
         .map_err(|e| format!("打开更新页面失败: {e}"))?;
 
     Ok(true)
@@ -350,7 +348,7 @@ async fn fetch_github_latest_version(client: &reqwest::Client, repo: &str) -> Op
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
     match client
         .get(&url)
-        .header("User-Agent", "cc-switch")
+        .header("User-Agent", GITHUB_API_USER_AGENT)
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
