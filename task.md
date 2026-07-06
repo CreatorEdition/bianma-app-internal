@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：抽取 Provider Workspace 动作 Hook 最小切片；仅迁移公开仓 App 内已有外链打开、确认删除/移除、复制、终端打开与导入后刷新动作，不迁入 product 私有能力。
 - ✅ 已完成（2026-07-06）：收口三语可见 UI 旧品牌文案最小切片；仅替换非合作方/非兼容路径/非历史说明的 `CC Switch` 可见文案，不迁移合作方推广、兼容路径、历史 release notes 或 product 私有能力。
 - ✅ 已完成（2026-07-06）：补齐 Settings 前端契约最小切片；仅覆盖公开仓已存在的 OpenCode/OpenClaw 配置目录字段与本地当前供应商字段类型/schema，并补充定向 schema 测试，不迁入 product 私有能力。
 - ✅ 已完成（2026-07-05）：实现 WebDAV 自动同步 scope v1 最小切片；仅允许 Providers/MCP/Prompts 作为自动同步触发范围，自动上传与手动上传/下载均继续保持完整快照，不迁入 SessionCloud、providerRuleRegistry/providerRuleCenter、data.bianma.ai、apiKeyPool、Risk Guard、Local Policy、strategy/load-balancing/failover backend、partner/affiliate/referral/sponsor、subscription/quota 或签名发布材料。
