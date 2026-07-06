@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：收口 McpFormModal 测试 JsonEditor double 最小切片；测试 mock 不再把 `darkMode` / `showValidation` 等非 DOM props 透传到 textarea，仅降低测试噪声，不修改 MCP 表单业务逻辑。
 - ✅ 已完成（2026-07-07）：迁移 UniversalProviderPanel 同步状态与批量同步公开切片；仅覆盖最近同步状态、错误摘要、选择清理、批量同步与定向测试，不迁入 partner/affiliate、apiKeyPool、providerRuleCenter、SessionCloud、Risk Guard、Local Policy、订阅 quota、签名发布相关内容。
 - ✅ 已完成（2026-07-07）：收口公开迁移安全/发布口径最小切片；替换 `deplink.html` 中 token-like Context7 示例值，修正三语 FAQ 中提前声明 macOS 已签名/公证的发布口径，并移除 partner promotion 旧品牌文案固化测试；未改动 provider preset 合作方结构、updater 配置或发布工作流。
 - ✅ 已完成（2026-07-07）：补齐通用配置片段 legacy localStorage 迁移测试最小切片；仅覆盖公开仓 Claude/Codex/Gemini common config snippet 迁移行为，不迁入 product 私有能力。
