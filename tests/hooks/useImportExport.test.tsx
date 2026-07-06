@@ -19,6 +19,8 @@ const importConfigMock = vi.fn();
 const saveFileDialogMock = vi.fn();
 const exportConfigMock = vi.fn();
 const syncCurrentProvidersLiveMock = vi.fn();
+const originalConsoleError = console.error;
+let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null;
 
 vi.mock("@/lib/api", () => ({
   settingsApi: {
@@ -41,10 +43,22 @@ beforeEach(() => {
   toastWarningMock.mockReset();
   syncCurrentProvidersLiveMock.mockReset();
   vi.useFakeTimers();
+  consoleErrorSpy = vi.spyOn(console, "error").mockImplementation((...args) => {
+    const [message] = args;
+    if (
+      typeof message === "string" &&
+      message.startsWith("[useImportExport]")
+    ) {
+      return;
+    }
+    originalConsoleError(...(args as Parameters<typeof console.error>));
+  });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  consoleErrorSpy?.mockRestore();
+  consoleErrorSpy = null;
 });
 
 describe("useImportExport Hook", () => {
@@ -172,7 +186,7 @@ describe("useImportExport Hook", () => {
 
     expect(saveFileDialogMock).toHaveBeenCalledTimes(1);
     expect(saveFileDialogMock).toHaveBeenCalledWith(
-      expect.stringMatching(/^bianma-export-.*\.sql$/),
+      expect.stringMatching(/^bianma-export-\d{8}_\d{6}\.sql$/),
     );
     expect(exportConfigMock).toHaveBeenCalledWith("/export.sql");
     expect(toastSuccessMock).toHaveBeenCalledWith(
