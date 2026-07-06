@@ -307,7 +307,7 @@ export function AddProviderDialog({
           </TabsContent>
 
           <TabsContent value="universal" className="mt-0">
-            <UniversalProviderPanel />
+            <UniversalProviderPanel showAddButton={false} />
           </TabsContent>
         </Tabs>
       ) : (

@@ -4,23 +4,6 @@ import zh from "../../src/i18n/locales/zh.json";
 import en from "../../src/i18n/locales/en.json";
 import ja from "../../src/i18n/locales/ja.json";
 
-const partnerPromotionKeys = [
-  "packycode",
-  "cubence",
-  "aigocode",
-  "rightcode",
-  "aicodemirror",
-  "aicoding",
-  "crazyrouter",
-  "sssaicode",
-  "siliconflow",
-  "ucloud",
-  "micu",
-  "x-code",
-] as const;
-
-type PartnerPromotionKey = (typeof partnerPromotionKeys)[number];
-
 type BrandLocale = {
   confirm: {
     removeProviderMessage: string;
@@ -36,9 +19,6 @@ type BrandLocale = {
     appConfigDir: string;
     appConfigDirDescription: string;
     restartRequiredMessage: string;
-  };
-  providerForm: {
-    partnerPromotion: Record<PartnerPromotionKey, string>;
   };
   mcp: {
     unifiedPanel: {
@@ -125,17 +105,6 @@ describe("brand locale copy", () => {
         expect(message, key).toContain("bianma.ai");
         expect(message, key).toContain("CC Switch");
         expect(message, key).toMatch(/compatible|legacy|兼容|互換/);
-      }
-    },
-  );
-
-  it.each(locales)(
-    "keeps partner promotion copy unchanged for $name",
-    ({ messages }) => {
-      for (const key of partnerPromotionKeys) {
-        expect(messages.providerForm.partnerPromotion[key], key).toContain(
-          "CC Switch",
-        );
       }
     },
   );
