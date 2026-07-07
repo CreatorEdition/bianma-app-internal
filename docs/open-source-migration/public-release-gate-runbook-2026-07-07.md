@@ -27,6 +27,14 @@
    - 每个 artifact 必须有校验和。
    - 发布前必须有人审查 release notes、下载链接、updater endpoint、签名状态和安装验证记录。
 
+## 当前已自动化的版本门禁
+
+正式版本策略获批前，公开仓保持 `0.0.1` 占位版本。`scripts/audit-public-release-preflight.mjs` 会同时检查：
+
+- `package.json`、`src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json` 的版本号必须一致。
+- 当前版本必须继续是 `0.0.1`，避免在签名、notarization、`latest.json`、构建矩阵和人工审批缺失时误发正式版本。
+- 后续升级到正式版本时，必须先更新本 runbook、changelog 与人工发布审批记录，再调整该预检门禁。
+
 ## 当前允许的自动检查
 
 运行：
@@ -43,6 +51,7 @@ node scripts/audit-public-release-preflight.mjs
 - workflow 没有 `contents: write`、`id-token: write`、`gh release upload/create/edit`、GitHub Release action、`tauri-apps/tauri-action` 或 `actions/upload-artifact`。
 - workflow 没有 `TAURI_SIGNING_PRIVATE_KEY`、`APPLE_CERTIFICATE`、`APPLE_PASSWORD`、`APPLE_ID`、`APPLE_TEAM_ID`、`KEYCHAIN_PASSWORD`、`notarytool`、`GH_TOKEN`、`GITHUB_TOKEN`、`RELEASE_REPO` 等 product 私有发布链路。
 - Tauri updater endpoint 仍指向 `CreatorEdition/bianma-app`，且不指向 `bianma-app-product`、`data.bianma.ai`、internal 或 private 通道。
+- `package.json`、`src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json` 的版本号一致，并继续保持 `0.0.1` 占位版本。
 - `ccswitch` legacy deep link scheme 仍保留。
 
 ## 禁止事项

@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：补齐公开发布版本占位门禁；预检脚本已强制 `package.json`、`src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json` 版本一致，并在正式版本策略获批前继续保持 `0.0.1` 占位版本，避免误发正式 release。
 - ✅ 已完成（2026-07-07）：补齐 Flatpak/Linux legacy 兼容门禁；公开发布预检脚本已保护 `com.ccswitch.desktop`、`com.ccswitch.desktop.desktop`、`Exec=cc-switch`、`cc-switch.deb`、`CC-Switch-Linux.flatpak`、`bianma`/`ccswitch` deep-link scheme 与 Flatpak desktop `MimeType` 注册，确认这些旧标识属于兼容边界而非待清理品牌残留。
 - ✅ 已完成（2026-07-07）：完成公开 URI 协议文档对齐切片；仅吸收 product 公开文档中的确认流安全边界，明确公开仓当前只承诺 `v1/import`，`v2/providers/import` 与 `v2/subscriptions/import` 仍未公开支持，继续排除 `docs/internal-spec/**` 私有协议、subscription v2、token-like 示例和 `data.bianma.ai` 场景。
 - ✅ 已完成（2026-07-07）：核验 Gemini OAuth client secret 公开例外；通过 `gh search code` 与上游 `google-gemini/gemini-cli` 源码回读确认该值属于 installed application OAuth client，补充 `subscription.rs` 注释与敏感材料审计文档，保留现有刷新逻辑。

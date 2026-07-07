@@ -26,6 +26,7 @@ const assertCondition = (condition, message) => {
 const workflow = readText(".github/workflows/release.yml");
 const tauriConfig = JSON.parse(readText("src-tauri/tauri.conf.json"));
 const packageJson = JSON.parse(readText("package.json"));
+const cargoToml = readText("src-tauri/Cargo.toml");
 const requiredFlatpakPaths = [
   "flatpak/com.ccswitch.desktop.desktop",
   "flatpak/com.ccswitch.desktop.metainfo.xml",
@@ -48,6 +49,9 @@ const flatpakDesktopMimeTypes = (
 )
   .split(";")
   .filter(Boolean);
+const cargoPackageVersion = cargoToml.match(
+  /^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m,
+)?.[1];
 
 for (const requiredFlatpakPath of requiredFlatpakPaths) {
   assertCondition(
@@ -156,6 +160,15 @@ assertCondition(
 assertCondition(
   packageJson?.repository?.url?.includes("CreatorEdition/bianma-app"),
   "package.json repository 必须指向 CreatorEdition/bianma-app。",
+);
+assertCondition(
+  packageJson?.version === tauriConfig?.version &&
+    packageJson?.version === cargoPackageVersion,
+  `公开发布版本必须保持一致：package.json=${packageJson?.version}，tauri.conf.json=${tauriConfig?.version}，Cargo.toml=${cargoPackageVersion}。`,
+);
+assertCondition(
+  packageJson?.version === "0.0.1",
+  "正式版本策略获批前，公开仓必须继续保持 0.0.1 占位版本，避免误发正式版本。",
 );
 
 const flatpakCompatibilityChecks = [
