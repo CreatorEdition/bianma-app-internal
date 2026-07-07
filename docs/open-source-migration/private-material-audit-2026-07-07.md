@@ -61,8 +61,9 @@ rg -n --hidden -g '!**/.git/**' -g '!**/node_modules/**' -g '!**/target/**' -g '
 
 后续任何 product 切片进入公开仓前，必须同时满足：
 
-1. 先跑敏感词扫描，至少覆盖 private/internal URL、发布 secret、token-like 示例、合作方材料、规则中心、Session Cloud、Risk Guard、Local Policy、Keyword Guard 与多 key 池。
-2. 对命中的 product 文件逐项标注“禁止迁入 / 可脱敏重写 / 可保留兼容”。
-3. 新增测试夹具不得使用真实供应商密钥前缀形态。
-4. 发布 workflow 只能从公开门禁重新设计，不能复制 product 私有发布流水线。
-5. 主线程必须独立复核子代理结论，不能把子代理输出当作完成证据。
+1. 先运行 `pnpm audit:product-migration` 或 `node scripts/audit-product-migration-guard.mjs`，把 staged diff 里的禁迁路径和禁迁内容作为硬门禁。
+2. 先跑敏感词扫描，至少覆盖 private/internal URL、发布 secret、token-like 示例、合作方材料、规则中心、Session Cloud、Risk Guard、Local Policy、Keyword Guard 与多 key 池。
+3. 对命中的 product 文件逐项标注“禁止迁入 / 可脱敏重写 / 可保留兼容”。
+4. 新增测试夹具不得使用真实供应商密钥前缀形态。
+5. 发布 workflow 只能从公开门禁重新设计，不能复制 product 私有发布流水线。
+6. 主线程必须独立复核子代理结论，不能把子代理输出当作完成证据。

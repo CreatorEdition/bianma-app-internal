@@ -28,19 +28,19 @@ rg -n "providerRuleRegistry|providerRuleCenter|data\.bianma\.ai|apiKeyPool|Sessi
 
 以下 product-only 区域必须继续排除，除非后续有单独设计、脱敏和测试任务：
 
-| 区域 | product 路径证据 | 处理结论 |
-| --- | --- | --- |
-| 多 Agent 内部记录 | `.teamwork/**` | 不迁入公开仓用户路径；仅可作为审计输入。 |
-| 内部规格与私有规划 | `docs/internal-spec/**` | 不整目录迁入；只允许抽取公开中性结论后重写。 |
-| 规则中心与远端规则 | `src/lib/providerRuleCenter.ts`、`src/components/providers/forms/providerRuleRegistry.ts`、`tests/utils/providerRuleCenter.test.ts` | 不迁入；包含 `data.bianma.ai`、远端规则和合作方元数据边界。 |
-| 多 key 池 | `src/components/providers/forms/providerApiKeyPoolUtils.ts`、`ProviderForm.tsx` 中 `apiKeyPool` 路径 | 不迁入；涉及密钥池、选择模式和配置持久化边界。 |
-| Session Cloud | `src/components/sessions/SessionCloudPanel.tsx`、`SessionCloudSnapshotDialog.tsx`、`src-tauri/src/services/session_cloud.rs` | 不迁入；当前公开仓保留本地会话能力，云端恢复链路需重新设计。 |
-| Local Policy / Keyword Guard | `src/components/settings/KeywordGuardSettings.tsx`、`LocalPolicyRecentActivity.tsx`、`src-tauri/src/proxy/keyword_guard.rs` | 不迁入；属于本地策略/审计链路，需独立威胁模型。 |
-| Risk Guard | `src/lib/risk/**`、`src-tauri/src/commands/risk.rs`、`src-tauri/src/services/risk/**` | 不迁入；涉及审批流、风险预览和策略执行边界。 |
-| 后端策略链 | `src-tauri/src/proxy/strategy/**`、`src-tauri/src/database/dao/strategy.rs`、`docs/provider-strategy-chain.md` | 不迁入；公开仓当前不承接完整策略/load-balancing/failover 后端。 |
-| 合作方/推广材料 | `partnerPromotionKey`、`affiliate/referral/sponsor`、合作方 release notes | 不新增运行时展示；历史归档仅保留事实，不做推广入口。 |
-| 扩展语言包 | `src/i18n/locales/de.json`、`ko.json`、`pt-BR.json`、`zh-Hant.json` | 暂不迁入；公开仓当前只维护 zh/en/ja。 |
-| 私有发布流水线 | product `.github/workflows/release.yml` | 不直接迁入；含签名、notarization、私有 release/latest.json 上传逻辑。 |
+| 区域                         | product 路径证据                                                                                                                    | 处理结论                                                              |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| 多 Agent 内部记录            | `.teamwork/**`                                                                                                                      | 不迁入公开仓用户路径；仅可作为审计输入。                              |
+| 内部规格与私有规划           | `docs/internal-spec/**`                                                                                                             | 不整目录迁入；只允许抽取公开中性结论后重写。                          |
+| 规则中心与远端规则           | `src/lib/providerRuleCenter.ts`、`src/components/providers/forms/providerRuleRegistry.ts`、`tests/utils/providerRuleCenter.test.ts` | 不迁入；包含 `data.bianma.ai`、远端规则和合作方元数据边界。           |
+| 多 key 池                    | `src/components/providers/forms/providerApiKeyPoolUtils.ts`、`ProviderForm.tsx` 中 `apiKeyPool` 路径                                | 不迁入；涉及密钥池、选择模式和配置持久化边界。                        |
+| Session Cloud                | `src/components/sessions/SessionCloudPanel.tsx`、`SessionCloudSnapshotDialog.tsx`、`src-tauri/src/services/session_cloud.rs`        | 不迁入；当前公开仓保留本地会话能力，云端恢复链路需重新设计。          |
+| Local Policy / Keyword Guard | `src/components/settings/KeywordGuardSettings.tsx`、`LocalPolicyRecentActivity.tsx`、`src-tauri/src/proxy/keyword_guard.rs`         | 不迁入；属于本地策略/审计链路，需独立威胁模型。                       |
+| Risk Guard                   | `src/lib/risk/**`、`src-tauri/src/commands/risk.rs`、`src-tauri/src/services/risk/**`                                               | 不迁入；涉及审批流、风险预览和策略执行边界。                          |
+| 后端策略链                   | `src-tauri/src/proxy/strategy/**`、`src-tauri/src/database/dao/strategy.rs`、`docs/provider-strategy-chain.md`                      | 不迁入；公开仓当前不承接完整策略/load-balancing/failover 后端。       |
+| 合作方/推广材料              | `partnerPromotionKey`、`affiliate/referral/sponsor`、合作方 release notes                                                           | 不新增运行时展示；历史归档仅保留事实，不做推广入口。                  |
+| 扩展语言包                   | `src/i18n/locales/de.json`、`ko.json`、`pt-BR.json`、`zh-Hant.json`                                                                 | 暂不迁入；公开仓当前只维护 zh/en/ja。                                 |
+| 私有发布流水线               | product `.github/workflows/release.yml`                                                                                             | 不直接迁入；含签名、notarization、私有 release/latest.json 上传逻辑。 |
 
 ## 发布与 updater 差异
 
@@ -98,6 +98,7 @@ product 的 `.github/workflows/release.yml` 是完整私有发布流水线，包
 
 每个后续切片必须同时满足：
 
+- 先运行 `pnpm audit:product-migration` 或 `node scripts/audit-product-migration-guard.mjs`，确认 staged diff 未命中 product 禁迁路径和禁迁内容。
 - 先读 `README.md` 与 `task.md`。
 - 明确说明是否来自 product，列出排除路径。
 - 主线程独立复核子代理结论。
