@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：补齐 RequestDetailPanel 基础详情测试；仅覆盖公开仓已有 provider/model、tokens、cost、latency、错误和未找到状态，不迁入 Local Policy、Keyword Guard 或 rule facts。
 - ✅ 已完成（2026-07-07）：收口 import_export_sync SQL 备份测试命名；仅替换测试临时文件名与测试名，不修改 `.cc-switch` 兼容目录或 SQL 导入兼容逻辑。
 - ✅ 已完成（2026-07-07）：补齐 ProviderWorkspacePanel 选择回退与范围过滤测试；仅覆盖公开仓已有交互，不迁入规则中心、多 key、策略后端或合作方能力。
 - ✅ 已完成（2026-07-07）：收口 WebDAV 远端快照预览测试契约；仅补齐公开仓已有 RemoteSnapshotInfo 字段与确认弹窗路径断言，不迁入 SessionCloud 或私有同步能力。
