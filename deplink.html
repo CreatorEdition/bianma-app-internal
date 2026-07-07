@@ -348,13 +348,13 @@
                         <strong>configFormat=json</strong>
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="bianma://v1/import?resource=provider&app=claude&name=Claude%20Complete&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0FVVEhfVE9LRU4iOiJzay1hbnQtdGVzdC1rZXkxMjMiLCJBTlRIUk9QSUNfQkFTRV9VUkwiOiJodHRwczovL2FwaS5hbnRocm9waWMuY29tL3YxIiwiQU5USFJPUElDX01PREVMIjoiY2xhdWRlLXNvbm5ldC00LjUiLCJBTlRIUk9QSUNfREVGQVVMVF9IQUlLVV9NT0RFTCI6ImNsYXVkZS1oYWlrdS00LjEiLCJBTlRIUk9QSUNfREVGQVVMVF9TT05ORVRfTU9ERUwiOiJjbGF1ZGUtc29ubmV0LTQuNSIsIkFOVEhST1BJQ19ERUZBVUxUX09QVVNfTU9ERUwiOiJjbGF1ZGUtb3B1cy00In19"
+                        <a href="bianma://v1/import?resource=provider&app=claude&name=Claude%20Complete&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0FVVEhfVE9LRU4iOiJBTlRIUk9QSUNfQVBJX0tFWV9QTEFDRUhPTERFUiIsIkFOVEhST1BJQ19CQVNFX1VSTCI6Imh0dHBzOi8vYXBpLmFudGhyb3BpYy5jb20vdjEiLCJBTlRIUk9QSUNfTU9ERUwiOiJjbGF1ZGUtc29ubmV0LTQuNSIsIkFOVEhST1BJQ19ERUZBVUxUX0hBSUtVX01PREVMIjoiY2xhdWRlLWhhaWt1LTQuMSIsIkFOVEhST1BJQ19ERUZBVUxUX1NPTk5FVF9NT0RFTCI6ImNsYXVkZS1zb25uZXQtNC41IiwiQU5USFJPUElDX0RFRkFVTFRfT1BVU19NT0RFTCI6ImNsYXVkZS1vcHVzLTQifX0="
                             class="deep-link">
                             📥 导入完整配置
                         </a>
                         <button class="deep-link"
                             style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('bianma://v1/import?resource=provider&app=claude&name=Claude%20Complete&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0FVVEhfVE9LRU4iOiJzay1hbnQtdGVzdC1rZXkxMjMiLCJBTlRIUk9QSUNfQkFTRV9VUkwiOiJodHRwczovL2FwaS5hbnRocm9waWMuY29tL3YxIiwiQU5USFJPUElDX01PREVMIjoiY2xhdWRlLXNvbm5ldC00LjUiLCJBTlRIUk9QSUNfREVGQVVMVF9IQUlLVV9NT0RFTCI6ImNsYXVkZS1oYWlrdS00LjEiLCJBTlRIUk9QSUNfREVGQVVMVF9TT05ORVRfTU9ERUwiOiJjbGF1ZGUtc29ubmV0LTQuNSIsIkFOVEhST1BJQ19ERUZBVUxUX09QVVNfTU9ERUwiOiJjbGF1ZGUtb3B1cy00In19', this)">
+                            onclick="copyDeepLink('bianma://v1/import?resource=provider&app=claude&name=Claude%20Complete&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0FVVEhfVE9LRU4iOiJBTlRIUk9QSUNfQVBJX0tFWV9QTEFDRUhPTERFUiIsIkFOVEhST1BJQ19CQVNFX1VSTCI6Imh0dHBzOi8vYXBpLmFudGhyb3BpYy5jb20vdjEiLCJBTlRIUk9QSUNfTU9ERUwiOiJjbGF1ZGUtc29ubmV0LTQuNSIsIkFOVEhST1BJQ19ERUZBVUxUX0hBSUtVX01PREVMIjoiY2xhdWRlLWhhaWt1LTQuMSIsIkFOVEhST1BJQ19ERUZBVUxUX1NPTk5FVF9NT0RFTCI6ImNsYXVkZS1zb25uZXQtNC41IiwiQU5USFJPUElDX0RFRkFVTFRfT1BVU19NT0RFTCI6ImNsYXVkZS1vcHVzLTQifX0=', this)">
                             📋 复制链接
                         </button>
                     </div>
@@ -363,7 +363,7 @@
                         <div style="color: #95a5a6; margin-bottom: 8px;">// 解码后的配置内容:</div>
                         {<br>
                         &nbsp;&nbsp;"env": {<br>
-                        &nbsp;&nbsp;&nbsp;&nbsp;"ANTHROPIC_AUTH_TOKEN": "sk-ant-test-key123",<br>
+                        &nbsp;&nbsp;&nbsp;&nbsp;"ANTHROPIC_AUTH_TOKEN": "ANTHROPIC_API_KEY_PLACEHOLDER",<br>
                         &nbsp;&nbsp;&nbsp;&nbsp;"ANTHROPIC_BASE_URL": "https://api.anthropic.com/v1",<br>
                         &nbsp;&nbsp;&nbsp;&nbsp;"ANTHROPIC_MODEL": "claude-sonnet-4.5",<br>
                         &nbsp;&nbsp;&nbsp;&nbsp;"ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.1",<br>
@@ -388,13 +388,13 @@
                         <span class="param-tag optional">覆盖</span> <strong>apiKey</strong> (覆盖配置文件中的值)
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="bianma://v1/import?resource=provider&app=claude&name=My%20Custom&apiKey=sk-ant-my-new-key&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0JBU0VfVVJMIjoiaHR0cHM6Ly9hcGkuYW50aHJvcGljLmNvbS92MSIsIkFOVEhST1BJQ19NT0RFTCI6ImNsYXVkZS1zb25uZXQtNC41In19"
+                        <a href="bianma://v1/import?resource=provider&app=claude&name=My%20Custom&apiKey=ANTHROPIC_API_KEY_PLACEHOLDER&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0JBU0VfVVJMIjoiaHR0cHM6Ly9hcGkuYW50aHJvcGljLmNvbS92MSIsIkFOVEhST1BJQ19NT0RFTCI6ImNsYXVkZS1zb25uZXQtNC41In19"
                             class="deep-link">
                             📥 导入混合配置
                         </a>
                         <button class="deep-link"
                             style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('bianma://v1/import?resource=provider&app=claude&name=My%20Custom&apiKey=sk-ant-my-new-key&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0JBU0VfVVJMIjoiaHR0cHM6Ly9hcGkuYW50aHJvcGljLmNvbS92MSIsIkFOVEhST1BJQ19NT0RFTCI6ImNsYXVkZS1zb25uZXQtNC41In19', this)">
+                            onclick="copyDeepLink('bianma://v1/import?resource=provider&app=claude&name=My%20Custom&apiKey=ANTHROPIC_API_KEY_PLACEHOLDER&configFormat=json&config=eyJlbnYiOnsiQU5USFJPUElDX0JBU0VfVVJMIjoiaHR0cHM6Ly9hcGkuYW50aHJvcGljLmNvbS92MSIsIkFOVEhST1BJQ19NT0RFTCI6ImNsYXVkZS1zb25uZXQtNC41In19', this)">
                             📋 复制链接
                         </button>
                     </div>
@@ -407,7 +407,7 @@
                         &nbsp;&nbsp;&nbsp;&nbsp;"ANTHROPIC_MODEL": "claude-sonnet-4.5"<br>
                         &nbsp;&nbsp;}<br>
                         }<br>
-                        <div style="color: #f39c12; margin-top: 8px;">// URL 参数覆盖: apiKey=sk-ant-my-new-key</div>
+                        <div style="color: #f39c12; margin-top: 8px;">// URL 参数覆盖: apiKey=ANTHROPIC_API_KEY_PLACEHOLDER</div>
                     </div>
                     <div
                         style="margin-top: 12px; padding: 10px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px; font-size: 13px;">
@@ -430,13 +430,13 @@
                         包装的 TOML)
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="bianma://v1/import?resource=provider&app=codex&name=OpenAI%20Complete&configFormat=json&config=eyJhdXRoIjp7Ik9QRU5BSV9BUElfS0VZIjoic2stcHJvai10ZXN0LWtleTEyMyJ9LCJjb25maWciOiJbbW9kZWxfcHJvdmlkZXJzLm9wZW5haV1cbmJhc2VfdXJsID0gXCJodHRwczovL2FwaS5vcGVuYWkuY29tL3YxXCJcblxuW2dlbmVyYWxdXG5tb2RlbCA9IFwiZ3B0LTUuMVwiIn0="
+                        <a href="bianma://v1/import?resource=provider&app=codex&name=OpenAI%20Complete&configFormat=json&config=eyJhdXRoIjp7Ik9QRU5BSV9BUElfS0VZIjoiT1BFTkFJX0FQSV9LRVlfUExBQ0VIT0xERVIifSwiY29uZmlnIjoiW21vZGVsX3Byb3ZpZGVycy5vcGVuYWldXG5iYXNlX3VybCA9IFwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MVwiXG5cbltnZW5lcmFsXVxubW9kZWwgPSBcImdwdC01LjFcIiJ9"
                             class="deep-link">
                             📥 导入 Codex 配置
                         </a>
                         <button class="deep-link"
                             style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('bianma://v1/import?resource=provider&app=codex&name=OpenAI%20Complete&configFormat=json&config=eyJhdXRoIjp7Ik9QRU5BSV9BUElfS0VZIjoic2stcHJvai10ZXN0LWtleTEyMyJ9LCJjb25maWciOiJbbW9kZWxfcHJvdmlkZXJzLm9wZW5haV1cbmJhc2VfdXJsID0gXCJodHRwczovL2FwaS5vcGVuYWkuY29tL3YxXCJcblxuW2dlbmVyYWxdXG5tb2RlbCA9IFwiZ3B0LTUuMVwiIn0=', this)">
+                            onclick="copyDeepLink('bianma://v1/import?resource=provider&app=codex&name=OpenAI%20Complete&configFormat=json&config=eyJhdXRoIjp7Ik9QRU5BSV9BUElfS0VZIjoiT1BFTkFJX0FQSV9LRVlfUExBQ0VIT0xERVIifSwiY29uZmlnIjoiW21vZGVsX3Byb3ZpZGVycy5vcGVuYWldXG5iYXNlX3VybCA9IFwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MVwiXG5cbltnZW5lcmFsXVxubW9kZWwgPSBcImdwdC01LjFcIiJ9', this)">
                             📋 复制链接
                         </button>
                     </div>
@@ -445,7 +445,7 @@
                         <div style="color: #95a5a6; margin-bottom: 8px;">// 解码后的配置内容:</div>
                         {<br>
                         &nbsp;&nbsp;"auth": {<br>
-                        &nbsp;&nbsp;&nbsp;&nbsp;"OPENAI_API_KEY": "sk-proj-test-key123"<br>
+                        &nbsp;&nbsp;&nbsp;&nbsp;"OPENAI_API_KEY": "OPENAI_API_KEY_PLACEHOLDER"<br>
                         &nbsp;&nbsp;},<br>
                         &nbsp;&nbsp;"config": "[model_providers.openai]\nbase_url =
                         \"https://api.openai.com/v1\"\n\n[general]\nmodel = \"gpt-5.1\""<br>
@@ -472,13 +472,13 @@
                         <span class="param-tag optional">可选</span> <strong>configFormat=json</strong>
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <a href="bianma://v1/import?resource=provider&app=gemini&name=Google%20Gemini&configFormat=json&config=eyJHRU1JTklfQVBJX0tFWSI6IkFJemFTeUR0ZXN0a2V5MTIzIiwiR0VNSU5JX0JBU0VfVVJMIjoiaHR0cHM6Ly9nZW5lcmF0aXZlbGFuZ3VhZ2UuZ29vZ2xlYXBpcy5jb20vdjFiZXRhIiwiR0VNSU5JX01PREVMIjoiZ2VtaW5pLTMtcHJvLXByZXZpZXcifQ=="
+                        <a href="bianma://v1/import?resource=provider&app=gemini&name=Google%20Gemini&configFormat=json&config=eyJHRU1JTklfQVBJX0tFWSI6IkdFTUlOSV9BUElfS0VZX1BMQUNFSE9MREVSIiwiR0VNSU5JX0JBU0VfVVJMIjoiaHR0cHM6Ly9nZW5lcmF0aXZlbGFuZ3VhZ2UuZ29vZ2xlYXBpcy5jb20vdjFiZXRhIiwiR0VNSU5JX01PREVMIjoiZ2VtaW5pLTMtcHJvLXByZXZpZXcifQ=="
                             class="deep-link">
                             📥 导入 Gemini 配置
                         </a>
                         <button class="deep-link"
                             style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); cursor: pointer; border: none;"
-                            onclick="copyDeepLink('bianma://v1/import?resource=provider&app=gemini&name=Google%20Gemini&configFormat=json&config=eyJHRU1JTklfQVBJX0tFWSI6IkFJemFTeUR0ZXN0a2V5MTIzIiwiR0VNSU5JX0JBU0VfVVJMIjoiaHR0cHM6Ly9nZW5lcmF0aXZlbGFuZ3VhZ2UuZ29vZ2xlYXBpcy5jb20vdjFiZXRhIiwiR0VNSU5JX01PREVMIjoiZ2VtaW5pLTMtcHJvLXByZXZpZXcifQ==', this)">
+                            onclick="copyDeepLink('bianma://v1/import?resource=provider&app=gemini&name=Google%20Gemini&configFormat=json&config=eyJHRU1JTklfQVBJX0tFWSI6IkdFTUlOSV9BUElfS0VZX1BMQUNFSE9MREVSIiwiR0VNSU5JX0JBU0VfVVJMIjoiaHR0cHM6Ly9nZW5lcmF0aXZlbGFuZ3VhZ2UuZ29vZ2xlYXBpcy5jb20vdjFiZXRhIiwiR0VNSU5JX01PREVMIjoiZ2VtaW5pLTMtcHJvLXByZXZpZXcifQ==', this)">
                             📋 复制链接
                         </button>
                     </div>
@@ -486,7 +486,7 @@
                         style="margin-top: 12px; padding: 12px; background: #2c3e50; color: #ecf0f1; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto;">
                         <div style="color: #95a5a6; margin-bottom: 8px;">// 解码后的配置内容:</div>
                         {<br>
-                        &nbsp;&nbsp;"GEMINI_API_KEY": "AIzaSyDtestkey123",<br>
+                        &nbsp;&nbsp;"GEMINI_API_KEY": "GEMINI_API_KEY_PLACEHOLDER",<br>
                         &nbsp;&nbsp;"GEMINI_BASE_URL": "https://generativelanguage.googleapis.com/v1beta",<br>
                         &nbsp;&nbsp;"GEMINI_MODEL": "gemini-3-pro-preview"<br>
                         }
@@ -947,7 +947,7 @@
 
                     <div class="form-group">
                         <label>API Key</label>
-                        <input type="text" id="apiKey" placeholder="sk-xxxxx 或 AIzaSyXXXXX（配置文件模式可从配置提取）">
+                        <input type="text" id="apiKey" placeholder="API_KEY_PLACEHOLDER（配置文件模式可从配置提取）">
                     </div>
                 </div>
 
@@ -957,7 +957,7 @@
                     <div id="generalConfigGroup" class="form-group">
                         <label id="configJsonLabel">配置文件内容（JSON）</label>
                         <textarea id="configJson" rows="12"
-                            placeholder='输入 JSON 配置，例如：&#10;{&#10;  "env": {&#10;    "ANTHROPIC_AUTH_TOKEN": "sk-ant-xxx",&#10;    "ANTHROPIC_BASE_URL": "https://api.anthropic.com/v1",&#10;    "ANTHROPIC_MODEL": "claude-sonnet-4.5"&#10;  }&#10;}'></textarea>
+                            placeholder='输入 JSON 配置，例如：&#10;{&#10;  "env": {&#10;    "ANTHROPIC_AUTH_TOKEN": "ANTHROPIC_API_KEY_PLACEHOLDER",&#10;    "ANTHROPIC_BASE_URL": "https://api.anthropic.com/v1",&#10;    "ANTHROPIC_MODEL": "claude-sonnet-4.5"&#10;  }&#10;}'></textarea>
                         <small style="color: #7f8c8d; font-size: 12px; display: block; margin-top: 4px;">
                             配置文件将自动进行 Base64 编码
                         </small>
@@ -968,7 +968,7 @@
                         <div class="form-group">
                             <label>Codex 认证信息 (JSON)</label>
                             <textarea id="codexAuthJson" rows="5"
-                                placeholder='{&#10;  "auth": {&#10;    "OPENAI_API_KEY": "sk-..."&#10;  }&#10;}'></textarea>
+                                placeholder='{&#10;  "auth": {&#10;    "OPENAI_API_KEY": "OPENAI_API_KEY_PLACEHOLDER"&#10;  }&#10;}'></textarea>
                             <small style="color: #7f8c8d; font-size: 12px; display: block; margin-top: 4px;">
                                 包含 API Key 的认证信息 JSON 对象
                             </small>
@@ -1206,7 +1206,7 @@
             if (app === 'claude') {
                 template = `{
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "sk-ant-your-api-key-here",
+    "ANTHROPIC_AUTH_TOKEN": "ANTHROPIC_API_KEY_PLACEHOLDER",
     "ANTHROPIC_BASE_URL": "https://api.anthropic.com/v1",
     "ANTHROPIC_MODEL": "claude-sonnet-4.5",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.1",
@@ -1219,7 +1219,7 @@
                 // Codex 分开填充
                 codexAuthTextarea.value = `{
   "auth": {
-    "OPENAI_API_KEY": "sk-proj-your-api-key-here"
+    "OPENAI_API_KEY": "OPENAI_API_KEY_PLACEHOLDER"
   }
 }`;
                 codexConfigTextarea.value = `model_provider = "custom"
@@ -1234,7 +1234,7 @@ wire_api = "responses"
 requires_openai_auth = true`;
             } else if (app === 'gemini') {
                 template = `{
-  "GEMINI_API_KEY": "AIzaSy-your-api-key-here",
+  "GEMINI_API_KEY": "GEMINI_API_KEY_PLACEHOLDER",
   "GEMINI_BASE_URL": "https://generativelanguage.googleapis.com/v1beta",
   "GEMINI_MODEL": "gemini-3-pro-preview"
 }`;

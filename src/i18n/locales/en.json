@@ -913,7 +913,7 @@
   },
   "codexConfig": {
     "authJson": "auth.json (JSON) *",
-    "authJsonPlaceholder": "{\n  \"OPENAI_API_KEY\": \"sk-your-api-key-here\"\n}",
+    "authJsonPlaceholder": "{\n  \"OPENAI_API_KEY\": \"OPENAI_API_KEY_PLACEHOLDER\"\n}",
     "authJsonHint": "Codex auth.json configuration content",
     "configToml": "config.toml (TOML)",
     "configTomlHint": "Codex config.toml configuration content",

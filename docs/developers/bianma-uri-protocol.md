@@ -37,7 +37,7 @@ Optional common parameter:
 Provider import:
 
 ```text
-bianma://v1/import?resource=provider&app=claude&name=My%20Provider&endpoint=https%3A%2F%2Fapi.example.com&apiKey=sk-xxx
+bianma://v1/import?resource=provider&app=claude&name=My%20Provider&endpoint=https%3A%2F%2Fapi.example.com&apiKey=API_KEY_PLACEHOLDER
 ```
 
 MCP import:

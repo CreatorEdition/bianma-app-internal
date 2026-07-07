@@ -96,7 +96,7 @@ export const GeminiEnvSection: React.FC<GeminiEnvSectionProps> = ({
         value={value}
         onChange={handleChange}
         placeholder={`GOOGLE_GEMINI_BASE_URL=https://your-api-endpoint.com/
-GEMINI_API_KEY=sk-your-api-key-here
+GEMINI_API_KEY=GEMINI_API_KEY_PLACEHOLDER
 GEMINI_MODEL=gemini-3-pro-preview`}
         darkMode={isDarkMode}
         rows={6}
