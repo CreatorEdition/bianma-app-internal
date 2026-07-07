@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：补齐 DirectorySettings 公开基础测试；仅覆盖应用目录与 Claude/Codex/Gemini/OpenCode/OpenClaw 目录输入、变更、浏览和重置回调，不迁入 product 风险审批、SessionCloud 或目录写入 fan-out 私有链路。
 - ✅ 已完成（2026-07-07）：补齐 RequestDetailPanel 基础详情测试；仅覆盖公开仓已有 provider/model、tokens、cost、latency、错误和未找到状态，不迁入 Local Policy、Keyword Guard 或 rule facts。
 - ✅ 已完成（2026-07-07）：收口 import_export_sync SQL 备份测试命名；仅替换测试临时文件名与测试名，不修改 `.cc-switch` 兼容目录或 SQL 导入兼容逻辑。
 - ✅ 已完成（2026-07-07）：补齐 ProviderWorkspacePanel 选择回退与范围过滤测试；仅覆盖公开仓已有交互，不迁入规则中心、多 key、策略后端或合作方能力。
