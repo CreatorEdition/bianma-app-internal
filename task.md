@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：收口 WebDAV 远端快照预览测试契约；仅补齐公开仓已有 RemoteSnapshotInfo 字段与确认弹窗路径断言，不迁入 SessionCloud 或私有同步能力。
 - ✅ 已完成（2026-07-07）：收口 useImportExport 导出文件名断言与预期错误日志测试噪声；仅迁移公开仓已有导入导出 hook 的测试增强，不改业务逻辑。
 - ✅ 已完成（2026-07-07）：收口 McpFormModal 测试 JsonEditor double 最小切片；测试 mock 不再把 `darkMode` / `showValidation` 等非 DOM props 透传到 textarea，仅降低测试噪声，不修改 MCP 表单业务逻辑。
 - ✅ 已完成（2026-07-07）：迁移 UniversalProviderPanel 同步状态与批量同步公开切片；仅覆盖最近同步状态、错误摘要、选择清理、批量同步与定向测试，不迁入 partner/affiliate、apiKeyPool、providerRuleCenter、SessionCloud、Risk Guard、Local Policy、订阅 quota、签名发布相关内容。

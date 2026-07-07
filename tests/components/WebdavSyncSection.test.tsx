@@ -4,7 +4,7 @@ import "@testing-library/jest-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { WebdavSyncSection } from "@/components/settings/WebdavSyncSection";
-import type { WebDavSyncSettings } from "@/types";
+import type { RemoteSnapshotInfo, WebDavSyncSettings } from "@/types";
 
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
@@ -110,6 +110,19 @@ const baseConfig: WebDavSyncSettings = {
   status: {},
 };
 
+const remoteSnapshotInfo: RemoteSnapshotInfo = {
+  deviceName: "My MacBook",
+  createdAt: "2026-02-01T10:00:00Z",
+  snapshotId: "snapshot-1",
+  version: 2,
+  protocolVersion: 2,
+  dbCompatVersion: 6,
+  compatible: true,
+  artifacts: ["db.sql", "skills.zip", "manifest.json"],
+  layout: "current",
+  remotePath: "cc-switch-sync/default/v2",
+};
+
 function renderSection(config?: WebDavSyncSettings) {
   const client = new QueryClient({
     defaultOptions: {
@@ -142,14 +155,9 @@ describe("WebdavSyncSection", () => {
       success: true,
       message: "ok",
     });
-    settingsApiMock.webdavSyncFetchRemoteInfo.mockResolvedValue({
-      deviceName: "My MacBook",
-      createdAt: "2026-02-01T10:00:00Z",
-      snapshotId: "snapshot-1",
-      version: 2,
-      compatible: true,
-      artifacts: ["db.sql", "skills.zip"],
-    });
+    settingsApiMock.webdavSyncFetchRemoteInfo.mockResolvedValue(
+      remoteSnapshotInfo,
+    );
     settingsApiMock.webdavSyncUpload.mockResolvedValue({ status: "uploaded" });
     settingsApiMock.webdavSyncDownload.mockResolvedValue({
       status: "downloaded",
@@ -468,6 +476,7 @@ describe("WebdavSyncSection", () => {
     expect(
       screen.getByText("settings.webdavSync.confirmUpload.scopeNotice"),
     ).toBeInTheDocument();
+    expect(screen.getByText("cc-switch-sync/default/v2")).toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -591,12 +600,17 @@ describe("WebdavSyncSection", () => {
 
   it("blocks download when remote snapshot is incompatible", async () => {
     settingsApiMock.webdavSyncFetchRemoteInfo.mockResolvedValueOnce({
+      ...remoteSnapshotInfo,
       deviceName: "Legacy Machine",
       createdAt: "2025-01-01T00:00:00Z",
       snapshotId: "legacy-snapshot",
       version: 1,
+      protocolVersion: 1,
+      dbCompatVersion: 5,
       compatible: false,
       artifacts: ["db.sql"],
+      layout: "legacy",
+      remotePath: "cc-switch-sync/default/legacy",
     });
     renderSection(baseConfig);
 
