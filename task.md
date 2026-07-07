@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：完成公开 URI 协议文档对齐切片；仅吸收 product 公开文档中的确认流安全边界，明确公开仓当前只承诺 `v1/import`，`v2/providers/import` 与 `v2/subscriptions/import` 仍未公开支持，继续排除 `docs/internal-spec/**` 私有协议、subscription v2、token-like 示例和 `data.bianma.ai` 场景。
 - ✅ 已完成（2026-07-07）：核验 Gemini OAuth client secret 公开例外；通过 `gh search code` 与上游 `google-gemini/gemini-cli` 源码回读确认该值属于 installed application OAuth client，补充 `subscription.rs` 注释与敏感材料审计文档，保留现有刷新逻辑。
 - ✅ 已完成（2026-07-07）：完成合入前敏感/私有材料复查切片；新增 `docs/open-source-migration/private-material-audit-2026-07-07.md`，确认 product 的 `.teamwork`、`docs/internal-spec`、私有发布链路、远端规则中心、Session Cloud、Risk/Local Policy/Keyword Guard、多 key 池、合作方材料和 token-like 示例不得直接迁入，并清理公开仓 Rust 单测中的 `sk-*` / `AIza*` 形态占位。
 - ✅ 已完成（2026-07-07）：补齐公开发布门禁预检切片；新增 `docs/open-source-migration/public-release-gate-runbook-2026-07-07.md` 与 `scripts/audit-public-release-preflight.mjs`，确认当前 release workflow 仍是非发布占位，静态阻断 product 私有签名/notarization/latest.json 上传链路，并保留 `ccswitch` legacy scheme。

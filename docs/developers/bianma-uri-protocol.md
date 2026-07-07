@@ -12,6 +12,12 @@ Protocol baseline:
 bianma://v1/import?resource={type}&app={app}&name={name}&...
 ```
 
+## Versioning boundary
+
+The current open-source public contract is `v1/import` only.
+
+Do not document or generate `v2/providers/import` or `v2/subscriptions/import` links for the public repository until the parser, preview UI, tests, and release notes are implemented in this repo. Product-side v2 drafts remain migration input, not public API.
+
 ## Public resources
 
 Supported public resource types:
@@ -64,6 +70,9 @@ bianma://v1/import?resource=skill&name=my-skill&repo=owner/repo&directory=skills
 - For `prompt` and `mcp`, Base64-encode the content payload before embedding it in the URL.
 - Do not publish real production API keys in shared links.
 - Prefer minimal-scope test credentials for demos and docs.
+- Deep links must open a reviewed preview flow and require explicit user confirmation before writing data.
+- Preview UI must mask sensitive fields such as `apiKey` before confirmation.
+- External platforms must not rely on `bianma://` links for silent provider, MCP, prompt, or skill installation.
 
 ## Public tool support status
 
