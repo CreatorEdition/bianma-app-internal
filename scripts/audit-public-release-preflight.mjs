@@ -1,12 +1,19 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
+const resolveRepoPath = (relativePath) => path.join(repoRoot, relativePath);
+
+const fileExists = (relativePath) => existsSync(resolveRepoPath(relativePath));
+
 const readText = (relativePath) =>
-  readFileSync(path.join(repoRoot, relativePath), "utf8");
+  readFileSync(resolveRepoPath(relativePath), "utf8");
+
+const readTextIfExists = (relativePath) =>
+  fileExists(relativePath) ? readText(relativePath) : "";
 
 const failures = [];
 
@@ -19,6 +26,35 @@ const assertCondition = (condition, message) => {
 const workflow = readText(".github/workflows/release.yml");
 const tauriConfig = JSON.parse(readText("src-tauri/tauri.conf.json"));
 const packageJson = JSON.parse(readText("package.json"));
+const requiredFlatpakPaths = [
+  "flatpak/com.ccswitch.desktop.desktop",
+  "flatpak/com.ccswitch.desktop.metainfo.xml",
+  "flatpak/com.ccswitch.desktop.yml",
+  "flatpak/README.md",
+];
+
+const flatpakDesktopEntry = readTextIfExists(
+  "flatpak/com.ccswitch.desktop.desktop",
+);
+const flatpakMetainfo = readTextIfExists(
+  "flatpak/com.ccswitch.desktop.metainfo.xml",
+);
+const flatpakManifest = readTextIfExists("flatpak/com.ccswitch.desktop.yml");
+const flatpakReadme = readTextIfExists("flatpak/README.md");
+const deepLinkSchemes =
+  tauriConfig?.plugins?.["deep-link"]?.desktop?.schemes ?? [];
+const flatpakDesktopMimeTypes = (
+  flatpakDesktopEntry.match(/^MimeType=(.*)$/m)?.[1] ?? ""
+)
+  .split(";")
+  .filter(Boolean);
+
+for (const requiredFlatpakPath of requiredFlatpakPaths) {
+  assertCondition(
+    fileExists(requiredFlatpakPath),
+    `Flatpak 兼容文件必须继续存在：${requiredFlatpakPath}`,
+  );
+}
 
 assertCondition(
   workflow.includes("name: Public Release Preflight"),
@@ -110,13 +146,159 @@ assertCondition(
   "Tauri 配置应保留 createUpdaterArtifacts=true，正式发布时由人工门禁决定是否上传。",
 );
 assertCondition(
-  tauriConfig?.plugins?.["deep-link"]?.desktop?.schemes?.includes("ccswitch"),
+  deepLinkSchemes.includes("bianma"),
+  "Deep link 必须继续保留 bianma 当前公开 scheme。",
+);
+assertCondition(
+  deepLinkSchemes.includes("ccswitch"),
   "Deep link 必须继续保留 ccswitch legacy scheme，避免破坏迁移兼容。",
 );
 assertCondition(
   packageJson?.repository?.url?.includes("CreatorEdition/bianma-app"),
   "package.json repository 必须指向 CreatorEdition/bianma-app。",
 );
+
+const flatpakCompatibilityChecks = [
+  [
+    "Flatpak manifest app id",
+    /^id:\s*com\.ccswitch\.desktop\s*$/m.test(flatpakManifest),
+    "Flatpak manifest 必须继续保留 app id com.ccswitch.desktop，避免破坏已安装用户和打包工具链。",
+  ],
+  [
+    "Flatpak manifest command",
+    /^command:\s*cc-switch\s*$/m.test(flatpakManifest),
+    "Flatpak manifest 必须继续使用 command: cc-switch，避免破坏现有 Flatpak 启动入口。",
+  ],
+  [
+    "Flatpak manifest deb source",
+    /^\s*path:\s*cc-switch\.deb\s*$/m.test(flatpakManifest),
+    "Flatpak manifest 必须继续读取 cc-switch.deb 中间产物，避免破坏现有 Linux 打包链路。",
+  ],
+  [
+    "Flatpak manifest desktop source",
+    /^\s*path:\s*com\.ccswitch\.desktop\.desktop\s*$/m.test(flatpakManifest),
+    "Flatpak manifest 必须继续引用 com.ccswitch.desktop.desktop 源文件。",
+  ],
+  [
+    "Flatpak manifest metainfo source",
+    /^\s*path:\s*com\.ccswitch\.desktop\.metainfo\.xml\s*$/m.test(
+      flatpakManifest,
+    ),
+    "Flatpak manifest 必须继续引用 com.ccswitch.desktop.metainfo.xml 源文件。",
+  ],
+  [
+    "Flatpak manifest desktop install",
+    /\/app\/share\/applications\/com\.ccswitch\.desktop\.desktop/.test(
+      flatpakManifest,
+    ),
+    "Flatpak manifest 必须继续安装 com.ccswitch.desktop.desktop 桌面文件。",
+  ],
+  [
+    "Flatpak manifest metainfo install",
+    /\/app\/share\/metainfo\/com\.ccswitch\.desktop\.metainfo\.xml/.test(
+      flatpakManifest,
+    ),
+    "Flatpak manifest 必须继续安装 com.ccswitch.desktop.metainfo.xml。",
+  ],
+  [
+    "Flatpak manifest icon install",
+    /\/app\/share\/icons\/hicolor\/128x128\/apps\/com\.ccswitch\.desktop\.png/.test(
+      flatpakManifest,
+    ),
+    "Flatpak manifest 必须继续安装 com.ccswitch.desktop 图标资源。",
+  ],
+  [
+    "Flatpak desktop Exec",
+    /^Exec=cc-switch\s*$/m.test(flatpakDesktopEntry),
+    "Flatpak desktop entry 必须继续保留 Exec=cc-switch，避免破坏现有二进制启动入口。",
+  ],
+  [
+    "Flatpak desktop Icon",
+    /^Icon=com\.ccswitch\.desktop\s*$/m.test(flatpakDesktopEntry),
+    "Flatpak desktop entry 必须继续保留 Icon=com.ccswitch.desktop，避免破坏既有 icon 资源映射。",
+  ],
+  [
+    "Flatpak desktop bianma scheme handler",
+    flatpakDesktopMimeTypes.includes("x-scheme-handler/bianma"),
+    "Flatpak desktop entry 必须注册 x-scheme-handler/bianma。",
+  ],
+  [
+    "Flatpak desktop legacy scheme handler",
+    flatpakDesktopMimeTypes.includes("x-scheme-handler/ccswitch"),
+    "Flatpak desktop entry 必须注册 x-scheme-handler/ccswitch。",
+  ],
+  [
+    "Flatpak metainfo id",
+    /<id>com\.ccswitch\.desktop<\/id>/.test(flatpakMetainfo),
+    "Flatpak metainfo 必须继续保留 com.ccswitch.desktop app id。",
+  ],
+  [
+    "Flatpak metainfo launchable",
+    /<launchable type="desktop-id">com\.ccswitch\.desktop\.desktop<\/launchable>/.test(
+      flatpakMetainfo,
+    ),
+    "Flatpak metainfo 必须继续声明 com.ccswitch.desktop.desktop launchable。",
+  ],
+  [
+    "Flatpak metainfo binary",
+    /<binary>cc-switch<\/binary>/.test(flatpakMetainfo),
+    "Flatpak metainfo 必须继续声明 cc-switch binary。",
+  ],
+  [
+    "Flatpak README compatibility app id",
+    /App ID:\s*`com\.ccswitch\.desktop`/.test(flatpakReadme),
+    "Flatpak README 必须记录 com.ccswitch.desktop 是兼容标识。",
+  ],
+  [
+    "Flatpak README compatibility desktop file",
+    /Desktop file:\s*`com\.ccswitch\.desktop\.desktop`/.test(flatpakReadme),
+    "Flatpak README 必须记录 com.ccswitch.desktop.desktop 是兼容标识。",
+  ],
+  [
+    "Flatpak README compatibility binary",
+    /Desktop Exec \/ binary:\s*`cc-switch`/.test(flatpakReadme),
+    "Flatpak README 必须记录 cc-switch 是兼容启动入口。",
+  ],
+  [
+    "Flatpak README compatibility deb",
+    /Intermediate deb name:\s*`cc-switch\.deb`/.test(flatpakReadme),
+    "Flatpak README 必须记录 cc-switch.deb 是兼容中间产物名。",
+  ],
+  [
+    "Flatpak README compatibility bundle",
+    /Exported bundle name:\s*`CC-Switch-Linux\.flatpak`/.test(flatpakReadme),
+    "Flatpak README 必须记录 CC-Switch-Linux.flatpak 是历史导出包名。",
+  ],
+  [
+    "Flatpak README compatibility schemes",
+    /Deep-link schemes:\s*`bianma`,\s*`ccswitch`/.test(flatpakReadme),
+    "Flatpak README 必须记录 bianma 和 ccswitch deep-link 兼容 scheme。",
+  ],
+  [
+    "Flatpak README deb copy command",
+    /flatpak\/cc-switch\.deb/.test(flatpakReadme),
+    "Flatpak README 构建步骤必须继续复制到 flatpak/cc-switch.deb。",
+  ],
+  [
+    "Flatpak README manifest command",
+    /flatpak\/com\.ccswitch\.desktop\.yml/.test(flatpakReadme),
+    "Flatpak README 必须继续使用 com.ccswitch.desktop.yml manifest。",
+  ],
+  [
+    "Flatpak README bundle export command",
+    /CC-Switch-Linux\.flatpak\s+com\.ccswitch\.desktop/.test(flatpakReadme),
+    "Flatpak README 导出命令必须保留历史包名和 app id。",
+  ],
+  [
+    "Flatpak README run command",
+    /flatpak run com\.ccswitch\.desktop/.test(flatpakReadme),
+    "Flatpak README 运行命令必须保留 com.ccswitch.desktop。",
+  ],
+];
+
+for (const [, condition, message] of flatpakCompatibilityChecks) {
+  assertCondition(condition, message);
+}
 
 if (failures.length > 0) {
   console.error("公开发布预检审计失败：");
@@ -127,5 +309,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  "公开发布预检审计通过：当前 workflow 仍是非发布占位，未引入私有签名或 release 上传链路。",
+  "公开发布预检审计通过：当前 workflow 仍是非发布占位，Flatpak legacy 兼容标识仍受保护，未引入私有签名或 release 上传链路。",
 );

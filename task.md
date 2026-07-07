@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：补齐 Flatpak/Linux legacy 兼容门禁；公开发布预检脚本已保护 `com.ccswitch.desktop`、`com.ccswitch.desktop.desktop`、`Exec=cc-switch`、`cc-switch.deb`、`CC-Switch-Linux.flatpak`、`bianma`/`ccswitch` deep-link scheme 与 Flatpak desktop `MimeType` 注册，确认这些旧标识属于兼容边界而非待清理品牌残留。
 - ✅ 已完成（2026-07-07）：完成公开 URI 协议文档对齐切片；仅吸收 product 公开文档中的确认流安全边界，明确公开仓当前只承诺 `v1/import`，`v2/providers/import` 与 `v2/subscriptions/import` 仍未公开支持，继续排除 `docs/internal-spec/**` 私有协议、subscription v2、token-like 示例和 `data.bianma.ai` 场景。
 - ✅ 已完成（2026-07-07）：核验 Gemini OAuth client secret 公开例外；通过 `gh search code` 与上游 `google-gemini/gemini-cli` 源码回读确认该值属于 installed application OAuth client，补充 `subscription.rs` 注释与敏感材料审计文档，保留现有刷新逻辑。
 - ✅ 已完成（2026-07-07）：完成合入前敏感/私有材料复查切片；新增 `docs/open-source-migration/private-material-audit-2026-07-07.md`，确认 product 的 `.teamwork`、`docs/internal-spec`、私有发布链路、远端规则中心、Session Cloud、Risk/Local Policy/Keyword Guard、多 key 池、合作方材料和 token-like 示例不得直接迁入，并清理公开仓 Rust 单测中的 `sk-*` / `AIza*` 形态占位。
@@ -98,7 +99,6 @@
 - ⚠️ 需要分批审计 `bianma-app-product` 与本仓差异，确认哪些代码、文档与发布配置应合入。
 - ⚠️ 合入前必须复查密钥、私有 URL、签名配置、内部任务记录与未公开合作方材料。
 - ⚠️ 正式公开打包发布仍需后续门禁：签名与 notarization、版本号策略、`latest.json` 生成、跨平台构建矩阵、release artifact 上传和人工发布审批。
-- ⚠️ Flatpak 的 `com.ccswitch.desktop`、`com.ccswitch.desktop.desktop`、`Exec=cc-switch`、`cc-switch.deb` 与历史导出包名仍作为兼容标识保留，避免破坏既有打包链路和已安装用户迁移路径。
 
 ## 说明
 

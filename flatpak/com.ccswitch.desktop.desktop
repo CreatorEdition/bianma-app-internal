@@ -5,5 +5,6 @@ Comment=Local AI coding control plane for Claude Code, Codex, Gemini CLI, OpenCo
 Exec=cc-switch
 Icon=com.ccswitch.desktop
 Terminal=false
+MimeType=x-scheme-handler/bianma;x-scheme-handler/ccswitch;
 Categories=Utility;Development;
 StartupNotify=true
