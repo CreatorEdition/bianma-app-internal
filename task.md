@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：补齐 ProviderWorkspacePanel 选择回退与范围过滤测试；仅覆盖公开仓已有交互，不迁入规则中心、多 key、策略后端或合作方能力。
 - ✅ 已完成（2026-07-07）：收口 WebDAV 远端快照预览测试契约；仅补齐公开仓已有 RemoteSnapshotInfo 字段与确认弹窗路径断言，不迁入 SessionCloud 或私有同步能力。
 - ✅ 已完成（2026-07-07）：收口 useImportExport 导出文件名断言与预期错误日志测试噪声；仅迁移公开仓已有导入导出 hook 的测试增强，不改业务逻辑。
 - ✅ 已完成（2026-07-07）：收口 McpFormModal 测试 JsonEditor double 最小切片；测试 mock 不再把 `darkMode` / `showValidation` 等非 DOM props 透传到 textarea，仅降低测试噪声，不修改 MCP 表单业务逻辑。

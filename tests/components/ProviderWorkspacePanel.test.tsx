@@ -1,4 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -272,6 +278,36 @@ describe("ProviderWorkspacePanel", () => {
     fireEvent.doubleClick(screen.getByTestId("service-row-p2"));
 
     expect(onSwitch).toHaveBeenCalledWith(baseProviders.p2);
+  });
+
+  it("does not switch when double clicking the current provider", () => {
+    const onSwitch = vi.fn();
+    renderPanel({ onSwitch });
+
+    fireEvent.doubleClick(screen.getByTestId("service-row-p1"));
+
+    expect(onSwitch).not.toHaveBeenCalled();
+  });
+
+  it("falls back to visible item after search filtering", () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("service-row-p2"));
+    expect(screen.getByTestId("detail-provider-id")).toHaveTextContent("p2");
+
+    fireEvent.change(screen.getByTestId("service-search-input"), {
+      target: { value: "Alpha" },
+    });
+
+    expect(screen.getByTestId("detail-provider-id")).toHaveTextContent("p1");
+  });
+
+  it("allows switching to favorites-only provider scope", () => {
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId("provider-scope-favorites"));
+
+    expect(screen.queryByTestId("service-row-p1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("service-row-p2")).toBeInTheDocument();
   });
 
   it("switches the focused row on Enter without bubbling to stale selection", () => {
