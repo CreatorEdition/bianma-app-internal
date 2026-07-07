@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：收口合作方促销运行时展示最小切片；仅停止 API Key 区域渲染 `partnerPromotion` 促销文案并移除预设选择器 `isPartner` 星标徽标，补充定向组件测试；保留普通 API Key 获取链接、预设源数据、ProviderForm 提交/元数据路径、OAuth 判断、历史 release notes 与外链参数。
 - ✅ 已完成（2026-07-07）：收口公开 demo、用户文档与配置占位密钥形态；将 deplink.html、URI 协议文档、三语用户手册、Gemini 通用配置与三语 Codex auth 示例中的 sk-/AIzaSy 形态占位替换为非密钥形态 placeholder，不迁入合作方促销、签名发布或私有 URL。
 - ✅ 已完成（2026-07-07）：补齐 DirectorySettings 公开基础测试；仅覆盖应用目录与 Claude/Codex/Gemini/OpenCode/OpenClaw 目录输入、变更、浏览和重置回调，不迁入 product 风险审批、SessionCloud 或目录写入 fan-out 私有链路。
 - ✅ 已完成（2026-07-07）：补齐 RequestDetailPanel 基础详情测试；仅覆盖公开仓已有 provider/model、tokens、cost、latency、错误和未找到状态，不迁入 Local Policy、Keyword Guard 或 rule facts。
