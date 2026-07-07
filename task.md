@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：补齐公开发布门禁预检切片；新增 `docs/open-source-migration/public-release-gate-runbook-2026-07-07.md` 与 `scripts/audit-public-release-preflight.mjs`，确认当前 release workflow 仍是非发布占位，静态阻断 product 私有签名/notarization/latest.json 上传链路，并保留 `ccswitch` legacy scheme。
 - ✅ 已完成（2026-07-07）：完成 `bianma-app-product` 差异与发布风险集中审计批次；新增 `docs/open-source-migration/product-diff-and-release-audit-2026-07-07.md`，记录 product-only 202 个路径、公开仓 app-only 39 个路径、不可直接迁移区域、发布 workflow 风险和后续白名单切片，继续禁止整仓迁移 product。
 - ✅ 已完成（2026-07-07）：收口合作方促销运行时展示最小切片；仅停止 API Key 区域渲染 `partnerPromotion` 促销文案并移除预设选择器 `isPartner` 星标徽标，补充定向组件测试；保留普通 API Key 获取链接、预设源数据、ProviderForm 提交/元数据路径、OAuth 判断、历史 release notes 与外链参数。
 - ✅ 已完成（2026-07-07）：收口公开 demo、用户文档与配置占位密钥形态；将 deplink.html、URI 协议文档、三语用户手册、Gemini 通用配置与三语 Codex auth 示例中的 sk-/AIzaSy 形态占位替换为非密钥形态 placeholder，不迁入合作方促销、签名发布或私有 URL。

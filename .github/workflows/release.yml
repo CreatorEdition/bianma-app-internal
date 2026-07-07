@@ -3,6 +3,9 @@ name: Public Release Preflight
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   preflight:
     runs-on: ubuntu-22.04
@@ -13,3 +16,4 @@ jobs:
           echo "本 workflow 当前只做公开发布预检占位，不创建 release、不上传 updater artifact。"
           echo "正式打包发布仍需后续补齐签名、版本号、latest.json、跨平台构建与人工门禁。"
           echo "禁止再把 release/updater 口径回退到 bianma-app-product 私有仓承接。"
+          echo "本地静态预检命令：node scripts/audit-public-release-preflight.mjs"
