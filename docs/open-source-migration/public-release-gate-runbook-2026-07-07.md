@@ -35,6 +35,15 @@
 - 当前版本必须继续是 `0.0.1`，避免在签名、notarization、`latest.json`、构建矩阵和人工审批缺失时误发正式版本。
 - 后续升级到正式版本时，必须先更新本 runbook、changelog 与人工发布审批记录，再调整该预检门禁。
 
+## 当前已自动化的审批门禁
+
+公开发布人工审批清单见 `docs/open-source-migration/public-release-approval-checklist-2026-07-08.md`。在真实发布链路落地前，预检脚本会强制：
+
+- checklist 文件必须存在。
+- checklist 必须保持 `Status: BLOCKED`。
+- checklist 中不得出现已勾选审批项。
+- checklist 必须覆盖版本策略、Windows 签名、macOS 签名与 notarization、Linux 打包、`latest.json`、构建矩阵、artifact manifest 和人工审批记录。
+
 ## 当前允许的自动检查
 
 运行：
@@ -52,6 +61,7 @@ node scripts/audit-public-release-preflight.mjs
 - workflow 没有 `TAURI_SIGNING_PRIVATE_KEY`、`APPLE_CERTIFICATE`、`APPLE_PASSWORD`、`APPLE_ID`、`APPLE_TEAM_ID`、`KEYCHAIN_PASSWORD`、`notarytool`、`GH_TOKEN`、`GITHUB_TOKEN`、`RELEASE_REPO` 等 product 私有发布链路。
 - Tauri updater endpoint 仍指向 `CreatorEdition/bianma-app`，且不指向 `bianma-app-product`、`data.bianma.ai`、internal 或 private 通道。
 - `package.json`、`src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json` 的版本号一致，并继续保持 `0.0.1` 占位版本。
+- 公开发布人工审批 checklist 存在，且继续保持 blocked / 未勾选状态。
 - `ccswitch` legacy deep link scheme 仍保留。
 
 ## 禁止事项

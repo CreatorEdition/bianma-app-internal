@@ -34,6 +34,7 @@ const boundaryFiles = new Set(
     "docs/open-source-migration/product-diff-and-release-audit-2026-07-07.md",
     "docs/open-source-migration/private-material-audit-2026-07-07.md",
     "docs/open-source-migration/public-release-gate-runbook-2026-07-07.md",
+    "docs/open-source-migration/public-release-approval-checklist-2026-07-08.md",
     "task.md",
   ].map(normalizePath),
 );

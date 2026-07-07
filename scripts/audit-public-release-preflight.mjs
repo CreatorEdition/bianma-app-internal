@@ -27,6 +27,9 @@ const workflow = readText(".github/workflows/release.yml");
 const tauriConfig = JSON.parse(readText("src-tauri/tauri.conf.json"));
 const packageJson = JSON.parse(readText("package.json"));
 const cargoToml = readText("src-tauri/Cargo.toml");
+const releaseApprovalChecklist = readTextIfExists(
+  "docs/open-source-migration/public-release-approval-checklist-2026-07-08.md",
+);
 const requiredFlatpakPaths = [
   "flatpak/com.ccswitch.desktop.desktop",
   "flatpak/com.ccswitch.desktop.metainfo.xml",
@@ -170,6 +173,55 @@ assertCondition(
   packageJson?.version === "0.0.1",
   "正式版本策略获批前，公开仓必须继续保持 0.0.1 占位版本，避免误发正式版本。",
 );
+assertCondition(
+  fileExists(
+    "docs/open-source-migration/public-release-approval-checklist-2026-07-08.md",
+  ),
+  "公开发布人工审批 checklist 必须存在，避免正式发布门禁只停留在口头说明。",
+);
+assertCondition(
+  /^Status:\s*BLOCKED\s*$/m.test(releaseApprovalChecklist),
+  "公开发布人工审批 checklist 必须保持 Status: BLOCKED，直到签名、notarization、latest.json、构建矩阵、artifact 和人工审批全部完成。",
+);
+assertCondition(
+  /^release_gate_status:\s*blocked\s*$/m.test(releaseApprovalChecklist),
+  "公开发布人工审批 checklist 必须声明 release_gate_status: blocked。",
+);
+assertCondition(
+  /^allows_real_release:\s*false\s*$/m.test(releaseApprovalChecklist),
+  "公开发布人工审批 checklist 必须声明 allows_real_release: false。",
+);
+assertCondition(
+  /^product_release_workflow_import:\s*forbidden\s*$/m.test(
+    releaseApprovalChecklist,
+  ),
+  "公开发布人工审批 checklist 必须声明 product_release_workflow_import: forbidden。",
+);
+assertCondition(
+  !/^release_gate_status:\s*(approved|ready|unblocked)\s*$/im.test(
+    releaseApprovalChecklist,
+  ),
+  "公开发布人工审批 checklist 不得声明 approved、ready 或 unblocked 状态。",
+);
+assertCondition(
+  !/^\s*-\s*\[[xX]\]\s+/m.test(releaseApprovalChecklist),
+  "公开发布人工审批 checklist 当前不得出现已勾选审批项，避免误判为可正式发布。",
+);
+for (const requiredReleaseGate of [
+  "Version strategy approved",
+  "Windows signing verified",
+  "macOS signing and notarization verified",
+  "Linux packaging verified",
+  "latest.json approval verified",
+  "Build matrix verified",
+  "Artifact manifest verified",
+  "Human approval recorded",
+]) {
+  assertCondition(
+    releaseApprovalChecklist.includes(requiredReleaseGate),
+    `公开发布人工审批 checklist 缺少门禁项：${requiredReleaseGate}`,
+  );
+}
 
 const flatpakCompatibilityChecks = [
   [

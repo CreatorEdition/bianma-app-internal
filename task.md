@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-08）：补齐公开发布人工审批 checklist 门禁；新增 `docs/open-source-migration/public-release-approval-checklist-2026-07-08.md`，预检脚本强制 checklist 保持 `Status: BLOCKED`、审批项未勾选，并覆盖版本策略、签名/notarization、`latest.json`、构建矩阵、artifact manifest 和人工审批记录。
 - ✅ 已完成（2026-07-07）：补齐 product 迁移 denylist 自动化门禁；新增 `scripts/audit-product-migration-guard.mjs` 与 `pnpm audit:product-migration`，将 `.teamwork/**`、`docs/internal-spec/**`、私有发布链路、providerRuleCenter、Session Cloud、Risk/Local Policy/Keyword Guard、多 key 池、合作方材料和 token-like 示例纳入 staged diff 硬阻断。
 - ✅ 已完成（2026-07-07）：补齐公开发布版本占位门禁；预检脚本已强制 `package.json`、`src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json` 版本一致，并在正式版本策略获批前继续保持 `0.0.1` 占位版本，避免误发正式 release。
 - ✅ 已完成（2026-07-07）：补齐 Flatpak/Linux legacy 兼容门禁；公开发布预检脚本已保护 `com.ccswitch.desktop`、`com.ccswitch.desktop.desktop`、`Exec=cc-switch`、`cc-switch.deb`、`CC-Switch-Linux.flatpak`、`bianma`/`ccswitch` deep-link scheme 与 Flatpak desktop `MimeType` 注册，确认这些旧标识属于兼容边界而非待清理品牌残留。
