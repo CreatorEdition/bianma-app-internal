@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-07-07）：核验 Gemini OAuth client secret 公开例外；通过 `gh search code` 与上游 `google-gemini/gemini-cli` 源码回读确认该值属于 installed application OAuth client，补充 `subscription.rs` 注释与敏感材料审计文档，保留现有刷新逻辑。
 - ✅ 已完成（2026-07-07）：完成合入前敏感/私有材料复查切片；新增 `docs/open-source-migration/private-material-audit-2026-07-07.md`，确认 product 的 `.teamwork`、`docs/internal-spec`、私有发布链路、远端规则中心、Session Cloud、Risk/Local Policy/Keyword Guard、多 key 池、合作方材料和 token-like 示例不得直接迁入，并清理公开仓 Rust 单测中的 `sk-*` / `AIza*` 形态占位。
 - ✅ 已完成（2026-07-07）：补齐公开发布门禁预检切片；新增 `docs/open-source-migration/public-release-gate-runbook-2026-07-07.md` 与 `scripts/audit-public-release-preflight.mjs`，确认当前 release workflow 仍是非发布占位，静态阻断 product 私有签名/notarization/latest.json 上传链路，并保留 `ccswitch` legacy scheme。
 - ✅ 已完成（2026-07-07）：完成 `bianma-app-product` 差异与发布风险集中审计批次；新增 `docs/open-source-migration/product-diff-and-release-audit-2026-07-07.md`，记录 product-only 202 个路径、公开仓 app-only 39 个路径、不可直接迁移区域、发布 workflow 风险和后续白名单切片，继续禁止整仓迁移 product。
@@ -96,7 +97,6 @@
 - ⚠️ 需要分批审计 `bianma-app-product` 与本仓差异，确认哪些代码、文档与发布配置应合入。
 - ⚠️ 合入前必须复查密钥、私有 URL、签名配置、内部任务记录与未公开合作方材料。
 - ⚠️ 正式公开打包发布仍需后续门禁：签名与 notarization、版本号策略、`latest.json` 生成、跨平台构建矩阵、release artifact 上传和人工发布审批。
-- ⚠️ 公开仓 `src-tauri/src/services/subscription.rs` 中的 `GEMINI_OAUTH_CLIENT_SECRET` 形态常量需单独裁决：若确认为 Gemini CLI 公开 OAuth desktop client 固定值，应补充例外说明；否则应移出源码并评估刷新流程影响。
 - ⚠️ Flatpak 的 `com.ccswitch.desktop`、`com.ccswitch.desktop.desktop`、`Exec=cc-switch`、`cc-switch.deb` 与历史导出包名仍作为兼容标识保留，避免破坏既有打包链路和已安装用户迁移路径。
 
 ## 说明

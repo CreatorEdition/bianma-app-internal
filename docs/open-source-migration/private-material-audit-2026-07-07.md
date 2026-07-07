@@ -6,7 +6,7 @@
 
 本轮同时清理了公开仓中少量测试夹具的 token-like 字符串：Rust 单测不再使用 `sk-*` 或 `AIza*` 形态示例，避免开源密钥扫描误报。公开仓复扫后，token-like 命中只剩 `src/types/omo.ts` 的 OMO detector 标识符误报。
 
-仍需单独裁决：`src-tauri/src/services/subscription.rs` 存在 `GEMINI_OAUTH_CLIENT_SECRET` 形态常量。源码注释称其来自 Gemini CLI 公开值，但本轮未把该外部来源作为已验证事实；若确认为公开 OAuth desktop client 固定值，需要文档化例外理由，否则应改为运行时配置并评估轮换。
+已核验例外：`src-tauri/src/services/subscription.rs` 存在 `GEMINI_OAUTH_CLIENT_SECRET` 形态常量。该值已通过 GitHub 代码搜索和上游源码回读确认存在于 `google-gemini/gemini-cli` 公开仓 `packages/core/src/code_assist/oauth2.ts`（固定取证 URL：`https://github.com/google-gemini/gemini-cli/blob/15a9429b69bd4c72514678ac17c88087f7ab9d48/packages/core/src/code_assist/oauth2.ts`），上游注释说明它属于 installed application OAuth client，可随源码保存，不按服务端密钥处理。本仓保留该常量以兼容 Gemini refresh token 刷新流程，但不得把该例外扩大到 product 私有凭据、发布 secret 或服务端密钥。
 
 ## 已执行取证
 
@@ -20,7 +20,7 @@ rg -l -i --hidden -g '!**/.git/**' -g '!**/node_modules/**' -g '!**/target/**' -
 rg -n --hidden -g '!**/.git/**' -g '!**/node_modules/**' -g '!**/target/**' -g '!**/dist/**' -e 'sk-[A-Za-z0-9]{8,}' -e 'AIza[0-9A-Za-z_-]{10,}' .
 ```
 
-子代理独立复核【CodeX-Subagent】：只读扫描 `bianma-app` 与 `bianma-app-product`，补充确认 product release workflow、`.teamwork/**`、`docs/internal-spec/**`、`.codex-vitest*.json`、provider rule center、Session Cloud、Risk/Local Policy/Keyword Guard、合作方材料与 token-like 示例均不应直接迁入；同时提示公开仓 `GEMINI_OAUTH_CLIENT_SECRET` 需要单独裁决。
+子代理独立复核【CodeX-Subagent】：只读扫描 `bianma-app` 与 `bianma-app-product`，补充确认 product release workflow、`.teamwork/**`、`docs/internal-spec/**`、`.codex-vitest*.json`、provider rule center、Session Cloud、Risk/Local Policy/Keyword Guard、合作方材料与 token-like 示例均不应直接迁入；同时提示公开仓 `GEMINI_OAUTH_CLIENT_SECRET` 需要单独裁决。主线程已追加上游源码核验并将其收口为 installed application OAuth client 例外。
 
 ## product 侧继续禁止迁入
 
@@ -48,9 +48,9 @@ rg -n --hidden -g '!**/.git/**' -g '!**/node_modules/**' -g '!**/target/**' -g '
 - Flatpak legacy ID、`Exec=cc-switch`、`cc-switch.deb` 与 `ccswitch` scheme 仍需保留，避免破坏已安装用户迁移。
 - 公开仓现有 `partnerPromotionKey` 只作为 provider preset 元数据和历史兼容输入存在；不得据此恢复 API Key 区域促销展示或合作方星标入口。
 
-以下命中需要后续单独裁决：
+已核验例外：
 
-- `src-tauri/src/services/subscription.rs` 的 `GEMINI_OAUTH_CLIENT_SECRET`。如果确认为 Gemini CLI 公开 OAuth desktop client 固定值，可保留但必须补充例外说明；如果不能确认，应移出源码并评估对既有 refresh token 刷新流程的影响。
+- `src-tauri/src/services/subscription.rs` 的 `GEMINI_OAUTH_CLIENT_SECRET` 来自 Gemini CLI 公开源码中的 installed application OAuth client。保留理由仅限兼容 Gemini CLI refresh token 刷新流程；新增 OAuth client、服务端 secret 或 product 私有凭据不得引用此例外。
 
 ## 本轮公开仓修正
 
