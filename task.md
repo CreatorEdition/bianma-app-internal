@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-08-06）：完成 `routing-core v2` 架构与迁移规格；统一 A/B/C 为 RouteStage、Target 绑定具体 ModelDeployment，补齐多账户/多 Key AccountSelector、受 ReplayGate 约束的 429 冷却与有界重试、本地工具/模型请求分流、Secret Vault/JWT 屏蔽、UA Profile、Site 分层限流、ReplayJournal/TelemetryLedger、ActivationGate、渐进迁移和回滚门禁。独立红队提出的 1 个 P0 与 8 个 P1 已逐项修订；本任务未修改 Rust/TypeScript 生产逻辑。
 - ✅ 已完成（2026-07-08）：补齐公开 updater/latest.json 阻断门禁；新增 `docs/open-source-migration/public-updater-latest-json-gate-2026-07-08.md`，预检脚本强制三项发布许可字段保持 `false`，CI 静态阻断公开 workflow 中的 updater manifest 生成、release artifact 上传和私有签名发布逻辑，并阻断仓内跟踪任意 `latest.json` / 根级 `release-assets/**` 产物。
 - ✅ 已完成（2026-07-08）：补齐公开发布人工审批 checklist 门禁；新增 `docs/open-source-migration/public-release-approval-checklist-2026-07-08.md`，预检脚本强制 checklist 保持 `Status: BLOCKED`、审批项未勾选，并覆盖版本策略、签名/notarization、`latest.json`、构建矩阵、artifact manifest 和人工审批记录。
 - ✅ 已完成（2026-07-07）：补齐 product 迁移 denylist 自动化门禁；新增 `scripts/audit-product-migration-guard.mjs` 与 `pnpm audit:product-migration`，将 `.teamwork/**`、`docs/internal-spec/**`、私有发布链路、providerRuleCenter、Session Cloud、Risk/Local Policy/Keyword Guard、多 key 池、合作方材料和 token-like 示例纳入 staged diff 硬阻断。
