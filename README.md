@@ -17,7 +17,7 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 
 - [中文用户手册](docs/user-manual/zh/README.md)
 - [bianma URI 协议文档](docs/developers/bianma-uri-protocol.md)
-- [routing-core v2 架构与迁移规格](docs/developers/routing-core-v2-architecture.md)（提案，作为后续代理核心重建的事实源）
+- [routing-core v2 与 ContextPipeline 架构及迁移规格](docs/developers/routing-core-v2-architecture.md)（提案，作为后续路由核心重建、发送前上下文治理与 A/B 验收的事实源）
 - [更新日志（历史记录）](CHANGELOG.md)
 - [安全政策](SECURITY.md)
 

@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-08-07）：将 RTK、Context Mode、Graphify、memsearch、lean-ctx 与 tokbench 的固定源码审计纳入 `routing-core v2` 规格；完成独立 `ContextPipeline`、整体密封的授权 bundle/anti-signing-oracle、Local/BoundDeployment/Routed 闭集、GatewayOnly/N0/Shadow/Managed Execute 门禁、精确账户 Capability 探测、最终出站冻结复核、单一有损变换所有权、本地归档/图/记忆 Sidecar、子代理旁路防护和版本绑定 A/B 门禁。冻结架构文档 SHA-256 为 `44CDFE8812DBA6CC1EE15122885CAE1844D424D0306ADC0F8828F09C8B692926`；Prettier、TypeScript、本地链接、围栏、1–26 不变量、token-like 扫描、`git diff --check` 与 4/4 Mermaid 11.12.0 真实解析/渲染均通过。Vitest 全量运行 66/67 suites 通过，唯一 App integration hook 首轮 20 秒超时后以 60 秒 hook timeout 定向复跑 5/5 通过。本轮仍只修改文档，不声明生产功能已实现。
 - ✅ 已完成（2026-08-06）：根据格式化后二轮独立审计收紧 `routing-core v2` 架构规格；已关闭 Credential 跨站/跨 Origin 释放、最终 URL 先验证、Session 账户粘性与受控打破、Vault 激活闩锁、一次性 SecretSubmissionPermit、认证输入校验、WebDAV 冲突标识、账户/额度双语义和 JWT NumericDate 合同。后续两份独立复核未发现新增 P0；其指出的核心 P0 残余合同与 P1/P2 已逐项修订并通过定向合同检查；本任务仍只修改架构和任务文档，不修改 Rust/TypeScript 生产逻辑。
 - ✅ 已完成（2026-07-08）：补齐公开发布人工审批 checklist 门禁；新增 `docs/open-source-migration/public-release-approval-checklist-2026-07-08.md`，预检脚本强制 checklist 保持 `Status: BLOCKED`、审批项未勾选，并覆盖版本策略、签名/notarization、`latest.json`、构建矩阵、artifact manifest 和人工审批记录。
 - ✅ 已完成（2026-07-07）：补齐 product 迁移 denylist 自动化门禁；新增 `scripts/audit-product-migration-guard.mjs` 与 `pnpm audit:product-migration`，将 `.teamwork/**`、`docs/internal-spec/**`、私有发布链路、providerRuleCenter、Session Cloud、Risk/Local Policy/Keyword Guard、多 key 池、合作方材料和 token-like 示例纳入 staged diff 硬阻断。
