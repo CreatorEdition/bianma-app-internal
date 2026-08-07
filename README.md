@@ -39,3 +39,10 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 - `pnpm format:check`
 - `pnpm test:unit`
 - `pnpm audit:product-migration`（检查后续 product 迁移切片是否命中禁迁边界）
+- `cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check`
+- `cargo check --manifest-path src-tauri/Cargo.toml -p bianma-app --locked`
+- `cargo clippy --manifest-path src-tauri/Cargo.toml -p ingress-contract --all-targets --locked -- -D warnings`
+- `cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --all-targets --locked`
+- `cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --doc --locked`
+
+Rust 后端采用非虚拟 Cargo workspace。`src-tauri/crates/ingress-contract` 是 `routing-core v2` 的纯 Rust 入站安全合同，只负责验证并生成不可伪造的 Verified 请求，不包含 Tauri、HTTP 客户端、数据库、Secret 解析或生产转发接线；其边界以架构规格和 crate 自身测试为准。

@@ -1,0 +1,15 @@
+[package]
+name = "ingress-contract"
+version = "0.0.1"
+description = "Pure Rust ingress verification contract for routing-core v2"
+edition = "2021"
+rust-version = "1.85.0"
+license = "MIT"
+publish = false
+
+[dependencies]
+hmac = "0.12"
+sha2 = "0.10"
+thiserror = "2"
+url = "2.5"
+zeroize = "1.8"
