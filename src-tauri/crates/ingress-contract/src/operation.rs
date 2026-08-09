@@ -9,7 +9,7 @@ use crate::{
     RequestDigest, SemanticHeadersDigest, MAX_HEADER_NAME_BYTES, MAX_RAW_BODY_BYTES,
 };
 
-const REGISTRY_DIGEST_DOMAIN: &[u8] = b"bianma.ingress.route-registry.v1\0";
+const REGISTRY_DIGEST_DOMAIN: &[u8] = b"bianma.ingress.route-registry.v2\0";
 const BODY_DIGEST_DOMAIN: &[u8] = b"bianma.ingress.raw-body.v1\0";
 const HEADER_DIGEST_DOMAIN: &[u8] = b"bianma.ingress.semantic-headers.v1\0";
 const REQUEST_DIGEST_DOMAIN: &[u8] = b"bianma.ingress.raw-request.v1\0";
@@ -40,6 +40,38 @@ impl RequestDispatchDomain {
             2 => Ok(Self::BoundDeployment),
             3 => Ok(Self::RoutedPolicy),
             _ => Err(IngressReject::ProofMalformed),
+        }
+    }
+}
+
+/// 入站请求采用的协议语义闭集。
+///
+/// 该值由受信 [`RouteSpecRegistry`] 决定，不能由请求 Header、User-Agent 或正文选择。
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum IngressProtocol {
+    /// Anthropic Messages 兼容协议。
+    AnthropicMessages,
+    /// OpenAI Chat Completions 兼容协议。
+    OpenAiChatCompletions,
+    /// OpenAI Responses 兼容协议。
+    OpenAiResponses,
+    /// Gemini `generateContent` 兼容协议。
+    GeminiGenerateContent,
+    /// Bianma 本地数据面协议。
+    BianmaLocal,
+    /// Bianma 本地管理面协议。
+    BianmaManagement,
+}
+
+impl IngressProtocol {
+    const fn code(self) -> u8 {
+        match self {
+            Self::AnthropicMessages => 1,
+            Self::OpenAiChatCompletions => 2,
+            Self::OpenAiResponses => 3,
+            Self::GeminiGenerateContent => 4,
+            Self::BianmaLocal => 5,
+            Self::BianmaManagement => 6,
         }
     }
 }
@@ -164,6 +196,7 @@ pub struct RouteSpec {
     pub(crate) body_policy: BodyPolicy,
     pub(crate) kind: RequestKind,
     pub(crate) dispatch_domain: RequestDispatchDomain,
+    pub(crate) ingress_protocol: IngressProtocol,
     pub(crate) semantic_headers: Vec<Vec<u8>>,
     pub(crate) local_scope: Option<LocalOperationAuthScope>,
 }
@@ -179,6 +212,7 @@ impl RouteSpec {
         body_policy: BodyPolicy,
         kind: RequestKind,
         dispatch_domain: RequestDispatchDomain,
+        ingress_protocol: IngressProtocol,
         semantic_headers: Vec<Vec<u8>>,
         local_scope: Option<LocalOperationAuthScope>,
     ) -> Result<Self, IngressReject> {
@@ -240,6 +274,7 @@ impl RouteSpec {
             body_policy,
             kind,
             dispatch_domain,
+            ingress_protocol,
             semantic_headers: normalized_headers,
             local_scope,
         })
@@ -258,6 +293,11 @@ impl RouteSpec {
     /// 返回唯一分发域。
     pub const fn dispatch_domain(&self) -> RequestDispatchDomain {
         self.dispatch_domain
+    }
+
+    /// 返回由注册表固定的入站协议语义。
+    pub const fn ingress_protocol(&self) -> IngressProtocol {
+        self.ingress_protocol
     }
 }
 
@@ -540,7 +580,11 @@ fn hash_registry(specs: &[RouteSpec]) -> [u8; 32] {
                 }
             }
         }
-        hasher.update([spec.kind.code(), spec.dispatch_domain.code()]);
+        hasher.update([
+            spec.kind.code(),
+            spec.dispatch_domain.code(),
+            spec.ingress_protocol.code(),
+        ]);
         hasher.update([spec.local_scope.map_or(0, LocalOperationAuthScope::code)]);
         update_len(&mut hasher, spec.semantic_headers.len());
         for header in &spec.semantic_headers {

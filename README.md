@@ -44,5 +44,12 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 - `cargo clippy --manifest-path src-tauri/Cargo.toml -p ingress-contract --all-targets --locked -- -D warnings`
 - `cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --all-targets --locked`
 - `cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --doc --locked`
+- `cargo clippy --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked -- -D warnings`
+- `cargo test --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked`
+- `cargo test --manifest-path src-tauri/Cargo.toml -p routing-core --doc --locked`
+- `RUSTDOCFLAGS="-D warnings -D missing-docs" cargo doc --manifest-path src-tauri/Cargo.toml -p ingress-contract -p routing-core --no-deps --locked`
+- `pnpm audit:routing-core-boundary`（阻止 receiver/classifier typestate 旁路、根 App 提前接线和核心依赖越界）
 
-Rust 后端采用非虚拟 Cargo workspace。`src-tauri/crates/ingress-contract` 是 `routing-core v2` 的纯 Rust 入站安全合同，只负责验证并生成不可伪造的 Verified 请求，不包含 Tauri、HTTP 客户端、数据库、Secret 解析或生产转发接线；其边界以架构规格和 crate 自身测试为准。
+Rust 后端采用非虚拟 Cargo workspace。`src-tauri/crates/ingress-contract` 验证并生成不可伪造的 Verified 请求；`src-tauri/crates/routing-core` 提供封闭 `RequestClassifier`、逐请求快照门禁以及 Local/BoundDeployment/Routed 三路不可互换 typestate。由于 Rust 没有 friend crate 可见性，可读取正文的 receiver-accepted 内部状态与 classifier 实现在同一 crate 编译边界内保持 `pub(crate)`，`routing-core` package 只公开同一类型身份的 facade；边界脚本会阻止重新导出 accepted 状态或恢复公开 `accept` 旁路。
+
+当前两个 crate 仍是纯合同切片：根 App 尚未依赖 `routing-core`，也未接入旧 `src-tauri/src/proxy/**`。本切片不包含生产协议 Adapter、RoutingSnapshot 编译器、Planner、健康状态、429/retry/fallback、Vault、SecretResolver、HTTP/SSE Transport、UI、迁移或切流，不能据此启用 Managed Execute 或真实上游调用。

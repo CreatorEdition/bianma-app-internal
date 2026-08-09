@@ -19,14 +19,16 @@ use crate::{
     CapabilityManagementScopeId, CapabilityVerificationKey, CapabilityVerificationKeyRing,
     ClientFamilyId, ClientVersion, ConsentRevision, ContextActivationBinding, ContextPolicyVersion,
     CredentialId, EncodedCapabilityAuthorization, EndpointId, EnvelopeDigest, FixedClock,
-    HandleEpoch, HttpMethod, IngressReject, IngressSchemaVersion, IngressTokenScopeId,
-    IngressVerifier, IssuerEpoch, ListenerBindingAuthority, ListenerId, LocalOperationAuthScope,
-    ManagedActivationBinding, ManagedVerificationKey, ManagedVerificationKeyRing, MemoryNonceStore,
-    ModelDeploymentId, NonceNamespace, NonceReject, OneShotNonce, OneShotNonceStore, OperationId,
-    ProtocolFrameRevision, QueryPolicy, RawHeader, RawIngressRequest, RequestDispatchDomain,
-    RequestKind, RetrievalSchemaRevision, RoutePolicyRevision, RouteSpec, RouteSpecRegistry,
-    SignedIngressRequest, SiteId, ToolSchemaRevision, TransformOwnerId, TransformOwnerVersion,
-    VerifiedAuthorizationKind, VerifiedProofKind, VerifierClock,
+    HandleEpoch, HttpMethod, IngressProtocol, IngressReject, IngressSchemaVersion,
+    IngressTokenScopeId, IngressVerifier, IssuerEpoch, ListenerBindingAuthority, ListenerId,
+    LocalOperationAuthScope, ManagedActivationBinding, ManagedVerificationKey,
+    ManagedVerificationKeyRing, MemoryNonceStore, ModelDeploymentId, NonceNamespace, NonceReject,
+    OneShotNonce, OneShotNonceStore, OperationId, ProtocolFrameRevision, QueryPolicy, RawHeader,
+    RawIngressRequest, RegistryDigest, RequestDispatchDomain, RequestKind, RetrievalSchemaRevision,
+    RoutePolicyRevision, RouteSpec, RouteSpecRegistry, SignedIngressRequest, SiteId,
+    ToolSchemaRevision, TransformOwnerId, TransformOwnerVersion, VerifiedAuthorizationKind,
+    VerifiedContinuationConstraint, VerifiedEgressPurpose, VerifiedProofKind,
+    VerifiedSensitivityClass, VerifierClock,
 };
 
 const NOW: u64 = 1_800_000_000_000;
@@ -66,6 +68,7 @@ fn build_registry() -> RouteSpecRegistry {
             json_body_policy(32 * 1024),
             RequestKind::ModelInference,
             RequestDispatchDomain::RoutedPolicy,
+            IngressProtocol::AnthropicMessages,
             vec![b"x-client-version".to_vec()],
             None,
         )
@@ -78,6 +81,7 @@ fn build_registry() -> RouteSpecRegistry {
             BodyPolicy::Forbidden,
             RequestKind::Liveness,
             RequestDispatchDomain::Local,
+            IngressProtocol::BianmaLocal,
             vec![],
             Some(LocalOperationAuthScope::PublicLiveness),
         )
@@ -90,6 +94,7 @@ fn build_registry() -> RouteSpecRegistry {
             BodyPolicy::Forbidden,
             RequestKind::LocalAdmin,
             RequestDispatchDomain::Local,
+            IngressProtocol::BianmaManagement,
             vec![],
             Some(LocalOperationAuthScope::LocalAdmin),
         )
@@ -102,6 +107,7 @@ fn build_registry() -> RouteSpecRegistry {
             BodyPolicy::Forbidden,
             RequestKind::AuthFlow,
             RequestDispatchDomain::Local,
+            IngressProtocol::BianmaLocal,
             vec![],
             Some(LocalOperationAuthScope::AuthFlow),
         )
@@ -114,6 +120,7 @@ fn build_registry() -> RouteSpecRegistry {
             BodyPolicy::Forbidden,
             RequestKind::UnifiedModelCatalog,
             RequestDispatchDomain::Local,
+            IngressProtocol::BianmaLocal,
             vec![],
             Some(LocalOperationAuthScope::LocalData),
         )
@@ -126,6 +133,7 @@ fn build_registry() -> RouteSpecRegistry {
             BodyPolicy::Forbidden,
             RequestKind::DeploymentModelProbe,
             RequestDispatchDomain::BoundDeployment,
+            IngressProtocol::BianmaManagement,
             vec![],
             None,
         )
@@ -138,6 +146,7 @@ fn build_registry() -> RouteSpecRegistry {
             json_body_policy(32 * 1024),
             RequestKind::ExactUpstreamTokenCount,
             RequestDispatchDomain::BoundDeployment,
+            IngressProtocol::AnthropicMessages,
             vec![b"x-client-version".to_vec()],
             None,
         )
@@ -150,6 +159,7 @@ fn build_registry() -> RouteSpecRegistry {
             json_body_policy(32 * 1024),
             RequestKind::AuxiliaryInference,
             RequestDispatchDomain::RoutedPolicy,
+            IngressProtocol::BianmaLocal,
             vec![b"x-client-version".to_vec()],
             None,
         )
@@ -472,20 +482,35 @@ fn managed_success_strips_ingress_secrets_and_preserves_verified_contract() {
         )
         .expect("合法 Managed 请求应通过");
 
-    assert_eq!(verified.proof_kind(), VerifiedProofKind::Managed);
+    assert!(verified.proof_binding_is_nonzero());
+    let accepted = verifier
+        .receiver
+        .accept(verified)
+        .expect("同 runtime receiver 应接受 Managed 请求");
+    assert_eq!(accepted.proof_kind(), VerifiedProofKind::Managed);
     assert_eq!(
-        verified.authorization_kind(),
+        accepted.authorization_kind(),
         VerifiedAuthorizationKind::ManagedEgress
     );
-    assert_eq!(verified.operation(), operation(1));
+    assert_eq!(accepted.operation(), operation(1));
     assert_eq!(
-        verified.dispatch_domain(),
+        accepted.dispatch_domain(),
         RequestDispatchDomain::RoutedPolicy
     );
-    assert_eq!(verified.managed_target_count(), Some(2));
-    assert!(verified.local_handle_allowed());
-    assert!(verified.proof_binding_is_nonzero());
-    let names = verified
+    assert_eq!(
+        accepted.ingress_protocol(),
+        IngressProtocol::AnthropicMessages
+    );
+    assert_eq!(
+        accepted
+            .managed()
+            .expect("Managed 视图必须存在")
+            .egress_permit()
+            .target_count(),
+        2
+    );
+    assert!(accepted.local_handle_allowed());
+    let names = accepted
         .headers()
         .map(|header| header.name().to_vec())
         .collect::<Vec<_>>();
@@ -495,6 +520,141 @@ fn managed_success_strips_ingress_secrets_and_preserves_verified_contract() {
     assert!(!names.contains(&b"cookie".to_vec()));
     assert!(!names.contains(&b"x-unbound-canary".to_vec()));
     assert!(!names.contains(&b"content-length".to_vec()));
+}
+
+#[test]
+fn receiver_accepted_managed_views_cover_activation_permit_and_requirements() {
+    let registry = build_registry();
+    let registry_digest = registry.digest();
+    let request = model_request();
+    let (bundle, claims) = managed_material(&registry, &request, nonce(42), IssuerEpoch::new(1));
+    let expected_request_digest = claims.request_digest;
+    let expected_body_digest = claims.body_digest;
+    let expected_envelope_digest = claims.envelope_digest;
+    let (attestation_wire, bundle_wire) = encode_managed(&bundle, &claims, &MANAGED_KEY);
+    let expected_bundle_digest = authorization_bundle_digest(&bundle_wire);
+    let runtime = default_verifier(fresh_store());
+    let verified = runtime
+        .verify_managed(
+            signed_from_wires(request, &attestation_wire, &bundle_wire),
+            &managed_connection(&runtime, IssuerEpoch::new(1)),
+            &managed_active(&runtime, IssuerEpoch::new(1)),
+        )
+        .expect("合法 Managed 请求应通过 verifier");
+    let accepted = runtime
+        .receiver
+        .accept(verified)
+        .expect("同 runtime receiver 应接受请求");
+
+    assert_eq!(accepted.operation(), operation(1));
+    assert_eq!(accepted.request_kind(), RequestKind::ModelInference);
+    assert_eq!(accepted.method(), HttpMethod::Post);
+    assert_eq!(accepted.target(), b"/v1/messages");
+    assert!(!accepted.body().is_empty());
+    assert!(accepted.registry_digest() == registry_digest);
+    assert!(accepted.request_digest() == expected_request_digest);
+    assert_eq!(
+        accepted.listener_scope(),
+        (ListenerId::new(91), IngressTokenScopeId::new(92))
+    );
+
+    let managed = accepted.managed().expect("Managed 视图必须存在");
+    assert_eq!(managed.listener(), ListenerId::new(91));
+    assert_eq!(managed.token_scope(), IngressTokenScopeId::new(92));
+    assert_eq!(managed.audience(), AudienceId::new(90));
+    assert_eq!(managed.issuer_epoch(), IssuerEpoch::new(1));
+    assert_eq!(managed.issued_at_millis(), NOW - 1_000);
+    assert_eq!(managed.expires_at_millis(), EXPIRES);
+    assert!(managed.registry_digest() == registry_digest);
+    assert!(managed.authorization_bundle_digest() == expected_bundle_digest);
+    assert_eq!(
+        managed.route_policy_revision(),
+        RoutePolicyRevision::new(70)
+    );
+    assert_eq!(managed.consent_revision(), ConsentRevision::new(80));
+    assert_eq!(managed.adapter_version(), AdapterVersion::new(30));
+    assert_eq!(managed.transform_owner(), TransformOwnerId::new(50));
+    assert_eq!(
+        managed.transform_owner_version(),
+        TransformOwnerVersion::new(60)
+    );
+
+    let activation = managed.activation_key();
+    assert_eq!(activation.client_family(), ClientFamilyId::new(10));
+    assert_eq!(activation.client_version(), ClientVersion::new(20));
+    assert_eq!(activation.adapter_version(), AdapterVersion::new(30));
+    assert_eq!(
+        activation.ingress_schema_version(),
+        IngressSchemaVersion::new(1)
+    );
+    assert_eq!(
+        activation.context_policy_version(),
+        ContextPolicyVersion::new(40)
+    );
+    assert_eq!(activation.transform_owner(), TransformOwnerId::new(50));
+    assert_eq!(
+        activation.transform_owner_version(),
+        TransformOwnerVersion::new(60)
+    );
+
+    let permit = managed.egress_permit();
+    assert_eq!(permit.operation(), operation(1));
+    assert!(permit.request_digest() == expected_request_digest);
+    assert!(permit.body_digest() == expected_body_digest);
+    assert!(permit.envelope_digest() == expected_envelope_digest);
+    assert_eq!(permit.purpose(), VerifiedEgressPurpose::ModelInference);
+    assert_eq!(permit.sensitivity(), VerifiedSensitivityClass::PrivateCode);
+    assert_eq!(permit.max_outbound_bytes(), 128 * 1024);
+    assert_eq!(permit.target_count(), 2);
+    assert!(permit.fallback_allowed());
+    assert_eq!(permit.route_policy_revision(), RoutePolicyRevision::new(70));
+    assert_eq!(permit.consent_revision(), ConsentRevision::new(80));
+    assert_eq!(permit.expires_at_millis(), EXPIRES);
+    let targets = permit
+        .targets()
+        .map(|target| {
+            (
+                target.site(),
+                target.deployment(),
+                target.origin().as_bytes().to_vec(),
+                target.trust_tier(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0].0, SiteId::new(100));
+    assert_eq!(targets[0].1, ModelDeploymentId::new(200));
+    assert_eq!(targets[0].2, b"https://api.example.test");
+    assert_eq!(targets[0].3, 1);
+
+    let requirements = managed.capability_requirements();
+    assert_eq!(
+        requirements.tool_schema_revision(),
+        ToolSchemaRevision::new(1)
+    );
+    assert_eq!(
+        requirements.retrieval_schema_revision(),
+        RetrievalSchemaRevision::new(2)
+    );
+    assert_eq!(
+        requirements.client_adapter_version(),
+        AdapterVersion::new(30)
+    );
+    assert_eq!(
+        requirements.upstream_adapter_revision(),
+        AdapterContractRevision::new(3)
+    );
+    assert_eq!(requirements.handle_epoch(), HandleEpoch::new(4));
+    assert_eq!(requirements.handle_earliest_expiry_millis(), 0);
+    assert_eq!(
+        requirements.protocol_frame_revision(),
+        ProtocolFrameRevision::new(5)
+    );
+    assert_eq!(
+        requirements.continuation(),
+        VerifiedContinuationConstraint::FullHistoryPortable
+    );
+    assert!(requirements.local_handle_required());
 }
 
 #[test]
@@ -547,6 +707,31 @@ fn verification_runtime_seal_rejects_cross_instance_contexts_and_requests() {
         .receiver
         .accept(verified)
         .expect("同域 classifier receiver 应接受");
+}
+
+#[test]
+fn receiver_rechecks_registry_digest_before_issuing_accepted_typestate() {
+    let registry = build_registry();
+    let request = model_request();
+    let (bundle, claims) = managed_material(&registry, &request, nonce(43), IssuerEpoch::new(1));
+    let (attestation_wire, bundle_wire) = encode_managed(&bundle, &claims, &MANAGED_KEY);
+    let runtime = default_verifier(fresh_store());
+    let verified = runtime
+        .verify_managed(
+            signed_from_wires(request, &attestation_wire, &bundle_wire),
+            &managed_connection(&runtime, IssuerEpoch::new(1)),
+            &managed_active(&runtime, IssuerEpoch::new(1)),
+        )
+        .expect("合法 Managed 请求应通过 verifier");
+    let wrong_registry_receiver = runtime
+        .receiver
+        .with_registry_digest_for_test(RegistryDigest::from_bytes([0xA5; 32]));
+    assert_eq!(
+        wrong_registry_receiver
+            .accept(verified)
+            .expect_error("receiver 必须拒绝不同 registry digest"),
+        IngressReject::RegistryMismatch
+    );
 }
 
 #[test]
@@ -710,7 +895,14 @@ fn managed_bound_token_count_forbids_fallback_and_multiple_targets() {
         verified.dispatch_domain(),
         RequestDispatchDomain::BoundDeployment
     );
-    assert_eq!(verified.managed_target_count(), Some(1));
+    assert_eq!(
+        verified
+            .managed()
+            .expect("Managed 视图必须存在")
+            .egress_permit()
+            .target_count(),
+        1
+    );
 
     let registry = build_registry();
     let request = token_count_request();
@@ -945,10 +1137,28 @@ fn gateway_only_is_typed_scoped_and_never_grants_local_handles() {
         verified.authorization_kind(),
         VerifiedAuthorizationKind::GatewayOnlyExplicit
     );
-    assert!(!verified.local_handle_allowed());
-    assert_eq!(verified.gateway_only_maximum_trust_tier(), Some(2));
-    assert_eq!(verified.gateway_constraint_snapshot(), Some((204, 203, 2)));
     assert!(verified.proof_binding_is_nonzero());
+    let registry_digest = verifier.registry_digest();
+    let accepted = verifier
+        .receiver
+        .accept(verified)
+        .expect("同 runtime receiver 应接受 GatewayOnly 请求");
+    let gateway = accepted.gateway_only().expect("Gateway 视图必须存在");
+    assert!(!accepted.local_handle_allowed());
+    assert_eq!(gateway.listener(), ListenerId::new(200));
+    assert_eq!(gateway.token_scope(), IngressTokenScopeId::new(201));
+    assert_eq!(gateway.audience(), AudienceId::new(202));
+    assert_eq!(gateway.issued_at_millis(), NOW - 1_000);
+    assert_eq!(gateway.expires_at_millis(), NOW + 60_000);
+    assert_eq!(gateway.maximum_trust_tier(), 2);
+    assert_eq!(gateway.consent_revision(), ConsentRevision::new(204));
+    assert_eq!(
+        gateway.route_policy_revision(),
+        RoutePolicyRevision::new(203)
+    );
+    assert!(gateway.registry_digest() == registry_digest);
+    assert!(gateway.request_digest() == accepted.request_digest());
+    assert!(!gateway.local_handle_allowed());
 }
 
 #[test]
@@ -1039,10 +1249,23 @@ fn local_operation_scope_is_closed_and_has_no_egress_authority() {
         verified.authorization_kind(),
         VerifiedAuthorizationKind::None
     );
+    assert!(verified.proof_binding_is_nonzero());
+    let registry_digest = verifier.registry_digest();
+    let accepted = verifier
+        .receiver
+        .accept(verified)
+        .expect("同 runtime receiver 应接受 Local 请求");
     assert_eq!(
-        verified.local_auth_scope(),
+        accepted.local_auth_scope(),
         Some(LocalOperationAuthScope::PublicLiveness)
     );
+    assert_eq!(accepted.ingress_protocol(), IngressProtocol::BianmaLocal);
+    assert!(accepted.registry_digest() == registry_digest);
+    assert_eq!(
+        accepted.listener_scope(),
+        (ListenerId::new(300), IngressTokenScopeId::new(301))
+    );
+    assert!(!accepted.local_handle_allowed());
 
     let local_admin = verifier.listener_authority.local(
         ListenerId::new(300),
@@ -1080,6 +1303,7 @@ fn capability_claims(
         operation: operation(6),
         dispatch_domain: RequestDispatchDomain::BoundDeployment,
         registry_digest: registry.digest(),
+        site: SiteId::new(409),
         deployment: ModelDeploymentId::new(410),
         endpoint: EndpointId::new(411),
         origin: CanonicalOrigin::try_new(b"https://probe.example.test:8443")
@@ -1088,6 +1312,7 @@ fn capability_claims(
         account: AccountId::new(413),
         credential: CredentialId::new(414),
         adapter_contract_revision: AdapterContractRevision::new(415),
+        trust_tier: 1,
         management_scope: CapabilityManagementScopeId::new(416),
         request_digest: binding.request_digest,
         nonce: one_shot_nonce,
@@ -1124,14 +1349,35 @@ fn capability_scoped_binds_exact_target_account_credential_and_forbids_fallback(
         verified.authorization_kind(),
         VerifiedAuthorizationKind::CapabilityBound
     );
-    let binding = verified
+    assert!(verified.proof_binding_is_nonzero());
+    let registry_digest = verifier.registry_digest();
+    let accepted = verifier
+        .receiver
+        .accept(verified)
+        .expect("同 runtime receiver 应接受 Capability 请求");
+    assert_eq!(
+        accepted.ingress_protocol(),
+        IngressProtocol::BianmaManagement
+    );
+    assert!(accepted.registry_digest() == registry_digest);
+    let binding = accepted
         .capability_binding()
         .expect("Capability proof 应有绑定视图");
+    assert_eq!(binding.listener(), ListenerId::new(400));
+    assert_eq!(binding.token_scope(), IngressTokenScopeId::new(401));
+    assert_eq!(binding.audience(), AudienceId::new(402));
+    assert_eq!(binding.issuer_epoch(), IssuerEpoch::new(1));
+    assert_eq!(binding.issued_at_millis(), NOW - 1_000);
+    assert_eq!(binding.deadline_millis(), NOW + 60_000);
+    assert!(binding.registry_digest() == registry_digest);
+    assert!(binding.request_digest() == accepted.request_digest());
+    assert_eq!(binding.site(), SiteId::new(409));
     assert_eq!(binding.deployment(), ModelDeploymentId::new(410));
     assert_eq!(binding.endpoint(), EndpointId::new(411));
     assert_eq!(binding.account_selector(), AccountSelectorId::new(412));
     assert_eq!(binding.account(), AccountId::new(413));
     assert_eq!(binding.credential(), CredentialId::new(414));
+    assert_eq!(binding.trust_tier(), 1);
     assert_eq!(
         binding.origin().as_bytes(),
         b"https://probe.example.test:8443"
@@ -1181,7 +1427,7 @@ fn capability_every_wire_byte_is_authenticated_and_replay_is_rejected() {
 }
 
 #[test]
-fn capability_rejects_wrong_scope_expiry_fallback_and_non_probe_operations() {
+fn capability_rejects_wrong_scope_expiry_fallback_trust_and_non_probe_operations() {
     let registry = build_registry();
     let request = probe_request();
     let claims = capability_claims(&registry, &request, nonce(22));
@@ -1237,6 +1483,23 @@ fn capability_rejects_wrong_scope_expiry_fallback_and_non_probe_operations() {
                 EncodedCapabilityAuthorization::try_new(wire).expect("wire 有界"),
             )
             .expect_error("fallback!=Forbidden 必须拒绝"),
+        IngressReject::CapabilityAuthorizationMalformed
+    );
+
+    let registry = build_registry();
+    let request = probe_request();
+    let mut excessive_trust = capability_claims(&registry, &request, nonce(26));
+    excessive_trust.trust_tier = 3;
+    let wire = sign_capability_for_test(&excessive_trust, &CAPABILITY_KEY);
+    let verifier = default_verifier(fresh_store());
+    assert_eq!(
+        verifier
+            .verify_capability_probe(
+                request,
+                &capability_connection(&verifier),
+                EncodedCapabilityAuthorization::try_new(wire).expect("wire 有界"),
+            )
+            .expect_error("TrustTier 超出闭集必须拒绝"),
         IngressReject::CapabilityAuthorizationMalformed
     );
 
@@ -1467,6 +1730,7 @@ fn raw_request_and_route_spec_reject_smuggling_and_ambiguous_inputs() {
             json_body_policy(100),
             RequestKind::ModelInference,
             RequestDispatchDomain::RoutedPolicy,
+            IngressProtocol::AnthropicMessages,
             vec![b"authorization".to_vec()],
             None,
         )
@@ -1482,12 +1746,42 @@ fn raw_request_and_route_spec_reject_smuggling_and_ambiguous_inputs() {
             BodyPolicy::Forbidden,
             RequestKind::UnifiedModelCatalog,
             RequestDispatchDomain::Local,
+            IngressProtocol::BianmaLocal,
             vec![],
             Some(LocalOperationAuthScope::PublicLiveness),
         )
         .expect_error("模型目录不能借用 public_liveness scope"),
         IngressReject::RouteSpecInvalid
     );
+}
+
+#[test]
+fn route_registry_digest_binds_closed_ingress_protocol() {
+    let make_spec = |ingress_protocol| {
+        RouteSpec::try_new(
+            operation(900),
+            HttpMethod::Post,
+            b"/protocol-bound",
+            QueryPolicy::Forbidden,
+            json_body_policy(1_024),
+            RequestKind::ModelInference,
+            RequestDispatchDomain::RoutedPolicy,
+            ingress_protocol,
+            vec![],
+            None,
+        )
+        .expect("协议绑定 RouteSpec 合法")
+    };
+    let anthropic_spec = make_spec(IngressProtocol::AnthropicMessages);
+    assert_eq!(
+        anthropic_spec.ingress_protocol(),
+        IngressProtocol::AnthropicMessages
+    );
+    let anthropic = RouteSpecRegistry::compile(vec![anthropic_spec]).expect("Anthropic 注册表合法");
+    let openai =
+        RouteSpecRegistry::compile(vec![make_spec(IngressProtocol::OpenAiChatCompletions)])
+            .expect("OpenAI 注册表合法");
+    assert!(anthropic.digest() != openai.digest());
 }
 
 #[test]
@@ -1535,6 +1829,7 @@ fn route_registry_is_closed_and_preflight_is_exact() {
         BodyPolicy::Forbidden,
         RequestKind::UnifiedModelCatalog,
         RequestDispatchDomain::Local,
+        IngressProtocol::BianmaLocal,
         vec![],
         Some(LocalOperationAuthScope::LocalData),
     )
@@ -1547,6 +1842,7 @@ fn route_registry_is_closed_and_preflight_is_exact() {
         BodyPolicy::Forbidden,
         RequestKind::UnifiedModelCatalog,
         RequestDispatchDomain::Local,
+        IngressProtocol::BianmaLocal,
         vec![],
         Some(LocalOperationAuthScope::LocalData),
     )

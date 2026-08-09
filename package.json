@@ -14,7 +14,8 @@
     "format:check": "prettier --check \"src/**/*.{js,jsx,ts,tsx,css,json}\"",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest watch",
-    "audit:product-migration": "node scripts/audit-product-migration-guard.mjs"
+    "audit:product-migration": "node scripts/audit-product-migration-guard.mjs",
+    "audit:routing-core-boundary": "node scripts/audit-routing-core-boundary.mjs"
   },
   "keywords": [],
   "author": "CreatorEdition",

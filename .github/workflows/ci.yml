@@ -124,6 +124,23 @@ jobs:
       - name: Run ingress-contract doc tests
         run: cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --doc --locked
 
+      - name: Clippy routing-core
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked -- -D warnings
+
+      - name: Test routing-core
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked
+
+      - name: Run routing-core doc tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p routing-core --doc --locked
+
+      - name: Build routing contract docs without warnings
+        env:
+          RUSTDOCFLAGS: -D warnings -D missing-docs
+        run: cargo doc --manifest-path src-tauri/Cargo.toml -p ingress-contract -p routing-core --no-deps --locked
+
+      - name: Audit routing-core boundaries
+        run: node scripts/audit-routing-core-boundary.mjs
+
   ingress-contract-msrv:
     name: Ingress Contract MSRV
     runs-on: ubuntu-latest
@@ -139,3 +156,9 @@ jobs:
 
       - name: Run ingress-contract doc tests on declared MSRV
         run: cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --doc --locked
+
+      - name: Test routing-core on declared MSRV
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked
+
+      - name: Run routing-core doc tests on declared MSRV
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p routing-core --doc --locked

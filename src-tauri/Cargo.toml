@@ -9,7 +9,7 @@ edition = "2021"
 rust-version = "1.85.0"
 
 [workspace]
-members = ["crates/ingress-contract"]
+members = ["crates/ingress-contract", "crates/routing-core"]
 resolver = "2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

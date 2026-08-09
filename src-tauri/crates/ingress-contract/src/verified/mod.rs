@@ -5,12 +5,19 @@ use std::sync::Arc;
 use crate::{
     operation::MatchedOperation,
     request::SanitizedRequest,
-    signed::{AuthorizationBundle, CapabilityClaims},
-    AccountId, AccountSelectorId, AdapterContractRevision, AuthorizationBundleDigest,
-    CanonicalOrigin, CapabilityManagementScopeId, ConsentRevision, CredentialId, EndpointId,
-    HttpMethod, IngressTokenScopeId, IssuerEpoch, ListenerId, LocalOperationAuthScope,
-    ModelDeploymentId, OneShotNonce, OperationId, RegistryDigest, RequestDigest,
-    RequestDispatchDomain, RequestKind, RoutePolicyRevision,
+    signed::{
+        AllowedEgressTarget, AttestationClaims, AuthorizationBundle, CapabilityClaims,
+        ContextActivationKey, ContextCapabilityRequirements, ContextEgressPermit,
+        ContinuationConstraint, EgressPurpose, SensitivityClass,
+    },
+    AccountId, AccountSelectorId, AdapterContractRevision, AdapterVersion, AudienceId,
+    AuthorizationBundleDigest, BodyDigest, CanonicalOrigin, CapabilityManagementScopeId,
+    ClientFamilyId, ClientVersion, ConsentRevision, ContextPolicyVersion, CredentialId, EndpointId,
+    EnvelopeDigest, HandleEpoch, HttpMethod, IngressProtocol, IngressSchemaVersion,
+    IngressTokenScopeId, IssuerEpoch, ListenerId, LocalOperationAuthScope, ModelDeploymentId,
+    OperationId, ProtocolFrameRevision, RegistryDigest, RequestDigest, RequestDispatchDomain,
+    RequestKind, RetrievalSchemaRevision, RoutePolicyRevision, SiteId, ToolSchemaRevision,
+    TransformOwnerId, TransformOwnerVersion,
 };
 
 pub(crate) struct VerificationDomainSeal {
@@ -29,22 +36,39 @@ impl VerificationDomainSeal {
 /// 生成的请求即使密码学上自洽也会被拒绝。
 pub struct VerifiedIngressReceiver {
     domain_seal: Arc<VerificationDomainSeal>,
+    registry_digest: RegistryDigest,
 }
 
 impl VerifiedIngressReceiver {
-    pub(crate) fn new(domain_seal: Arc<VerificationDomainSeal>) -> Self {
-        Self { domain_seal }
+    pub(crate) fn new(
+        domain_seal: Arc<VerificationDomainSeal>,
+        registry_digest: RegistryDigest,
+    ) -> Self {
+        Self {
+            domain_seal,
+            registry_digest,
+        }
     }
 
-    /// 消费并确认请求属于当前生产验证域。
-    pub fn accept(
+    /// 消费并确认请求属于当前生产验证域及其固定 RouteSpec 注册表。
+    pub(crate) fn accept(
         &self,
         request: VerifiedIngressRequest,
-    ) -> Result<VerifiedIngressRequest, crate::IngressReject> {
-        if Arc::ptr_eq(&self.domain_seal, &request.domain_seal) {
-            Ok(request)
-        } else {
-            Err(crate::IngressReject::VerificationDomainMismatch)
+    ) -> Result<ReceiverAcceptedIngressRequest, crate::IngressReject> {
+        if !Arc::ptr_eq(&self.domain_seal, &request.domain_seal) {
+            return Err(crate::IngressReject::VerificationDomainMismatch);
+        }
+        if request.registry_digest() != self.registry_digest {
+            return Err(crate::IngressReject::RegistryMismatch);
+        }
+        Ok(ReceiverAcceptedIngressRequest { verified: request })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_registry_digest_for_test(&self, registry_digest: RegistryDigest) -> Self {
+        Self {
+            domain_seal: Arc::clone(&self.domain_seal),
+            registry_digest,
         }
     }
 }
@@ -95,14 +119,499 @@ impl<'a> VerifiedHeaderRef<'a> {
     }
 }
 
+/// 已验证 Managed egress 的用途闭集。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerifiedEgressPurpose {
+    /// 普通模型推理。
+    ModelInference,
+    /// 独立策略控制的辅助推理。
+    AuxiliaryInference,
+    /// 与真实请求绑定的远程精确 token 计数。
+    ExactUpstreamTokenCount,
+}
+
+/// 已验证 Managed 请求的敏感度闭集。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerifiedSensitivityClass {
+    /// 公开内容。
+    Public,
+    /// 内部内容。
+    Internal,
+    /// 私有代码或同等敏感内容。
+    PrivateCode,
+}
+
+/// 已验证上下文延续约束闭集。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerifiedContinuationConstraint {
+    /// 不允许延续。
+    None,
+    /// 完整历史可跨目标移植。
+    FullHistoryPortable,
+    /// 延续状态绑定特定 Provider。
+    ProviderStateful,
+}
+
+/// Managed 激活键的只读借用视图。
+pub struct VerifiedManagedActivationKeyView<'a> {
+    key: &'a ContextActivationKey,
+}
+
+impl VerifiedManagedActivationKeyView<'_> {
+    /// 返回客户端家族。
+    pub const fn client_family(&self) -> ClientFamilyId {
+        self.key.client_family
+    }
+
+    /// 返回客户端版本。
+    pub const fn client_version(&self) -> ClientVersion {
+        self.key.client_version
+    }
+
+    /// 返回客户端 Adapter 版本。
+    pub const fn adapter_version(&self) -> AdapterVersion {
+        self.key.adapter_version
+    }
+
+    /// 返回入站 schema 版本。
+    pub const fn ingress_schema_version(&self) -> IngressSchemaVersion {
+        self.key.ingress_schema_version
+    }
+
+    /// 返回 ContextPolicy 版本。
+    pub const fn context_policy_version(&self) -> ContextPolicyVersion {
+        self.key.context_policy_version
+    }
+
+    /// 返回唯一有损变换 owner。
+    pub const fn transform_owner(&self) -> TransformOwnerId {
+        self.key.transform_owner
+    }
+
+    /// 返回有损变换 owner 版本。
+    pub const fn transform_owner_version(&self) -> TransformOwnerVersion {
+        self.key.transform_owner_version
+    }
+}
+
+/// Managed EgressPermit 单个允许目标的只读借用视图。
+pub struct VerifiedManagedEgressTargetView<'a> {
+    target: &'a AllowedEgressTarget,
+}
+
+impl VerifiedManagedEgressTargetView<'_> {
+    /// 返回站点逻辑标识。
+    pub const fn site(&self) -> SiteId {
+        self.target.site
+    }
+
+    /// 返回模型部署逻辑标识。
+    pub const fn deployment(&self) -> ModelDeploymentId {
+        self.target.deployment
+    }
+
+    /// 返回已规范化且验证过的 Origin。
+    pub fn origin(&self) -> &CanonicalOrigin {
+        &self.target.origin
+    }
+
+    /// 返回目标 TrustTier。
+    pub const fn trust_tier(&self) -> u8 {
+        self.target.trust_tier
+    }
+}
+
+/// Managed EgressPermit 的只读借用视图。
+///
+/// 本视图不会暴露 permit nonce、原始 authorization bundle 或任何 MAC。
+pub struct VerifiedManagedEgressPermitView<'a> {
+    permit: &'a ContextEgressPermit,
+}
+
+impl<'a> VerifiedManagedEgressPermitView<'a> {
+    /// 返回绑定的 Operation。
+    pub const fn operation(&self) -> OperationId {
+        self.permit.operation
+    }
+
+    /// 返回绑定的原始请求摘要；不得写入普通日志。
+    pub const fn request_digest(&self) -> RequestDigest {
+        self.permit.request_digest
+    }
+
+    /// 返回绑定的原始正文摘要；不得写入普通日志。
+    pub const fn body_digest(&self) -> BodyDigest {
+        self.permit.body_digest
+    }
+
+    /// 返回绑定的 ContextEnvelope 摘要；不得写入普通日志。
+    pub const fn envelope_digest(&self) -> EnvelopeDigest {
+        self.permit.envelope_digest
+    }
+
+    /// 返回 egress 用途。
+    pub const fn purpose(&self) -> VerifiedEgressPurpose {
+        match self.permit.purpose {
+            EgressPurpose::ModelInference => VerifiedEgressPurpose::ModelInference,
+            EgressPurpose::AuxiliaryInference => VerifiedEgressPurpose::AuxiliaryInference,
+            EgressPurpose::ExactUpstreamTokenCount => {
+                VerifiedEgressPurpose::ExactUpstreamTokenCount
+            }
+        }
+    }
+
+    /// 返回数据敏感度。
+    pub const fn sensitivity(&self) -> VerifiedSensitivityClass {
+        match self.permit.sensitivity {
+            SensitivityClass::Public => VerifiedSensitivityClass::Public,
+            SensitivityClass::Internal => VerifiedSensitivityClass::Internal,
+            SensitivityClass::PrivateCode => VerifiedSensitivityClass::PrivateCode,
+        }
+    }
+
+    /// 返回允许的最大出站字节数。
+    pub const fn max_outbound_bytes(&self) -> u64 {
+        self.permit.max_outbound_bytes
+    }
+
+    /// 返回允许目标数量。
+    pub fn target_count(&self) -> usize {
+        self.permit.allowed_targets.len()
+    }
+
+    /// 依照 canonical 顺序遍历精确允许目标。
+    pub fn targets(
+        &self,
+    ) -> impl ExactSizeIterator<Item = VerifiedManagedEgressTargetView<'a>> + 'a {
+        self.permit
+            .allowed_targets
+            .iter()
+            .map(|target| VerifiedManagedEgressTargetView { target })
+    }
+
+    /// 返回是否允许按 permit 顺序 fallback。
+    pub const fn fallback_allowed(&self) -> bool {
+        self.permit.fallback_allowed
+    }
+
+    /// 返回 RoutePolicy 修订号。
+    pub const fn route_policy_revision(&self) -> RoutePolicyRevision {
+        self.permit.policy_revision
+    }
+
+    /// 返回用户 consent 修订号。
+    pub const fn consent_revision(&self) -> ConsentRevision {
+        self.permit.consent_revision
+    }
+
+    /// 返回 permit 绝对过期时间（Unix 毫秒）。
+    pub const fn expires_at_millis(&self) -> u64 {
+        self.permit.expires_at_millis
+    }
+}
+
+/// Managed CapabilityRequirements 的只读借用视图。
+pub struct VerifiedManagedCapabilityRequirementsView<'a> {
+    requirements: &'a ContextCapabilityRequirements,
+}
+
+impl VerifiedManagedCapabilityRequirementsView<'_> {
+    /// 返回工具 schema 修订号。
+    pub const fn tool_schema_revision(&self) -> ToolSchemaRevision {
+        self.requirements.tool_schema_revision
+    }
+
+    /// 返回检索 schema 修订号。
+    pub const fn retrieval_schema_revision(&self) -> RetrievalSchemaRevision {
+        self.requirements.retrieval_schema_revision
+    }
+
+    /// 返回客户端 Adapter 版本。
+    pub const fn client_adapter_version(&self) -> AdapterVersion {
+        self.requirements.client_adapter_version
+    }
+
+    /// 返回上游 Adapter 合同修订号。
+    pub const fn upstream_adapter_revision(&self) -> AdapterContractRevision {
+        self.requirements.upstream_adapter_revision
+    }
+
+    /// 返回本地 handle epoch。
+    pub const fn handle_epoch(&self) -> HandleEpoch {
+        self.requirements.handle_epoch
+    }
+
+    /// 返回所有 handle 中最早的绝对过期时间；零表示不携带 handle。
+    pub const fn handle_earliest_expiry_millis(&self) -> u64 {
+        self.requirements.handle_earliest_expiry_millis
+    }
+
+    /// 返回协议 frame schema 修订号。
+    pub const fn protocol_frame_revision(&self) -> ProtocolFrameRevision {
+        self.requirements.protocol_frame_revision
+    }
+
+    /// 返回上下文延续约束。
+    pub const fn continuation(&self) -> VerifiedContinuationConstraint {
+        match self.requirements.continuation {
+            ContinuationConstraint::None => VerifiedContinuationConstraint::None,
+            ContinuationConstraint::FullHistoryPortable => {
+                VerifiedContinuationConstraint::FullHistoryPortable
+            }
+            ContinuationConstraint::ProviderStateful => {
+                VerifiedContinuationConstraint::ProviderStateful
+            }
+        }
+    }
+
+    /// 返回后续执行是否必须具备本地检索 handle。
+    pub const fn local_handle_required(&self) -> bool {
+        self.requirements.local_handle_required
+    }
+}
+
+struct VerifiedManagedProofBinding {
+    listener: ListenerId,
+    token_scope: IngressTokenScopeId,
+    audience: AudienceId,
+    issuer_epoch: IssuerEpoch,
+    issued_at_millis: u64,
+    expires_at_millis: u64,
+    registry_digest: RegistryDigest,
+    authorization_bundle_digest: AuthorizationBundleDigest,
+    policy_revision: RoutePolicyRevision,
+    adapter_version: AdapterVersion,
+    transform_owner_version: TransformOwnerVersion,
+}
+
+struct VerifiedGatewayOnlyProofBinding {
+    listener: ListenerId,
+    token_scope: IngressTokenScopeId,
+    audience: AudienceId,
+    issued_at_millis: u64,
+    expires_at_millis: u64,
+    consent_revision: ConsentRevision,
+    route_policy_revision: RoutePolicyRevision,
+    registry_digest: RegistryDigest,
+    request_digest: RequestDigest,
+}
+
+struct VerifiedLocalProofBinding {
+    listener: ListenerId,
+    token_scope: IngressTokenScopeId,
+    auth_scope: LocalOperationAuthScope,
+    registry_digest: RegistryDigest,
+    request_digest: RequestDigest,
+}
+
+/// Managed proof 与 authorization bundle 的只读借用视图。
+///
+/// 本视图只暴露整体 authorization bundle 摘要，不暴露 MAC、nonce 或原始 bundle wire。
+pub struct VerifiedManagedRequestView<'a> {
+    proof: &'a VerifiedManagedProofBinding,
+    bundle: &'a AuthorizationBundle,
+}
+
+impl<'a> VerifiedManagedRequestView<'a> {
+    /// 返回绑定的 listener。
+    pub const fn listener(&self) -> ListenerId {
+        self.proof.listener
+    }
+
+    /// 返回绑定的入站 token scope。
+    pub const fn token_scope(&self) -> IngressTokenScopeId {
+        self.proof.token_scope
+    }
+
+    /// 返回证明 audience。
+    pub const fn audience(&self) -> AudienceId {
+        self.proof.audience
+    }
+
+    /// 返回签发 key epoch。
+    pub const fn issuer_epoch(&self) -> IssuerEpoch {
+        self.proof.issuer_epoch
+    }
+
+    /// 返回签发时间（Unix 毫秒）。
+    pub const fn issued_at_millis(&self) -> u64 {
+        self.proof.issued_at_millis
+    }
+
+    /// 返回证明绝对过期时间（Unix 毫秒）。
+    pub const fn expires_at_millis(&self) -> u64 {
+        self.proof.expires_at_millis
+    }
+
+    /// 返回证明绑定的 RouteSpec 注册表摘要。
+    pub const fn registry_digest(&self) -> RegistryDigest {
+        self.proof.registry_digest
+    }
+
+    /// 返回已验证的整体 authorization bundle 摘要；不得写入普通日志。
+    pub const fn authorization_bundle_digest(&self) -> AuthorizationBundleDigest {
+        self.proof.authorization_bundle_digest
+    }
+
+    /// 返回 RoutePolicy 修订号。
+    pub const fn route_policy_revision(&self) -> RoutePolicyRevision {
+        self.proof.policy_revision
+    }
+
+    /// 返回用户 consent 修订号。
+    pub const fn consent_revision(&self) -> ConsentRevision {
+        self.bundle.permit.consent_revision
+    }
+
+    /// 返回 attestation 绑定的客户端 Adapter 版本。
+    pub const fn adapter_version(&self) -> AdapterVersion {
+        self.proof.adapter_version
+    }
+
+    /// 返回 attestation 绑定的有损变换 owner 版本。
+    pub const fn transform_owner_version(&self) -> TransformOwnerVersion {
+        self.proof.transform_owner_version
+    }
+
+    /// 返回唯一有损变换 owner。
+    pub const fn transform_owner(&self) -> TransformOwnerId {
+        self.bundle.activation_key.transform_owner
+    }
+
+    /// 返回完整激活键的只读借用视图。
+    pub const fn activation_key(&self) -> VerifiedManagedActivationKeyView<'a> {
+        VerifiedManagedActivationKeyView {
+            key: &self.bundle.activation_key,
+        }
+    }
+
+    /// 返回 EgressPermit 的只读借用视图。
+    pub const fn egress_permit(&self) -> VerifiedManagedEgressPermitView<'a> {
+        VerifiedManagedEgressPermitView {
+            permit: &self.bundle.permit,
+        }
+    }
+
+    /// 返回 CapabilityRequirements 的只读借用视图。
+    pub const fn capability_requirements(&self) -> VerifiedManagedCapabilityRequirementsView<'a> {
+        VerifiedManagedCapabilityRequirementsView {
+            requirements: &self.bundle.requirements,
+        }
+    }
+}
+
+/// GatewayOnly 本机 consent 约束的只读借用视图。
+pub struct VerifiedGatewayOnlyView<'a> {
+    proof: &'a VerifiedGatewayOnlyProofBinding,
+    maximum_trust_tier: u8,
+    local_handle_allowed: bool,
+}
+
+impl VerifiedGatewayOnlyView<'_> {
+    /// 返回绑定的 listener。
+    pub const fn listener(&self) -> ListenerId {
+        self.proof.listener
+    }
+
+    /// 返回绑定的入站 token scope。
+    pub const fn token_scope(&self) -> IngressTokenScopeId {
+        self.proof.token_scope
+    }
+
+    /// 返回 consent audience。
+    pub const fn audience(&self) -> AudienceId {
+        self.proof.audience
+    }
+
+    /// 返回 consent 签发时间（Unix 毫秒）。
+    pub const fn issued_at_millis(&self) -> u64 {
+        self.proof.issued_at_millis
+    }
+
+    /// 返回 consent 绝对过期时间（Unix 毫秒）。
+    pub const fn expires_at_millis(&self) -> u64 {
+        self.proof.expires_at_millis
+    }
+
+    /// 返回 consent 修订号。
+    pub const fn consent_revision(&self) -> ConsentRevision {
+        self.proof.consent_revision
+    }
+
+    /// 返回 RoutePolicy 修订号。
+    pub const fn route_policy_revision(&self) -> RoutePolicyRevision {
+        self.proof.route_policy_revision
+    }
+
+    /// 返回绑定的 RouteSpec 注册表摘要。
+    pub const fn registry_digest(&self) -> RegistryDigest {
+        self.proof.registry_digest
+    }
+
+    /// 返回绑定的原始请求摘要；不得写入普通日志。
+    pub const fn request_digest(&self) -> RequestDigest {
+        self.proof.request_digest
+    }
+
+    /// 返回 consent 允许的最高 TrustTier。
+    pub const fn maximum_trust_tier(&self) -> u8 {
+        self.maximum_trust_tier
+    }
+
+    /// GatewayOnly 永远不能授予 LocalHandle/retrieval authority。
+    pub const fn local_handle_allowed(&self) -> bool {
+        self.local_handle_allowed
+    }
+}
+
 /// CapabilityScoped 精确绑定的只读视图。
 ///
-/// 该视图只能从 [`VerifiedIngressRequest`] 借用，不能据此构造或提升权限。
+/// 该视图只能从 receiver 接受后的 crate-private typestate 借用，不能据此构造或提升权限。
 pub struct VerifiedCapabilityBindingView<'a> {
     claims: &'a CapabilityClaims,
 }
 
 impl<'a> VerifiedCapabilityBindingView<'a> {
+    /// 返回绑定的 listener。
+    pub const fn listener(&self) -> ListenerId {
+        self.claims.listener
+    }
+
+    /// 返回绑定的入站 token scope。
+    pub const fn token_scope(&self) -> IngressTokenScopeId {
+        self.claims.token_scope
+    }
+
+    /// 返回授权 audience。
+    pub const fn audience(&self) -> AudienceId {
+        self.claims.audience
+    }
+
+    /// 返回签发 key epoch。
+    pub const fn issuer_epoch(&self) -> IssuerEpoch {
+        self.claims.issuer_epoch
+    }
+
+    /// 返回签发时间（Unix 毫秒）。
+    pub const fn issued_at_millis(&self) -> u64 {
+        self.claims.issued_at_millis
+    }
+
+    /// 返回绑定的 RouteSpec 注册表摘要。
+    pub const fn registry_digest(&self) -> RegistryDigest {
+        self.claims.registry_digest
+    }
+
+    /// 返回绑定的原始请求摘要；不得写入普通日志。
+    pub const fn request_digest(&self) -> RequestDigest {
+        self.claims.request_digest
+    }
+
+    /// 返回唯一站点。
+    pub const fn site(&self) -> SiteId {
+        self.claims.site
+    }
+
     /// 返回唯一模型部署。
     pub const fn deployment(&self) -> ModelDeploymentId {
         self.claims.deployment
@@ -138,6 +647,11 @@ impl<'a> VerifiedCapabilityBindingView<'a> {
         self.claims.adapter_contract_revision
     }
 
+    /// 返回授权签名绑定的 TrustTier。
+    pub const fn trust_tier(&self) -> u8 {
+        self.claims.trust_tier
+    }
+
     /// 返回管理鉴权 scope。
     pub const fn management_scope(&self) -> CapabilityManagementScopeId {
         self.claims.management_scope
@@ -154,42 +668,24 @@ impl<'a> VerifiedCapabilityBindingView<'a> {
     }
 }
 
-pub(crate) enum VerifiedProof {
-    Managed {
-        issuer_epoch: IssuerEpoch,
-        nonce: OneShotNonce,
-        authorization_bundle_digest: AuthorizationBundleDigest,
-    },
-    GatewayOnlyScopedConsent {
-        listener: ListenerId,
-        token_scope: IngressTokenScopeId,
-        consent_revision: ConsentRevision,
-        route_policy_revision: RoutePolicyRevision,
-        registry_digest: RegistryDigest,
-        request_digest: RequestDigest,
-    },
-    LocalOperationScoped {
-        listener: ListenerId,
-        token_scope: IngressTokenScopeId,
-        auth_scope: LocalOperationAuthScope,
-        request_digest: RequestDigest,
-    },
+enum VerifiedProof {
+    Managed(VerifiedManagedProofBinding),
+    GatewayOnlyScopedConsent(VerifiedGatewayOnlyProofBinding),
+    LocalOperationScoped(VerifiedLocalProofBinding),
     CapabilityScoped(CapabilityClaims),
 }
 
-pub(crate) enum VerifiedAuthorization {
+enum VerifiedAuthorization {
     None,
     Managed(Box<AuthorizationBundle>),
     GatewayOnlyExplicit {
-        consent_revision: ConsentRevision,
-        route_policy_revision: RoutePolicyRevision,
         maximum_trust_tier: u8,
         local_handle_allowed: bool,
     },
     CapabilityBound,
 }
 
-/// 唯一能进入后续 classifier 的入站请求。
+/// verifier 产生、但尚未由生产 receiver 接受的 opaque 入站请求。
 ///
 /// 字段私有；本类型不实现 `Clone`、`Copy`、`Debug`、`Default` 或任何 Serde trait。
 pub struct VerifiedIngressRequest {
@@ -205,20 +701,26 @@ impl VerifiedIngressRequest {
         domain_seal: Arc<VerificationDomainSeal>,
         operation: MatchedOperation,
         request: SanitizedRequest,
-        issuer_epoch: IssuerEpoch,
-        nonce: OneShotNonce,
-        authorization_bundle_digest: AuthorizationBundleDigest,
+        claims: AttestationClaims,
         authorization_bundle: AuthorizationBundle,
     ) -> Self {
         Self {
             domain_seal,
             operation,
             request,
-            proof: VerifiedProof::Managed {
-                issuer_epoch,
-                nonce,
-                authorization_bundle_digest,
-            },
+            proof: VerifiedProof::Managed(VerifiedManagedProofBinding {
+                listener: claims.listener,
+                token_scope: claims.token_scope,
+                audience: claims.audience,
+                issuer_epoch: claims.issuer_epoch,
+                issued_at_millis: claims.issued_at_millis,
+                expires_at_millis: claims.expires_at_millis,
+                registry_digest: claims.registry_digest,
+                authorization_bundle_digest: claims.authorization_bundle_digest,
+                policy_revision: claims.policy_revision,
+                adapter_version: claims.adapter_version,
+                transform_owner_version: claims.transform_owner_version,
+            }),
             authorization: VerifiedAuthorization::Managed(Box::new(authorization_bundle)),
         }
     }
@@ -230,6 +732,9 @@ impl VerifiedIngressRequest {
         request: SanitizedRequest,
         listener: ListenerId,
         token_scope: IngressTokenScopeId,
+        audience: AudienceId,
+        issued_at_millis: u64,
+        expires_at_millis: u64,
         consent_revision: ConsentRevision,
         route_policy_revision: RoutePolicyRevision,
         registry_digest: RegistryDigest,
@@ -240,23 +745,25 @@ impl VerifiedIngressRequest {
             domain_seal,
             operation,
             request,
-            proof: VerifiedProof::GatewayOnlyScopedConsent {
+            proof: VerifiedProof::GatewayOnlyScopedConsent(VerifiedGatewayOnlyProofBinding {
                 listener,
                 token_scope,
+                audience,
+                issued_at_millis,
+                expires_at_millis,
                 consent_revision,
                 route_policy_revision,
                 registry_digest,
                 request_digest,
-            },
+            }),
             authorization: VerifiedAuthorization::GatewayOnlyExplicit {
-                consent_revision,
-                route_policy_revision,
                 maximum_trust_tier,
                 local_handle_allowed: false,
             },
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_local(
         domain_seal: Arc<VerificationDomainSeal>,
         operation: MatchedOperation,
@@ -264,18 +771,20 @@ impl VerifiedIngressRequest {
         listener: ListenerId,
         token_scope: IngressTokenScopeId,
         auth_scope: LocalOperationAuthScope,
+        registry_digest: RegistryDigest,
         request_digest: RequestDigest,
     ) -> Self {
         Self {
             domain_seal,
             operation,
             request,
-            proof: VerifiedProof::LocalOperationScoped {
+            proof: VerifiedProof::LocalOperationScoped(VerifiedLocalProofBinding {
                 listener,
                 token_scope,
                 auth_scope,
+                registry_digest,
                 request_digest,
-            },
+            }),
             authorization: VerifiedAuthorization::None,
         }
     }
@@ -295,35 +804,43 @@ impl VerifiedIngressRequest {
         }
     }
 
-    /// 返回已由 Gateway 重新匹配的 Operation ID。
-    pub const fn operation(&self) -> OperationId {
+    pub(crate) const fn operation(&self) -> OperationId {
         self.operation.spec.operation
     }
 
-    /// 返回已注册请求语义。
-    pub const fn request_kind(&self) -> RequestKind {
+    pub(crate) const fn request_kind(&self) -> RequestKind {
         self.operation.spec.kind
     }
 
-    /// 返回唯一分发域。
-    pub const fn dispatch_domain(&self) -> RequestDispatchDomain {
+    pub(crate) const fn dispatch_domain(&self) -> RequestDispatchDomain {
         self.operation.spec.dispatch_domain
     }
 
-    /// 返回证明种类，不暴露可伪造 proof variant。
-    pub const fn proof_kind(&self) -> VerifiedProofKind {
+    pub(crate) const fn ingress_protocol(&self) -> IngressProtocol {
+        self.operation.spec.ingress_protocol
+    }
+
+    pub(crate) const fn registry_digest(&self) -> RegistryDigest {
         match &self.proof {
-            VerifiedProof::Managed { .. } => VerifiedProofKind::Managed,
-            VerifiedProof::GatewayOnlyScopedConsent { .. } => {
+            VerifiedProof::Managed(proof) => proof.registry_digest,
+            VerifiedProof::GatewayOnlyScopedConsent(proof) => proof.registry_digest,
+            VerifiedProof::LocalOperationScoped(proof) => proof.registry_digest,
+            VerifiedProof::CapabilityScoped(claims) => claims.registry_digest,
+        }
+    }
+
+    pub(crate) const fn proof_kind(&self) -> VerifiedProofKind {
+        match &self.proof {
+            VerifiedProof::Managed(_) => VerifiedProofKind::Managed,
+            VerifiedProof::GatewayOnlyScopedConsent(_) => {
                 VerifiedProofKind::GatewayOnlyScopedConsent
             }
-            VerifiedProof::LocalOperationScoped { .. } => VerifiedProofKind::LocalOperationScoped,
+            VerifiedProof::LocalOperationScoped(_) => VerifiedProofKind::LocalOperationScoped,
             VerifiedProof::CapabilityScoped(_) => VerifiedProofKind::CapabilityScoped,
         }
     }
 
-    /// 返回授权约束种类。
-    pub const fn authorization_kind(&self) -> VerifiedAuthorizationKind {
+    pub(crate) const fn authorization_kind(&self) -> VerifiedAuthorizationKind {
         match &self.authorization {
             VerifiedAuthorization::None => VerifiedAuthorizationKind::None,
             VerifiedAuthorization::Managed(_) => VerifiedAuthorizationKind::ManagedEgress,
@@ -334,31 +851,26 @@ impl VerifiedIngressRequest {
         }
     }
 
-    /// 返回清理后的方法。
-    pub const fn method(&self) -> HttpMethod {
+    pub(crate) const fn method(&self) -> HttpMethod {
         self.request.method
     }
 
-    /// 返回已验证 target。
-    pub fn target(&self) -> &[u8] {
+    pub(crate) fn target(&self) -> &[u8] {
         &self.request.target
     }
 
-    /// 返回原始正文的只读借用。
-    pub fn body(&self) -> &[u8] {
+    pub(crate) fn body(&self) -> &[u8] {
         &self.request.body
     }
 
-    /// 遍历已移除入站认证、Content-Length 和证明材料的 Header。
-    pub fn headers(&self) -> impl Iterator<Item = VerifiedHeaderRef<'_>> {
+    pub(crate) fn headers(&self) -> impl Iterator<Item = VerifiedHeaderRef<'_>> {
         self.request.headers.iter().map(|header| VerifiedHeaderRef {
             name: &header.name,
             value: &header.value,
         })
     }
 
-    /// CapabilityScoped 成功时返回精确绑定视图。
-    pub fn capability_binding(&self) -> Option<VerifiedCapabilityBindingView<'_>> {
+    pub(crate) fn capability_binding(&self) -> Option<VerifiedCapabilityBindingView<'_>> {
         match &self.proof {
             VerifiedProof::CapabilityScoped(claims) => {
                 Some(VerifiedCapabilityBindingView { claims })
@@ -367,121 +879,35 @@ impl VerifiedIngressRequest {
         }
     }
 
-    /// 返回证明绑定的 request digest；Managed 结果从已验 MAC 的 bundle 读取。
-    pub fn request_digest(&self) -> RequestDigest {
+    pub(crate) fn request_digest(&self) -> RequestDigest {
         match &self.proof {
-            VerifiedProof::Managed { .. } => match &self.authorization {
+            VerifiedProof::Managed(_) => match &self.authorization {
                 VerifiedAuthorization::Managed(bundle) => bundle.permit.request_digest,
                 _ => unreachable!(),
             },
-            VerifiedProof::GatewayOnlyScopedConsent { request_digest, .. }
-            | VerifiedProof::LocalOperationScoped { request_digest, .. } => *request_digest,
+            VerifiedProof::GatewayOnlyScopedConsent(proof) => proof.request_digest,
+            VerifiedProof::LocalOperationScoped(proof) => proof.request_digest,
             VerifiedProof::CapabilityScoped(claims) => claims.request_digest,
         }
     }
 
-    /// 返回 listener/token scope 绑定；Managed 与 Capability 由各自签名 claims 持有。
-    pub const fn listener_scope(&self) -> Option<(ListenerId, IngressTokenScopeId)> {
+    pub(crate) const fn listener_scope(&self) -> (ListenerId, IngressTokenScopeId) {
         match &self.proof {
-            VerifiedProof::GatewayOnlyScopedConsent {
-                listener,
-                token_scope,
-                ..
-            }
-            | VerifiedProof::LocalOperationScoped {
-                listener,
-                token_scope,
-                ..
-            } => Some((*listener, *token_scope)),
-            VerifiedProof::CapabilityScoped(claims) => Some((claims.listener, claims.token_scope)),
-            VerifiedProof::Managed { .. } => None,
+            VerifiedProof::Managed(proof) => (proof.listener, proof.token_scope),
+            VerifiedProof::GatewayOnlyScopedConsent(proof) => (proof.listener, proof.token_scope),
+            VerifiedProof::LocalOperationScoped(proof) => (proof.listener, proof.token_scope),
+            VerifiedProof::CapabilityScoped(claims) => (claims.listener, claims.token_scope),
         }
     }
 
-    /// 返回 Managed proof 的 key epoch。
-    pub const fn managed_issuer_epoch(&self) -> Option<IssuerEpoch> {
+    pub(crate) const fn local_auth_scope(&self) -> Option<LocalOperationAuthScope> {
         match &self.proof {
-            VerifiedProof::Managed { issuer_epoch, .. } => Some(*issuer_epoch),
+            VerifiedProof::LocalOperationScoped(proof) => Some(proof.auth_scope),
             _ => None,
         }
     }
 
-    /// 返回 Managed proof 的一次性 nonce；调用方不得写入普通日志。
-    pub const fn managed_nonce(&self) -> Option<&OneShotNonce> {
-        match &self.proof {
-            VerifiedProof::Managed { nonce, .. } => Some(nonce),
-            _ => None,
-        }
-    }
-
-    /// 返回整体授权 bundle 的已验证摘要；调用方不得写入普通日志。
-    pub const fn managed_authorization_bundle_digest(&self) -> Option<&AuthorizationBundleDigest> {
-        match &self.proof {
-            VerifiedProof::Managed {
-                authorization_bundle_digest,
-                ..
-            } => Some(authorization_bundle_digest),
-            _ => None,
-        }
-    }
-
-    /// 返回 GatewayOnly proof 的 consent/RoutePolicy/registry 绑定。
-    pub const fn gateway_only_revisions(
-        &self,
-    ) -> Option<(ConsentRevision, RoutePolicyRevision, RegistryDigest)> {
-        match &self.proof {
-            VerifiedProof::GatewayOnlyScopedConsent {
-                consent_revision,
-                route_policy_revision,
-                registry_digest,
-                ..
-            } => Some((*consent_revision, *route_policy_revision, *registry_digest)),
-            _ => None,
-        }
-    }
-
-    /// 返回 Local proof 的精确 auth scope。
-    pub const fn local_auth_scope(&self) -> Option<LocalOperationAuthScope> {
-        match &self.proof {
-            VerifiedProof::LocalOperationScoped { auth_scope, .. } => Some(*auth_scope),
-            _ => None,
-        }
-    }
-
-    /// 返回 Managed Permit 的目标数量；目标内容只通过后续约束视图使用。
-    pub fn managed_target_count(&self) -> Option<usize> {
-        match &self.authorization {
-            VerifiedAuthorization::Managed(bundle) => Some(bundle.permit.allowed_targets.len()),
-            _ => None,
-        }
-    }
-
-    /// 返回 GatewayOnly 本地 consent 允许的最高 TrustTier。
-    pub const fn gateway_only_maximum_trust_tier(&self) -> Option<u8> {
-        match &self.authorization {
-            VerifiedAuthorization::GatewayOnlyExplicit {
-                maximum_trust_tier, ..
-            } => Some(*maximum_trust_tier),
-            _ => None,
-        }
-    }
-
-    /// 返回 GatewayOnly 授权约束自身的 revision 绑定。
-    pub const fn gateway_only_constraint_revisions(
-        &self,
-    ) -> Option<(ConsentRevision, RoutePolicyRevision)> {
-        match &self.authorization {
-            VerifiedAuthorization::GatewayOnlyExplicit {
-                consent_revision,
-                route_policy_revision,
-                ..
-            } => Some((*consent_revision, *route_policy_revision)),
-            _ => None,
-        }
-    }
-
-    /// GatewayOnly 永远不能授予 LocalHandle/retrieval authority。
-    pub fn local_handle_allowed(&self) -> bool {
+    pub(crate) fn local_handle_allowed(&self) -> bool {
         match &self.authorization {
             VerifiedAuthorization::Managed(bundle) => bundle.requirements.local_handle_required,
             VerifiedAuthorization::GatewayOnlyExplicit {
@@ -491,66 +917,163 @@ impl VerifiedIngressRequest {
             VerifiedAuthorization::None | VerifiedAuthorization::CapabilityBound => false,
         }
     }
+
+    pub(crate) fn managed(&self) -> Option<VerifiedManagedRequestView<'_>> {
+        match (&self.proof, &self.authorization) {
+            (VerifiedProof::Managed(proof), VerifiedAuthorization::Managed(bundle)) => {
+                Some(VerifiedManagedRequestView { proof, bundle })
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn gateway_only(&self) -> Option<VerifiedGatewayOnlyView<'_>> {
+        match (&self.proof, &self.authorization) {
+            (
+                VerifiedProof::GatewayOnlyScopedConsent(proof),
+                VerifiedAuthorization::GatewayOnlyExplicit {
+                    maximum_trust_tier,
+                    local_handle_allowed,
+                    ..
+                },
+            ) => Some(VerifiedGatewayOnlyView {
+                proof,
+                maximum_trust_tier: *maximum_trust_tier,
+                local_handle_allowed: *local_handle_allowed,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// 已由生产 receiver 接受、唯一允许 classifier 读取的入站请求 typestate。
+///
+/// 字段私有；本类型不实现 `Clone`、`Copy`、`Debug`、`Default` 或任何 Serde trait。
+pub(crate) struct ReceiverAcceptedIngressRequest {
+    verified: VerifiedIngressRequest,
+}
+
+impl ReceiverAcceptedIngressRequest {
+    /// 返回已由 Gateway 重新匹配的 Operation ID。
+    pub(crate) const fn operation(&self) -> OperationId {
+        self.verified.operation()
+    }
+
+    /// 返回已注册请求语义。
+    pub(crate) const fn request_kind(&self) -> RequestKind {
+        self.verified.request_kind()
+    }
+
+    /// 返回唯一分发域。
+    pub(crate) const fn dispatch_domain(&self) -> RequestDispatchDomain {
+        self.verified.dispatch_domain()
+    }
+
+    /// 返回由 RouteSpec 固定的入站协议。
+    pub(crate) const fn ingress_protocol(&self) -> IngressProtocol {
+        self.verified.ingress_protocol()
+    }
+
+    /// 返回 receiver 已复核的 RouteSpec 注册表摘要。
+    pub(crate) const fn registry_digest(&self) -> RegistryDigest {
+        self.verified.registry_digest()
+    }
+
+    /// 返回证明种类，不暴露可伪造 proof variant。
+    pub(crate) const fn proof_kind(&self) -> VerifiedProofKind {
+        self.verified.proof_kind()
+    }
+
+    /// 返回授权约束种类。
+    pub(crate) const fn authorization_kind(&self) -> VerifiedAuthorizationKind {
+        self.verified.authorization_kind()
+    }
+
+    /// 返回清理后的 HTTP 方法。
+    pub(crate) const fn method(&self) -> HttpMethod {
+        self.verified.method()
+    }
+
+    /// 返回已验证的原始 request target。
+    pub(crate) fn target(&self) -> &[u8] {
+        self.verified.target()
+    }
+
+    /// 返回原始正文的只读借用。
+    pub(crate) fn body(&self) -> &[u8] {
+        self.verified.body()
+    }
+
+    /// 遍历已移除入站认证、Content-Length 和证明材料的 Header。
+    pub(crate) fn headers(&self) -> impl Iterator<Item = VerifiedHeaderRef<'_>> {
+        self.verified.headers()
+    }
+
+    /// 返回证明绑定的原始请求摘要；不得写入普通日志。
+    pub(crate) fn request_digest(&self) -> RequestDigest {
+        self.verified.request_digest()
+    }
+
+    /// 返回 proof 绑定的 listener 与入站 token scope。
+    pub(crate) const fn listener_scope(&self) -> (ListenerId, IngressTokenScopeId) {
+        self.verified.listener_scope()
+    }
+
+    /// Managed 成功时返回不含 MAC、nonce 与原始 bundle 的只读视图。
+    pub(crate) fn managed(&self) -> Option<VerifiedManagedRequestView<'_>> {
+        self.verified.managed()
+    }
+
+    /// GatewayOnly 成功时返回本机 consent 约束只读视图。
+    pub(crate) fn gateway_only(&self) -> Option<VerifiedGatewayOnlyView<'_>> {
+        self.verified.gateway_only()
+    }
+
+    /// Local 成功时返回精确 auth scope。
+    pub(crate) const fn local_auth_scope(&self) -> Option<LocalOperationAuthScope> {
+        self.verified.local_auth_scope()
+    }
+
+    /// CapabilityScoped 成功时返回精确部署/账户/凭据绑定视图。
+    pub(crate) fn capability_binding(&self) -> Option<VerifiedCapabilityBindingView<'_>> {
+        self.verified.capability_binding()
+    }
+
+    /// 返回当前授权是否要求或允许 LocalHandle。
+    pub(crate) fn local_handle_allowed(&self) -> bool {
+        self.verified.local_handle_allowed()
+    }
 }
 
 #[cfg(test)]
 impl VerifiedIngressRequest {
     pub(crate) fn proof_binding_is_nonzero(&self) -> bool {
         match &self.proof {
-            VerifiedProof::Managed {
-                issuer_epoch,
-                nonce,
-                authorization_bundle_digest,
-            } => {
-                issuer_epoch.get() != 0
-                    && nonce.as_bytes() != &[0; 16]
-                    && authorization_bundle_digest.as_bytes() != &[0; 32]
+            VerifiedProof::Managed(proof) => {
+                proof.issuer_epoch.get() != 0
+                    && proof.authorization_bundle_digest.as_bytes() != &[0; 32]
+                    && proof.registry_digest.as_bytes() != &[0; 32]
             }
-            VerifiedProof::GatewayOnlyScopedConsent {
-                listener,
-                token_scope,
-                consent_revision,
-                route_policy_revision,
-                registry_digest,
-                request_digest,
-            } => {
-                listener.get() != 0
-                    && token_scope.get() != 0
-                    && consent_revision.get() != 0
-                    && route_policy_revision.get() != 0
-                    && registry_digest.as_bytes() != &[0; 32]
-                    && request_digest.as_bytes() != &[0; 32]
+            VerifiedProof::GatewayOnlyScopedConsent(proof) => {
+                proof.listener.get() != 0
+                    && proof.token_scope.get() != 0
+                    && proof.consent_revision.get() != 0
+                    && proof.route_policy_revision.get() != 0
+                    && proof.registry_digest.as_bytes() != &[0; 32]
+                    && proof.request_digest.as_bytes() != &[0; 32]
             }
-            VerifiedProof::LocalOperationScoped {
-                listener,
-                token_scope,
-                auth_scope,
-                request_digest,
-            } => {
-                let _ = auth_scope;
-                listener.get() != 0
-                    && token_scope.get() != 0
-                    && request_digest.as_bytes() != &[0; 32]
+            VerifiedProof::LocalOperationScoped(proof) => {
+                let _ = proof.auth_scope;
+                proof.listener.get() != 0
+                    && proof.token_scope.get() != 0
+                    && proof.registry_digest.as_bytes() != &[0; 32]
+                    && proof.request_digest.as_bytes() != &[0; 32]
             }
             VerifiedProof::CapabilityScoped(claims) => {
-                claims.nonce.as_bytes() != &[0; 16] && claims.request_digest.as_bytes() != &[0; 32]
+                claims.nonce.as_bytes() != &[0; 16]
+                    && claims.registry_digest.as_bytes() != &[0; 32]
+                    && claims.request_digest.as_bytes() != &[0; 32]
             }
-        }
-    }
-
-    pub(crate) fn gateway_constraint_snapshot(&self) -> Option<(u64, u64, u8)> {
-        match &self.authorization {
-            VerifiedAuthorization::GatewayOnlyExplicit {
-                consent_revision,
-                route_policy_revision,
-                maximum_trust_tier,
-                ..
-            } => Some((
-                consent_revision.get(),
-                route_policy_revision.get(),
-                *maximum_trust_tier,
-            )),
-            _ => None,
         }
     }
 }

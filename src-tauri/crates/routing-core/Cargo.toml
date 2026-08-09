@@ -1,0 +1,14 @@
+[package]
+name = "routing-core"
+version = "0.0.1"
+description = "Pure Rust closed request classifier contract for routing-core v2"
+edition = "2021"
+rust-version = "1.85.0"
+license = "MIT"
+publish = false
+
+[dependencies]
+ingress-contract = { path = "../ingress-contract" }
+
+[dev-dependencies]
+serde = "1"

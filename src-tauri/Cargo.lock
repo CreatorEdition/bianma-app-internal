@@ -4449,6 +4449,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "routing-core"
+version = "0.0.1"
+dependencies = [
+ "ingress-contract",
+ "serde",
+]
+
+[[package]]
 name = "rquickjs"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

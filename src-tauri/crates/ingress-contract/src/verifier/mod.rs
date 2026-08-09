@@ -468,6 +468,7 @@ impl IngressVerifier {
         nonce_store: Arc<dyn OneShotNonceStore>,
     ) -> IngressVerifierRuntime {
         let domain_seal = Arc::new(VerificationDomainSeal::new());
+        let registry_digest = registry.digest();
         let verifier = Self {
             domain_seal: Arc::clone(&domain_seal),
             registry,
@@ -488,7 +489,7 @@ impl IngressVerifier {
             managed_activation_authority: ManagedActivationAuthority {
                 domain_seal: Arc::clone(&domain_seal),
             },
-            receiver: VerifiedIngressReceiver::new(domain_seal),
+            receiver: VerifiedIngressReceiver::new(domain_seal, registry_digest),
         }
     }
 
@@ -552,9 +553,7 @@ impl IngressVerifier {
             Arc::clone(&self.domain_seal),
             binding.operation,
             sanitized_request,
-            attestation.claims.issuer_epoch,
-            attestation.claims.nonce,
-            bundle_digest,
+            attestation.claims,
             bundle,
         ))
     }
@@ -583,6 +582,9 @@ impl IngressVerifier {
             sanitized_request,
             connection.listener,
             connection.token_scope,
+            connection.audience,
+            consent.issued_at_millis,
+            consent.expires_at_millis,
             consent.consent_revision,
             consent.route_policy_revision,
             self.registry.digest(),
@@ -614,6 +616,7 @@ impl IngressVerifier {
             connection.listener,
             connection.token_scope,
             connection.auth_scope,
+            self.registry.digest(),
             binding.request_digest,
         ))
     }

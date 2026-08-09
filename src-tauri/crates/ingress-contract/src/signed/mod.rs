@@ -284,6 +284,7 @@ pub(crate) struct CapabilityClaims {
     pub(crate) operation: OperationId,
     pub(crate) dispatch_domain: RequestDispatchDomain,
     pub(crate) registry_digest: RegistryDigest,
+    pub(crate) site: SiteId,
     pub(crate) deployment: ModelDeploymentId,
     pub(crate) endpoint: EndpointId,
     pub(crate) origin: CanonicalOrigin,
@@ -291,6 +292,7 @@ pub(crate) struct CapabilityClaims {
     pub(crate) account: AccountId,
     pub(crate) credential: CredentialId,
     pub(crate) adapter_contract_revision: AdapterContractRevision,
+    pub(crate) trust_tier: u8,
     pub(crate) management_scope: CapabilityManagementScopeId,
     pub(crate) request_digest: RequestDigest,
     pub(crate) nonce: OneShotNonce,
@@ -538,7 +540,12 @@ fn decode_capability_claims(wire: &[u8]) -> Result<CapabilityClaims, IngressReje
             0 => true,
             _ => return Err(error),
         },
+        site: SiteId::new(decoder.field_u64(22)?),
+        trust_tier: decoder.field_u8(23)?,
     };
+    if claims.trust_tier > 2 {
+        return Err(error);
+    }
     decoder.finish()?;
     Ok(claims)
 }
@@ -757,6 +764,8 @@ pub(crate) fn encode_capability_claims(claims: &CapabilityClaims) -> Vec<u8> {
     encoder.field(19, claims.request_digest.as_bytes());
     encoder.field(20, claims.nonce.as_bytes());
     encoder.field_u8(21, if claims.fallback_forbidden { 0 } else { 1 });
+    encoder.field_u64(22, claims.site.get());
+    encoder.field_u8(23, claims.trust_tier);
     encoder.into_bytes()
 }
 

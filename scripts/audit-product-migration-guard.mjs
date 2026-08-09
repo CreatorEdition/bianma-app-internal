@@ -15,8 +15,13 @@ const failures = [];
 const args = process.argv.slice(2);
 const mode = args.includes("--worktree") ? "worktree" : "staged";
 
+// Node 子进程在 Windows 沙箱中可能不会继承宿主 shell 注入的
+// `safe.directory` 配置；仅对本次 git 子进程信任其工作目录，避免审计退化为 `--no-index`。
 const runGit = (gitArgs) =>
-  execFileSync("git", gitArgs, { cwd: repoRoot, encoding: "utf8" }).trim();
+  execFileSync("git", ["-c", "safe.directory=*", ...gitArgs], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  }).trim();
 
 const listGit = (gitArgs) =>
   runGit(gitArgs).split(/\r?\n/).filter(Boolean).map(normalizePath);
