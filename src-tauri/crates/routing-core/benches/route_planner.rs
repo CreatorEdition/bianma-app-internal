@@ -1,5 +1,5 @@
 use routing_core::{
-    AccountId, CredentialId, EndpointId, IngressClassifier, IngressRequest, ModelDeploymentId,
+    AccountSelectorId, EndpointId, IngressClassifier, IngressRequest, ModelDeploymentId,
     OperationId, RouteCandidate, RoutePlanner, RouteStageId, RouteTarget, RoutingSnapshot,
     RoutingStrategy, SiteId, SnapshotVersion, VerifiedIngressDisposition,
 };
@@ -14,8 +14,7 @@ fn target(value: u64) -> RouteTarget {
         SiteId::new(value).expect("站点 ID 非零"),
         ModelDeploymentId::new(value).expect("部署 ID 非零"),
         EndpointId::new(value).expect("端点 ID 非零"),
-        AccountId::new(value).expect("账户 ID 非零"),
-        CredentialId::new(value).expect("凭据 ID 非零"),
+        AccountSelectorId::new(value).expect("账户选择合同 ID 非零"),
     )
 }
 

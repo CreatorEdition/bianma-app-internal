@@ -69,6 +69,10 @@ id_type!(
     EndpointId
 );
 id_type!(
+    /// 路由目标内嵌账户选择合同的稳定标识。
+    AccountSelectorId
+);
+id_type!(
     /// 账户标识。
     AccountId
 );
@@ -81,34 +85,31 @@ impl RouteTargetId {
     const INVALID: Self = Self(0);
 }
 
-/// 一个已经由快照编译器绑定完整身份的路由目标。
+/// 一个已经由快照编译器绑定完整 Target 身份与账户选择合同的路由目标。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RouteTarget {
     id: RouteTargetId,
     site: SiteId,
     deployment: ModelDeploymentId,
     endpoint: EndpointId,
-    account: AccountId,
-    credential: CredentialId,
+    account_selector: AccountSelectorId,
 }
 
 impl RouteTarget {
-    /// 构造一个完整绑定的路由目标。
+    /// 构造一个完整 Target 身份与账户选择合同的路由目标。
     pub const fn new(
         id: RouteTargetId,
         site: SiteId,
         deployment: ModelDeploymentId,
         endpoint: EndpointId,
-        account: AccountId,
-        credential: CredentialId,
+        account_selector: AccountSelectorId,
     ) -> Self {
         Self {
             id,
             site,
             deployment,
             endpoint,
-            account,
-            credential,
+            account_selector,
         }
     }
 
@@ -132,14 +133,9 @@ impl RouteTarget {
         self.endpoint
     }
 
-    /// 返回账户标识。
-    pub const fn account(self) -> AccountId {
-        self.account
-    }
-
-    /// 返回凭据标识。
-    pub const fn credential(self) -> CredentialId {
-        self.credential
+    /// 返回账户选择合同标识。
+    pub const fn account_selector(self) -> AccountSelectorId {
+        self.account_selector
     }
 }
 
@@ -236,6 +232,8 @@ pub enum PlanError {
     InsufficientMaxAttemptsForStages,
     /// 同一快照重复出现相同目标。
     DuplicateTarget,
+    /// 同一已编译计划重复引用相同模型部署。
+    DuplicateDeployment,
     /// 同一阶段的候选在快照中被拆成了不连续的多个片段。
     NonContiguousStage,
     /// 当前没有可用目标。
@@ -280,6 +278,12 @@ impl<'a> RoutingSnapshot<'a> {
                 .any(|previous| previous.target.id == candidate.target.id)
             {
                 return Err(PlanError::DuplicateTarget);
+            }
+            if candidates[..index]
+                .iter()
+                .any(|previous| previous.target.deployment == candidate.target.deployment)
+            {
+                return Err(PlanError::DuplicateDeployment);
             }
             if index == 0 || candidates[index - 1].stage != candidate.stage {
                 if candidates[..index]
@@ -644,18 +648,34 @@ mod tests {
     }
 
     fn target(value: u64) -> RouteTarget {
+        target_with_deployment(value, value)
+    }
+
+    fn target_with_deployment(value: u64, deployment_value: u64) -> RouteTarget {
         RouteTarget::new(
             id(value),
             SiteId::new(value).expect("站点 ID 非零"),
-            ModelDeploymentId::new(value).expect("部署 ID 非零"),
+            ModelDeploymentId::new(deployment_value).expect("部署 ID 非零"),
             EndpointId::new(value).expect("端点 ID 非零"),
-            AccountId::new(value).expect("账户 ID 非零"),
-            CredentialId::new(value).expect("凭据 ID 非零"),
+            AccountSelectorId::new(value).expect("账户选择合同 ID 非零"),
         )
     }
 
     fn ready(stage_value: u64, target_value: u64, penalty: u16) -> RouteCandidate {
         RouteCandidate::ready(stage(stage_value), target(target_value), penalty)
+    }
+
+    fn ready_with_deployment(
+        stage_value: u64,
+        target_value: u64,
+        deployment_value: u64,
+        penalty: u16,
+    ) -> RouteCandidate {
+        RouteCandidate::ready(
+            stage(stage_value),
+            target_with_deployment(target_value, deployment_value),
+            penalty,
+        )
     }
 
     fn cooling_down(stage_value: u64, target_value: u64) -> RouteCandidate {
@@ -770,6 +790,11 @@ mod tests {
         assert_eq!(RouteTargetId::new(9).map(RouteTargetId::get), Some(9));
         assert_eq!(RouteStageId::new(0), None);
         assert_eq!(RouteStageId::new(3).map(RouteStageId::get), Some(3));
+        assert_eq!(AccountSelectorId::new(0), None);
+        assert_eq!(
+            AccountSelectorId::new(7).map(AccountSelectorId::get),
+            Some(7)
+        );
     }
 
     #[test]
@@ -783,6 +808,30 @@ mod tests {
         assert_eq!(
             RoutingSnapshot::new(version(1), &duplicate, RoutingStrategy::Priority, 1).err(),
             Some(PlanError::DuplicateTarget)
+        );
+
+        let duplicate_deployment = [
+            ready_with_deployment(1, 1, 99, 0),
+            ready_with_deployment(2, 2, 99, 0),
+        ];
+        assert_eq!(
+            RoutingSnapshot::new(
+                version(1),
+                &duplicate_deployment,
+                RoutingStrategy::Priority,
+                2,
+            )
+            .err(),
+            Some(PlanError::DuplicateDeployment)
+        );
+
+        let first_policy = [ready_with_deployment(1, 1, 99, 0)];
+        let second_policy = [ready_with_deployment(2, 2, 99, 0)];
+        assert!(
+            RoutingSnapshot::new(version(1), &first_policy, RoutingStrategy::Priority, 1,).is_ok()
+        );
+        assert!(
+            RoutingSnapshot::new(version(2), &second_policy, RoutingStrategy::Priority, 1,).is_ok()
         );
 
         let candidates = [ready(1, 1, 0)];
