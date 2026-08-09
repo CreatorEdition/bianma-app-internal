@@ -240,6 +240,8 @@ pub enum PlanError {
     NonContiguousStage,
     /// 当前没有可用目标。
     NoEligibleTargets,
+    /// 已验证路由请求绑定的快照版本与实际规划快照不一致。
+    RequestSnapshotMismatch,
     /// 路由计划与传入快照版本不一致。
     StaleSnapshot,
     /// 计划中的目标无法在同版本快照中解析。
@@ -347,15 +349,19 @@ impl CandidateOrder {
 pub struct RoutePlanner;
 
 impl RoutePlanner {
-    /// 根据快照与请求游标生成有界计划。
+    /// 根据已验证的路由请求、同版本快照与请求游标生成有界计划。
     ///
     /// 每个有可用候选的 Stage 只签发一个 Target；RoundRobin 与 LeastPenalty 仅决定
     /// 当前 Stage 的首选 Target。动态同 Stage failover 需要后续独立的策略、额度和
     /// 健康合同，不能由本编译器把同级 Target 静默扩成自动重试池。
     pub fn plan(
+        request: &VerifiedRouteDispatch,
         snapshot: &RoutingSnapshot<'_>,
         request_cursor: u64,
     ) -> Result<RoutePlan, PlanError> {
+        if request.snapshot() != snapshot.version {
+            return Err(PlanError::RequestSnapshotMismatch);
+        }
         let mut target_ids = [RouteTargetId::INVALID; MAX_ROUTE_TARGETS];
         let mut plan_len = 0usize;
         let mut stage_start = 0usize;
@@ -672,6 +678,23 @@ mod tests {
         RoutingSnapshot::new(version(1), candidates, strategy, max_attempts).expect("测试快照有效")
     }
 
+    fn routed(snapshot_version: SnapshotVersion) -> VerifiedRouteDispatch {
+        let disposition = IngressClassifier::new()
+            .classify(IngressRequest::routed(
+                OperationId::CONVERSATION,
+                snapshot_version,
+            ))
+            .expect("路由请求分类成功");
+        let VerifiedIngressDisposition::Routed(request) = disposition else {
+            panic!("会话操作必须得到 Routed 分发");
+        };
+        request
+    }
+
+    fn plan(snapshot: &RoutingSnapshot<'_>, request_cursor: u64) -> Result<RoutePlan, PlanError> {
+        RoutePlanner::plan(&routed(snapshot.version()), snapshot, request_cursor)
+    }
+
     fn not_sent(failure: FailureClass, retry_after_ms: Option<u64>) -> AttemptOutcome {
         attempt::AttemptTracker::test_only(1).into_outcome_for_test(failure, retry_after_ms, None)
     }
@@ -722,7 +745,7 @@ mod tests {
     fn plan_for_coordinator() -> RoutePlan {
         let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
-        RoutePlanner::plan(&snapshot, 0).expect("存在可用目标")
+        plan(&snapshot, 0).expect("存在可用目标")
     }
 
     #[test]
@@ -790,7 +813,7 @@ mod tests {
             disabled(3, 4),
         ];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 3);
-        let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
+        let plan = plan(&snapshot, 0).expect("存在可用目标");
 
         assert_eq!(plan.len(), 2);
         assert_eq!(plan.target_id(0), Some(id(3)));
@@ -802,7 +825,7 @@ mod tests {
     fn round_robin_only_rotates_inside_each_stage() {
         let candidates = [ready(1, 1, 0), ready(1, 2, 0), ready(2, 3, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::RoundRobin, 3);
-        let plan = RoutePlanner::plan(&snapshot, 1).expect("存在可用目标");
+        let plan = plan(&snapshot, 1).expect("存在可用目标");
 
         assert_eq!(plan.target_id(0), Some(id(2)));
         assert_eq!(plan.target_id(1), Some(id(3)));
@@ -813,7 +836,7 @@ mod tests {
     fn least_penalty_is_scoped_to_stage() {
         let candidates = [ready(1, 1, 8), ready(1, 2, 2), ready(2, 3, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::LeastPenalty, 3);
-        let plan = RoutePlanner::plan(&snapshot, 99).expect("存在可用目标");
+        let plan = plan(&snapshot, 99).expect("存在可用目标");
 
         assert_eq!(plan.target_id(0), Some(id(2)));
         assert_eq!(plan.target_id(1), Some(id(3)));
@@ -824,7 +847,7 @@ mod tests {
     fn next_stage_is_used_only_when_current_stage_has_no_eligible_target() {
         let candidates = [cooling_down(1, 1), disabled(1, 2), ready(2, 3, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 3);
-        let plan = RoutePlanner::plan(&snapshot, 0).expect("后一阶段存在可用目标");
+        let plan = plan(&snapshot, 0).expect("后一阶段存在可用目标");
 
         assert_eq!(plan.len(), 1);
         assert_eq!(plan.target_id(0), Some(id(3)));
@@ -832,10 +855,21 @@ mod tests {
     }
 
     #[test]
+    fn planner_rejects_request_bound_to_another_snapshot() {
+        let candidates = [ready(1, 1, 0)];
+        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 1);
+
+        assert!(matches!(
+            RoutePlanner::plan(&routed(version(2)), &snapshot, 0),
+            Err(PlanError::RequestSnapshotMismatch)
+        ));
+    }
+
+    #[test]
     fn plan_is_bound_to_snapshot_version() {
         let candidates = [ready(1, 1, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 1);
-        let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
+        let plan = plan(&snapshot, 0).expect("存在可用目标");
         let stale = RoutingSnapshot::new(version(2), &candidates, RoutingStrategy::Priority, 1)
             .expect("测试快照有效");
 
@@ -852,7 +886,7 @@ mod tests {
     fn plan_exposes_stage_identity_for_each_attempt() {
         let candidates = [ready(11, 1, 0), ready(22, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
-        let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
+        let plan = plan(&snapshot, 0).expect("存在可用目标");
 
         assert_eq!(plan.stage_id(&snapshot, 0), Ok(Some(stage(11))));
         assert_eq!(plan.stage_id(&snapshot, 1), Ok(Some(stage(22))));
@@ -863,7 +897,7 @@ mod tests {
     fn retry_advances_only_with_replay_proof() {
         let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
-        let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
+        let plan = plan(&snapshot, 0).expect("存在可用目标");
         let policy = RetryPolicy::new(2, 5_000).expect("策略有效");
         let gate = RetryGate::new(policy);
 
@@ -885,7 +919,7 @@ mod tests {
     fn only_trusted_zero_byte_rejection_honors_bounded_retry_after() {
         let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
-        let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
+        let plan = plan(&snapshot, 0).expect("存在可用目标");
         let policy = RetryPolicy::new(2, 3_000).expect("策略有效");
         let gate = RetryGate::new(policy);
 
@@ -907,7 +941,7 @@ mod tests {
     fn bytes_or_sse_semantics_never_replay_even_with_trusted_proof() {
         let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
-        let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
+        let plan = plan(&snapshot, 0).expect("存在可用目标");
         let gate = RetryGate::new(RetryPolicy::new(2, 3_000).expect("策略有效"));
 
         let mut bytes_written = attempt::AttemptTracker::test_only(1);
@@ -953,7 +987,7 @@ mod tests {
     fn retry_stops_for_terminal_conditions() {
         let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
-        let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
+        let plan = plan(&snapshot, 0).expect("存在可用目标");
         let policy = RetryPolicy::new(2, 1_000).expect("策略有效");
         let gate = RetryGate::new(policy);
 

@@ -1,6 +1,7 @@
 use routing_core::{
-    AccountId, CredentialId, EndpointId, ModelDeploymentId, RouteCandidate, RoutePlanner,
-    RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy, SiteId, SnapshotVersion,
+    AccountId, CredentialId, EndpointId, IngressClassifier, IngressRequest, ModelDeploymentId,
+    OperationId, RouteCandidate, RoutePlanner, RouteStageId, RouteTarget, RoutingSnapshot,
+    RoutingStrategy, SiteId, SnapshotVersion, VerifiedIngressDisposition,
 };
 use std::hint::black_box;
 use std::time::Instant;
@@ -33,11 +34,21 @@ fn main() {
         16,
     )
     .expect("基准快照有效");
+    let disposition = IngressClassifier::new()
+        .classify(IngressRequest::routed(
+            OperationId::CONVERSATION,
+            snapshot.version(),
+        ))
+        .expect("基准路由请求分类成功");
+    let VerifiedIngressDisposition::Routed(request) = disposition else {
+        panic!("会话操作必须得到 Routed 分发");
+    };
 
     let started = Instant::now();
     let mut checksum = 0u64;
     for cursor in 0..ITERATIONS {
-        let plan = black_box(RoutePlanner::plan(&snapshot, cursor).expect("基准计划有效"));
+        let plan =
+            black_box(RoutePlanner::plan(&request, &snapshot, cursor).expect("基准计划有效"));
         checksum = checksum.wrapping_add(u64::from(plan.len()));
         checksum = checksum.wrapping_add(
             plan.target_id((cursor % u64::from(plan.len())) as u8)
