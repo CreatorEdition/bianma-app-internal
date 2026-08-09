@@ -1,10 +1,11 @@
 use routing_core::{
     AccountCredentialDefinitions, AccountDefinition, AccountId, AccountSelectorDefinition,
     AccountSelectorId, AccountSelectorMember, CompiledRoutingSnapshot, CredentialDefinition,
-    CredentialId, CredentialSelectionPolicy, EndpointId, IngressClassifier, IngressRequest,
-    ModelDeploymentDefinition, ModelDeploymentId, OperationId, QuotaGroupId, QuotaSelectionUnit,
-    QuotaSelectionUnitId, QuotaTopologySource, RouteCandidate, RoutePlanner, RouteStageId,
-    RouteTarget, RoutingStrategy, SiteId, SnapshotVersion, VerifiedIngressDisposition,
+    CredentialId, CredentialSelectionPolicy, EndpointId, HealthRegistry, HealthTick,
+    IngressClassifier, IngressRequest, ModelDeploymentDefinition, ModelDeploymentId, OperationId,
+    QuotaGroupId, QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RouteCandidate,
+    RoutePlanner, RouteStageId, RouteTarget, RoutingStrategy, SiteId, SnapshotVersion,
+    VerifiedIngressDisposition,
 };
 use std::hint::black_box;
 use std::num::NonZeroU16;
@@ -77,6 +78,7 @@ fn main() {
     )
     .expect("基准编译快照有效");
     let snapshot = compiled.routing();
+    let eligibility = HealthRegistry::new().eligibility_for(snapshot, HealthTick::new(0));
     let disposition = IngressClassifier::new()
         .classify(IngressRequest::routed(
             OperationId::CONVERSATION,
@@ -90,7 +92,9 @@ fn main() {
     let started = Instant::now();
     let mut checksum = 0u64;
     for cursor in 0..ITERATIONS {
-        let plan = black_box(RoutePlanner::plan(&request, snapshot, cursor).expect("基准计划有效"));
+        let plan = black_box(
+            RoutePlanner::plan(&request, snapshot, &eligibility, cursor).expect("基准计划有效"),
+        );
         checksum = checksum.wrapping_add(u64::from(plan.len()));
         checksum = checksum.wrapping_add(
             plan.target_id((cursor % u64::from(plan.len())) as u8)

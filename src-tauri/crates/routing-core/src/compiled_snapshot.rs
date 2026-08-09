@@ -206,10 +206,13 @@ impl<'a> CompiledRoutingSnapshot<'a> {
     /// selector；任何理论不变量破坏均 fail closed，绝不回退到外部或全局目录。
     pub fn resolve_plan_target(
         &self,
-        plan: &RoutePlan,
+        plan: &RoutePlan<'_, 'a>,
         attempt_index: u8,
     ) -> Result<Option<ResolvedRouteTarget<'a>>, PlanError> {
-        let Some(target) = plan.resolve(&self.routing, attempt_index)? else {
+        if !core::ptr::eq(plan.snapshot, &self.routing) {
+            return Err(PlanError::StaleSnapshot);
+        }
+        let Some(target) = plan.resolve(attempt_index)? else {
             return Ok(None);
         };
         let stage = self

@@ -6,8 +6,8 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::{
-    attempt::AttemptCompletion, RetryDecision, RetryGate, RetryPolicy, RetryStopReason, RoutePlan,
-    RouteTargetId,
+    attempt::AttemptCompletion, RetryDecision, RetryGate, RetryPolicy, RetryStopReason,
+    RouteEligibility, RoutePlan, RouteTargetId,
 };
 
 /// 进程内只增不复用的 Coordinator 标识分配器。
@@ -98,6 +98,10 @@ pub(crate) enum AttemptStartError {
     ActiveAttempt,
     /// 已停止、耗尽或检测到内部不一致。
     Stopped,
+    /// 传入的 eligibility 未与当前计划同代匹配。
+    EligibilityMismatch,
+    /// 当前 eligibility 下没有可签发的计划内目标。
+    NoEligibleTargets,
 }
 
 /// 创建协调器被拒绝的原因。
@@ -114,8 +118,6 @@ pub(crate) enum AttemptCompleteError {
     NoActive,
     /// Completion 不属于当前活跃 Attempt；协调器随即 fail closed。
     Mismatched,
-    /// ReplayGate 允许推进但计划内部不再存在下一位置；协调器随即 fail closed。
-    MissingNext,
 }
 
 /// 完成一次 Attempt 后的唯一下一步。
@@ -133,8 +135,8 @@ pub(crate) enum CoordinatorStep {
 }
 
 /// 消费一个 RoutePlan、限制 Attempt 线性推进的固定大小状态机。
-pub(crate) struct AttemptCoordinator {
-    plan: RoutePlan,
+pub(crate) struct AttemptCoordinator<'snapshot, 'candidates> {
+    plan: RoutePlan<'snapshot, 'candidates>,
     gate: RetryGate,
     coordinator: Option<CoordinatorId>,
     next_index: u8,
@@ -143,9 +145,9 @@ pub(crate) struct AttemptCoordinator {
     stopped: bool,
 }
 
-impl AttemptCoordinator {
+impl<'snapshot, 'candidates> AttemptCoordinator<'snapshot, 'candidates> {
     pub(crate) fn new(
-        plan: RoutePlan,
+        plan: RoutePlan<'snapshot, 'candidates>,
         policy: RetryPolicy,
     ) -> Result<Self, AttemptCoordinatorBuildError> {
         if policy.max_attempts() < plan.len() {
@@ -173,19 +175,26 @@ impl AttemptCoordinator {
         self.active.is_some()
     }
 
-    /// 签发初始 Attempt；后续 Attempt 只能由 [`Self::complete`] 原子签发。
-    pub(crate) fn start(&mut self) -> Result<AttemptPermit, AttemptStartError> {
+    /// 使用当前 eligibility 签发初始 Attempt；后续 Attempt 只能由 [`Self::complete`] 原子签发。
+    pub(crate) fn start(
+        &mut self,
+        eligibility: &RouteEligibility<'snapshot, 'candidates>,
+    ) -> Result<AttemptPermit, AttemptStartError> {
         if self.stopped {
             return Err(AttemptStartError::Stopped);
         }
         if self.active.is_some() {
             return Err(AttemptStartError::ActiveAttempt);
         }
-        match self.issue_next() {
-            Some(permit) => Ok(permit),
-            None => {
+        match self.issue_next(eligibility) {
+            Err(()) => {
                 self.stopped = true;
-                Err(AttemptStartError::Stopped)
+                Err(AttemptStartError::EligibilityMismatch)
+            }
+            Ok(Some(permit)) => Ok(permit),
+            Ok(None) => {
+                self.stopped = true;
+                Err(AttemptStartError::NoEligibleTargets)
             }
         }
     }
@@ -194,6 +203,7 @@ impl AttemptCoordinator {
     pub(crate) fn complete(
         &mut self,
         completion: AttemptCompletion,
+        eligibility: &RouteEligibility<'snapshot, 'candidates>,
     ) -> Result<CoordinatorStep, AttemptCompleteError> {
         let Some(active) = self.active else {
             return Err(AttemptCompleteError::NoActive);
@@ -216,11 +226,17 @@ impl AttemptCoordinator {
         match decision {
             RetryDecision::Advance { delay_ms } => {
                 self.next_index = active.index.saturating_add(1);
-                let Some(permit) = self.issue_next() else {
-                    self.stopped = true;
-                    return Err(AttemptCompleteError::MissingNext);
-                };
-                Ok(CoordinatorStep::Next { permit, delay_ms })
+                match self.issue_next(eligibility) {
+                    Err(()) => {
+                        self.stopped = true;
+                        Ok(CoordinatorStep::Stop(RetryStopReason::EligibilityMismatch))
+                    }
+                    Ok(Some(permit)) => Ok(CoordinatorStep::Next { permit, delay_ms }),
+                    Ok(None) => {
+                        self.stopped = true;
+                        Ok(CoordinatorStep::Stop(RetryStopReason::NoEligibleTargets))
+                    }
+                }
             }
             RetryDecision::Stop(reason) => {
                 self.stopped = true;
@@ -229,20 +245,37 @@ impl AttemptCoordinator {
         }
     }
 
-    fn issue_next(&mut self) -> Option<AttemptPermit> {
-        let coordinator = self.coordinator?;
-        let target = self.plan.target_id(self.next_index)?;
-        let id = AttemptId::new(self.next_id)?;
-        self.next_id = self.next_id.checked_add(1)?;
-        self.active = Some(ActiveAttempt {
-            id,
-            index: self.next_index,
-        });
-        Some(AttemptPermit {
-            coordinator,
-            id,
-            index: self.next_index,
-            target,
-        })
+    fn issue_next(
+        &mut self,
+        eligibility: &RouteEligibility<'snapshot, 'candidates>,
+    ) -> Result<Option<AttemptPermit>, ()> {
+        if !eligibility.supports_plan(&self.plan) {
+            return Err(());
+        }
+        let Some(coordinator) = self.coordinator else {
+            return Ok(None);
+        };
+        while let Some(target) = self.plan.target_id(self.next_index) {
+            let index = self.next_index;
+            self.next_index = self.next_index.saturating_add(1);
+            if !eligibility.allows_plan_target(target) {
+                continue;
+            }
+            let Some(id) = AttemptId::new(self.next_id) else {
+                return Ok(None);
+            };
+            let Some(next_id) = self.next_id.checked_add(1) else {
+                return Ok(None);
+            };
+            self.next_id = next_id;
+            self.active = Some(ActiveAttempt { id, index });
+            return Ok(Some(AttemptPermit {
+                coordinator,
+                id,
+                index,
+                target,
+            }));
+        }
+        Ok(None)
     }
 }

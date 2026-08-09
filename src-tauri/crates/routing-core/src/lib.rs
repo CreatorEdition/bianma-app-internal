@@ -19,6 +19,7 @@ mod attempt;
 mod compiled_snapshot;
 #[cfg_attr(not(test), allow(dead_code))]
 mod coordinator;
+mod health;
 mod ingress;
 mod model_deployment;
 
@@ -30,6 +31,7 @@ pub use attempt::{
 };
 pub use compiled_snapshot::*;
 use coordinator::{AttemptCoordinator, AttemptCoordinatorBuildError};
+pub use health::*;
 pub use ingress::*;
 pub use model_deployment::*;
 
@@ -273,6 +275,8 @@ pub enum PlanError {
     NoEligibleTargets,
     /// 已验证路由请求绑定的快照版本与实际规划快照不一致。
     RequestSnapshotMismatch,
+    /// 动态 eligibility 未与当前快照的版本或候选身份完全匹配。
+    EligibilitySnapshotMismatch,
     /// 路由计划与传入快照版本不一致。
     StaleSnapshot,
     /// 计划中的目标无法在同版本快照中解析。
@@ -386,18 +390,22 @@ impl CandidateOrder {
 pub struct RoutePlanner;
 
 impl RoutePlanner {
-    /// 根据已验证的路由请求、同版本快照与请求游标生成有界计划。
+    /// 根据已验证的路由请求、同版本快照、同代 eligibility 与请求游标生成有界计划。
     ///
     /// 每个有可用候选的 Stage 只签发一个 Target；RoundRobin 与 LeastPenalty 仅决定
     /// 当前 Stage 的首选 Target。动态同 Stage failover 需要后续独立的策略、额度和
     /// 健康合同，不能由本编译器把同级 Target 静默扩成自动重试池。
-    pub fn plan(
+    pub fn plan<'snapshot, 'candidates>(
         request: &VerifiedRouteDispatch,
-        snapshot: &RoutingSnapshot<'_>,
+        snapshot: &'snapshot RoutingSnapshot<'candidates>,
+        eligibility: &RouteEligibility<'snapshot, 'candidates>,
         request_cursor: u64,
-    ) -> Result<RoutePlan, PlanError> {
+    ) -> Result<RoutePlan<'snapshot, 'candidates>, PlanError> {
         if request.snapshot() != snapshot.version {
             return Err(PlanError::RequestSnapshotMismatch);
+        }
+        if !eligibility.matches_snapshot(snapshot) {
+            return Err(PlanError::EligibilitySnapshotMismatch);
         }
         let mut target_ids = [RouteTargetId::INVALID; MAX_ROUTE_TARGETS];
         let mut plan_len = 0usize;
@@ -416,11 +424,13 @@ impl RoutePlanner {
             {
                 let candidate = snapshot.candidates[stage_end];
                 if let TargetState::Ready { penalty } = candidate.state {
-                    ordered[eligible_count] = CandidateOrder {
-                        index: stage_end as u8,
-                        penalty,
-                    };
-                    eligible_count += 1;
+                    if eligibility.allows_index(stage_end) {
+                        ordered[eligible_count] = CandidateOrder {
+                            index: stage_end as u8,
+                            penalty,
+                        };
+                        eligible_count += 1;
+                    }
                 }
                 stage_end += 1;
             }
@@ -447,7 +457,7 @@ impl RoutePlanner {
         }
 
         Ok(RoutePlan {
-            snapshot_version: snapshot.version,
+            snapshot,
             target_ids,
             len: plan_len as u8,
         })
@@ -455,25 +465,25 @@ impl RoutePlanner {
 }
 
 /// 固定容量、无堆分配的路由执行计划。
-pub struct RoutePlan {
-    snapshot_version: SnapshotVersion,
+pub struct RoutePlan<'snapshot, 'candidates> {
+    snapshot: &'snapshot RoutingSnapshot<'candidates>,
     target_ids: [RouteTargetId; MAX_ROUTE_TARGETS],
     len: u8,
 }
 
-impl RoutePlan {
+impl<'snapshot, 'candidates> RoutePlan<'snapshot, 'candidates> {
     /// 消费计划并创建只允许线性推进的 Attempt 协调器。
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn into_attempt_coordinator(
         self,
         policy: RetryPolicy,
-    ) -> Result<AttemptCoordinator, AttemptCoordinatorBuildError> {
+    ) -> Result<AttemptCoordinator<'snapshot, 'candidates>, AttemptCoordinatorBuildError> {
         AttemptCoordinator::new(self, policy)
     }
 
     /// 返回快照版本。
     pub const fn snapshot_version(&self) -> SnapshotVersion {
-        self.snapshot_version
+        self.snapshot.version
     }
 
     /// 返回计划中的尝试数。
@@ -486,19 +496,12 @@ impl RoutePlan {
         self.len == 0
     }
 
-    /// 在同版本快照中解析指定尝试所属的稳定路由阶段。
-    pub fn stage_id(
-        &self,
-        snapshot: &RoutingSnapshot<'_>,
-        attempt_index: u8,
-    ) -> Result<Option<RouteStageId>, PlanError> {
-        if self.snapshot_version != snapshot.version {
-            return Err(PlanError::StaleSnapshot);
-        }
+    /// 在计划绑定的快照中解析指定尝试所属的稳定路由阶段。
+    pub fn stage_id(&self, attempt_index: u8) -> Result<Option<RouteStageId>, PlanError> {
         let Some(target_id) = self.target_id(attempt_index) else {
             return Ok(None);
         };
-        snapshot
+        self.snapshot
             .stage_for(target_id)
             .map(Some)
             .ok_or(PlanError::UnknownTarget)
@@ -512,19 +515,12 @@ impl RoutePlan {
         Some(self.target_ids[usize::from(attempt_index)])
     }
 
-    /// 在同版本快照中解析指定尝试的完整目标。
-    pub fn resolve<'a>(
-        &self,
-        snapshot: &'a RoutingSnapshot<'_>,
-        attempt_index: u8,
-    ) -> Result<Option<&'a RouteTarget>, PlanError> {
-        if self.snapshot_version != snapshot.version {
-            return Err(PlanError::StaleSnapshot);
-        }
+    /// 在计划绑定的快照中解析指定尝试的完整目标。
+    pub fn resolve(&self, attempt_index: u8) -> Result<Option<&RouteTarget>, PlanError> {
         let Some(target_id) = self.target_id(attempt_index) else {
             return Ok(None);
         };
-        snapshot
+        self.snapshot
             .resolve(target_id)
             .map(Some)
             .ok_or(PlanError::UnknownTarget)
@@ -583,6 +579,10 @@ impl RetryPolicy {
 pub enum RetryStopReason {
     /// 没有下一个目标或预算已耗尽。
     Exhausted,
+    /// 当前 eligibility 下没有可签发的计划内目标。
+    NoEligibleTargets,
+    /// 当前 eligibility 未与已编译计划同代匹配。
+    EligibilityMismatch,
     /// 客户端已经取消。
     Cancelled,
     /// 已向客户端提交响应。
@@ -818,8 +818,22 @@ mod tests {
         request
     }
 
-    fn plan(snapshot: &RoutingSnapshot<'_>, request_cursor: u64) -> Result<RoutePlan, PlanError> {
-        RoutePlanner::plan(&routed(snapshot.version()), snapshot, request_cursor)
+    fn eligibility<'snapshot, 'candidates>(
+        snapshot: &'snapshot RoutingSnapshot<'candidates>,
+    ) -> RouteEligibility<'snapshot, 'candidates> {
+        HealthRegistry::new().eligibility_for(snapshot, HealthTick::new(0))
+    }
+
+    fn plan<'snapshot, 'candidates>(
+        snapshot: &'snapshot RoutingSnapshot<'candidates>,
+        request_cursor: u64,
+    ) -> Result<RoutePlan<'snapshot, 'candidates>, PlanError> {
+        RoutePlanner::plan(
+            &routed(snapshot.version()),
+            snapshot,
+            &eligibility(snapshot),
+            request_cursor,
+        )
     }
 
     fn not_sent(failure: FailureClass, retry_after_ms: Option<u64>) -> AttemptOutcome {
@@ -869,10 +883,16 @@ mod tests {
         tracker.into_completion(failure, None, None)
     }
 
-    fn plan_for_coordinator() -> RoutePlan {
-        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
-        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
-        plan(&snapshot, 0).expect("存在可用目标")
+    fn plan_for_coordinator<'snapshot, 'candidates>(
+        snapshot: &'snapshot RoutingSnapshot<'candidates>,
+    ) -> (
+        RoutePlan<'snapshot, 'candidates>,
+        RouteEligibility<'snapshot, 'candidates>,
+    ) {
+        let eligibility = eligibility(snapshot);
+        let plan = RoutePlanner::plan(&routed(snapshot.version()), snapshot, &eligibility, 0)
+            .expect("存在可用目标");
+        (plan, eligibility)
     }
 
     #[test]
@@ -1512,25 +1532,131 @@ mod tests {
     fn planner_rejects_request_bound_to_another_snapshot() {
         let candidates = [ready(1, 1, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 1);
+        let eligibility = eligibility(&snapshot);
 
         assert!(matches!(
-            RoutePlanner::plan(&routed(version(2)), &snapshot, 0),
+            RoutePlanner::plan(&routed(version(2)), &snapshot, &eligibility, 0),
             Err(PlanError::RequestSnapshotMismatch)
         ));
     }
 
     #[test]
-    fn plan_is_bound_to_snapshot_version() {
+    fn coordinator_rejects_current_eligibility_from_other_candidate_identity() {
+        let first_candidates = [ready(1, 1, 0)];
+        let first_snapshot = snapshot(&first_candidates, RoutingStrategy::Priority, 1);
+        let first_eligibility = eligibility(&first_snapshot);
+        let plan = RoutePlanner::plan(
+            &routed(first_snapshot.version()),
+            &first_snapshot,
+            &first_eligibility,
+            0,
+        )
+        .expect("首个快照可规划");
+        let second_candidates = [ready(1, 2, 0)];
+        let second_snapshot = snapshot(&second_candidates, RoutingStrategy::Priority, 1);
+        let mismatched_eligibility = eligibility(&second_snapshot);
+        let mut coordinator = plan
+            .into_attempt_coordinator(RetryPolicy::new(1, 1_000).expect("策略有效"))
+            .expect("计划与预算一致");
+
+        assert!(matches!(
+            coordinator.start(&mismatched_eligibility),
+            Err(AttemptStartError::EligibilityMismatch)
+        ));
+        assert!(coordinator.is_stopped());
+    }
+
+    #[test]
+    fn coordinator_rejects_same_version_same_target_from_other_snapshot_instance() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors = [selector_definition(1, &units, &members)];
+        let first_candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 1, 1, 1, 1),
+            0,
+        )];
+        let second_candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 2, 2, 2, 1),
+            0,
+        )];
+        let first_deployments = [deployment_definition(1, 1, 1)];
+        let second_deployments = [deployment_definition(2, 2, 2)];
+        let first_accounts = [account_definition(1, 1)];
+        let second_accounts = [account_definition(1, 2)];
+        let credentials = [credential_definition(1, 1)];
+        let first = CompiledRoutingSnapshot::compile(
+            version(1),
+            &first_candidates,
+            RoutingStrategy::Priority,
+            1,
+            &first_deployments,
+            AccountCredentialDefinitions::new(&first_accounts, &credentials),
+            &selectors,
+        )
+        .expect("第一个编译快照有效");
+        let second = CompiledRoutingSnapshot::compile(
+            version(1),
+            &second_candidates,
+            RoutingStrategy::Priority,
+            1,
+            &second_deployments,
+            AccountCredentialDefinitions::new(&second_accounts, &credentials),
+            &selectors,
+        )
+        .expect("第二个编译快照有效");
+        let request = routed(first.routing().version());
+        let mut registry = HealthRegistry::new();
+        let first_eligibility = registry.eligibility_for(first.routing(), HealthTick::new(1));
+        let first_plan = RoutePlanner::plan(&request, first.routing(), &first_eligibility, 0)
+            .expect("第一个计划有效");
+        let first_resolved = first
+            .resolve_plan_target(&first_plan, 0)
+            .expect("第一个计划可解析")
+            .expect("第一个目标存在");
+        registry.record_cooldown(
+            first_resolved,
+            CooldownScope::Deployment,
+            HealthTick::new(10),
+            HealthTick::new(1),
+        );
+        assert!(!registry
+            .eligibility_for(first.routing(), HealthTick::new(1))
+            .allows_index(0));
+        let second_eligibility = registry.eligibility_for(second.routing(), HealthTick::new(1));
+        assert!(second_eligibility.allows_index(0));
+
+        let mut coordinator = first_plan
+            .into_attempt_coordinator(RetryPolicy::new(1, 1_000).expect("策略有效"))
+            .expect("计划与预算一致");
+        assert!(matches!(
+            coordinator.start(&second_eligibility),
+            Err(AttemptStartError::EligibilityMismatch)
+        ));
+        assert!(coordinator.is_stopped());
+    }
+
+    #[test]
+    fn plan_is_borrowed_from_its_snapshot() {
         let candidates = [ready(1, 1, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 1);
         let plan = plan(&snapshot, 0).expect("存在可用目标");
-        let stale = RoutingSnapshot::new(version(2), &candidates, RoutingStrategy::Priority, 1)
-            .expect("测试快照有效");
 
-        assert_eq!(plan.resolve(&stale, 0), Err(PlanError::StaleSnapshot));
+        assert_eq!(plan.snapshot_version(), version(1));
         assert_eq!(
-            plan.resolve(&snapshot, 0)
-                .expect("版本一致")
+            plan.resolve(0)
+                .expect("计划绑定快照中存在目标")
                 .map(|resolved| resolved.id()),
             Some(id(1))
         );
@@ -1542,9 +1668,165 @@ mod tests {
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
         let plan = plan(&snapshot, 0).expect("存在可用目标");
 
-        assert_eq!(plan.stage_id(&snapshot, 0), Ok(Some(stage(11))));
-        assert_eq!(plan.stage_id(&snapshot, 1), Ok(Some(stage(22))));
-        assert_eq!(plan.stage_id(&snapshot, 2), Ok(None));
+        assert_eq!(plan.stage_id(0), Ok(Some(stage(11))));
+        assert_eq!(plan.stage_id(1), Ok(Some(stage(22))));
+        assert_eq!(plan.stage_id(2), Ok(None));
+    }
+
+    #[test]
+    fn resolved_cooldown_filters_plans_and_never_turns_written_429_into_replay() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors = [selector_definition(1, &units, &members)];
+        let candidates = [
+            RouteCandidate::ready(stage(1), target_with_binding(1, 1, 1, 1, 1), 0),
+            RouteCandidate::ready(stage(2), target_with_binding(2, 1, 2, 2, 1), 0),
+            RouteCandidate::ready(stage(3), target_with_binding(3, 1, 3, 3, 1), 0),
+        ];
+        let deployments = [
+            deployment_definition(1, 1, 1),
+            deployment_definition(2, 1, 2),
+            deployment_definition(3, 1, 3),
+        ];
+        let accounts = [account_definition(1, 1)];
+        let credentials = [credential_definition(1, 1)];
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates,
+            RoutingStrategy::Priority,
+            3,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("测试编译快照有效");
+        let request = routed(compiled.routing().version());
+
+        let mut written_registry = HealthRegistry::new();
+        let written_initial =
+            written_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
+        let written_plan = RoutePlanner::plan(&request, compiled.routing(), &written_initial, 0)
+            .expect("初始计划有效");
+        let written_resolved = compiled
+            .resolve_plan_target(&written_plan, 0)
+            .expect("计划同代")
+            .expect("首个目标存在");
+        let mut written_coordinator = written_plan
+            .into_attempt_coordinator(RetryPolicy::new(3, 1_000).expect("策略有效"))
+            .expect("计划与预算一致");
+        let written_first = written_coordinator
+            .start(&written_initial)
+            .expect("初始目标可签发");
+        written_registry.record_cooldown(
+            written_resolved,
+            CooldownScope::Deployment,
+            HealthTick::new(10),
+            HealthTick::new(1),
+        );
+        let written_current =
+            written_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
+        assert!(matches!(
+            written_coordinator
+                .complete(
+                    sent_for(written_first, FailureClass::RateLimited),
+                    &written_current
+                )
+                .expect("写后结果可完成"),
+            CoordinatorStep::Stop(RetryStopReason::ReplayNotProven)
+        ));
+
+        let mut safe_registry = HealthRegistry::new();
+        let safe_initial = safe_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
+        let safe_plan = RoutePlanner::plan(&request, compiled.routing(), &safe_initial, 0)
+            .expect("初始计划有效");
+        let safe_resolved = compiled
+            .resolve_plan_target(&safe_plan, 1)
+            .expect("计划同代")
+            .expect("第二个目标存在");
+        safe_registry.record_cooldown(
+            safe_resolved,
+            CooldownScope::Deployment,
+            HealthTick::new(10),
+            HealthTick::new(1),
+        );
+        let safe_current = safe_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
+        let refreshed = RoutePlanner::plan(&request, compiled.routing(), &safe_current, 0)
+            .expect("冷却后的计划有效");
+        assert_eq!(refreshed.target_id(0), Some(id(1)));
+        assert_eq!(refreshed.target_id(1), Some(id(3)));
+
+        let mut safe_coordinator = safe_plan
+            .into_attempt_coordinator(RetryPolicy::new(3, 1_000).expect("策略有效"))
+            .expect("计划与预算一致");
+        let safe_first = safe_coordinator
+            .start(&safe_initial)
+            .expect("初始目标可签发");
+        let completion = attempt::AttemptTracker::from_permit(safe_first).into_completion(
+            FailureClass::RateLimited,
+            Some(200),
+            Some(attempt::TrustedPreExecutionRejection::registered()),
+        );
+        let CoordinatorStep::Next {
+            permit: next,
+            delay_ms,
+        } = safe_coordinator
+            .complete(completion, &safe_current)
+            .expect("受信执行前拒绝允许推进")
+        else {
+            panic!("第二阶段已冷却时必须只签发第三阶段目标");
+        };
+        assert_eq!(delay_ms, 200);
+        assert_eq!(next.index(), 2);
+        assert_eq!(next.target(), id(3));
+
+        let mut exhausted_registry = HealthRegistry::new();
+        let exhausted_initial =
+            exhausted_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
+        let exhausted_plan =
+            RoutePlanner::plan(&request, compiled.routing(), &exhausted_initial, 0)
+                .expect("初始计划有效");
+        for attempt_index in [1, 2] {
+            let resolved = compiled
+                .resolve_plan_target(&exhausted_plan, attempt_index)
+                .expect("计划同代")
+                .expect("后续目标存在");
+            exhausted_registry.record_cooldown(
+                resolved,
+                CooldownScope::Deployment,
+                HealthTick::new(10),
+                HealthTick::new(1),
+            );
+        }
+        let exhausted_current =
+            exhausted_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
+        let mut exhausted_coordinator = exhausted_plan
+            .into_attempt_coordinator(RetryPolicy::new(3, 1_000).expect("策略有效"))
+            .expect("计划与预算一致");
+        let exhausted_first = exhausted_coordinator
+            .start(&exhausted_initial)
+            .expect("初始目标可签发");
+        let exhausted_completion = attempt::AttemptTracker::from_permit(exhausted_first)
+            .into_completion(
+                FailureClass::RateLimited,
+                Some(200),
+                Some(attempt::TrustedPreExecutionRejection::registered()),
+            );
+        assert!(matches!(
+            exhausted_coordinator
+                .complete(exhausted_completion, &exhausted_current)
+                .expect("受信执行前拒绝可完成"),
+            CoordinatorStep::Stop(RetryStopReason::NoEligibleTargets)
+        ));
     }
 
     #[test]
@@ -1665,15 +1947,18 @@ mod tests {
 
     #[test]
     fn coordinator_only_advances_once_and_in_plan_order() {
-        let mut coordinator = plan_for_coordinator()
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
+        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
+        let (plan, eligibility) = plan_for_coordinator(&snapshot);
+        let mut coordinator = plan
             .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
             .expect("计划与预算一致");
-        let first = coordinator.start().expect("允许签发首次尝试");
+        let first = coordinator.start(&eligibility).expect("允许签发首次尝试");
         assert_eq!(first.index(), 0);
         assert_eq!(first.target(), id(1));
         assert!(coordinator.has_active_attempt());
         assert!(matches!(
-            coordinator.start(),
+            coordinator.start(&eligibility),
             Err(AttemptStartError::ActiveAttempt)
         ));
 
@@ -1682,7 +1967,7 @@ mod tests {
             permit: second,
             delay_ms,
         } = coordinator
-            .complete(first_outcome)
+            .complete(first_outcome, &eligibility)
             .expect("零写入连接失败允许推进")
         else {
             panic!("应签发唯一的第二次尝试");
@@ -1692,31 +1977,38 @@ mod tests {
         assert_eq!(second.target(), id(2));
         assert!(coordinator.has_active_attempt());
         assert!(matches!(
-            coordinator.start(),
+            coordinator.start(&eligibility),
             Err(AttemptStartError::ActiveAttempt)
         ));
 
         let second_outcome = not_sent_for(second, FailureClass::Connect);
         assert!(matches!(
-            coordinator.complete(second_outcome).expect("第二次可完成"),
+            coordinator
+                .complete(second_outcome, &eligibility)
+                .expect("第二次可完成"),
             CoordinatorStep::Stop(RetryStopReason::Exhausted)
         ));
         assert!(coordinator.is_stopped());
         assert!(matches!(
-            coordinator.start(),
+            coordinator.start(&eligibility),
             Err(AttemptStartError::Stopped)
         ));
     }
 
     #[test]
     fn coordinator_stops_after_written_request_or_regular_rate_limit() {
-        let mut coordinator = plan_for_coordinator()
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
+        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
+        let (plan, eligibility) = plan_for_coordinator(&snapshot);
+        let mut coordinator = plan
             .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
             .expect("计划与预算一致");
-        let first = coordinator.start().expect("允许签发首次尝试");
+        let first = coordinator.start(&eligibility).expect("允许签发首次尝试");
         let written = sent_for(first, FailureClass::RateLimited);
         assert!(matches!(
-            coordinator.complete(written).expect("写后结果可完成"),
+            coordinator
+                .complete(written, &eligibility)
+                .expect("写后结果可完成"),
             CoordinatorStep::Stop(RetryStopReason::ReplayNotProven)
         ));
         assert!(coordinator.is_stopped());
@@ -1725,10 +2017,15 @@ mod tests {
 
     #[test]
     fn coordinator_never_issues_next_after_sse_or_downstream_commit() {
-        let mut semantic = plan_for_coordinator()
+        let semantic_candidates = [ready(1, 1, 0), ready(2, 2, 0)];
+        let semantic_snapshot = snapshot(&semantic_candidates, RoutingStrategy::Priority, 2);
+        let (semantic_plan, semantic_eligibility) = plan_for_coordinator(&semantic_snapshot);
+        let mut semantic = semantic_plan
             .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
             .expect("计划与预算一致");
-        let permit = semantic.start().expect("允许签发首次尝试");
+        let permit = semantic
+            .start(&semantic_eligibility)
+            .expect("允许签发首次尝试");
         let mut tracker = attempt::AttemptTracker::from_permit(permit);
         tracker.request_write_started().expect("允许记录写入");
         tracker
@@ -1739,20 +2036,29 @@ mod tests {
             .expect("允许记录首个语义事件");
         let completion = tracker.into_completion(FailureClass::Server, None, None);
         assert!(matches!(
-            semantic.complete(completion).expect("语义事件可完成"),
+            semantic
+                .complete(completion, &semantic_eligibility)
+                .expect("语义事件可完成"),
             CoordinatorStep::Stop(RetryStopReason::ReplayNotProven)
         ));
         assert!(semantic.is_stopped());
 
-        let mut downstream = plan_for_coordinator()
+        let downstream_candidates = [ready(1, 1, 0), ready(2, 2, 0)];
+        let downstream_snapshot = snapshot(&downstream_candidates, RoutingStrategy::Priority, 2);
+        let (downstream_plan, downstream_eligibility) = plan_for_coordinator(&downstream_snapshot);
+        let mut downstream = downstream_plan
             .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
             .expect("计划与预算一致");
-        let permit = downstream.start().expect("允许签发首次尝试");
+        let permit = downstream
+            .start(&downstream_eligibility)
+            .expect("允许签发首次尝试");
         let mut tracker = attempt::AttemptTracker::from_permit(permit);
         tracker.downstream_committed().expect("允许下游提交");
         let completion = tracker.into_completion(FailureClass::Server, None, None);
         assert!(matches!(
-            downstream.complete(completion).expect("下游提交可完成"),
+            downstream
+                .complete(completion, &downstream_eligibility)
+                .expect("下游提交可完成"),
             CoordinatorStep::Stop(RetryStopReason::DownstreamCommitted)
         ));
         assert!(downstream.is_stopped());
@@ -1760,32 +2066,44 @@ mod tests {
 
     #[test]
     fn other_coordinator_completion_fails_closed_without_next_permit() {
-        let mut coordinator = plan_for_coordinator()
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
+        let primary_snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
+        let (plan, eligibility) = plan_for_coordinator(&primary_snapshot);
+        let mut coordinator = plan
             .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
             .expect("计划与预算一致");
-        let mut other = plan_for_coordinator()
+        let other_candidates = [ready(1, 1, 0), ready(2, 2, 0)];
+        let other_snapshot = snapshot(&other_candidates, RoutingStrategy::Priority, 2);
+        let (other_plan, other_eligibility) = plan_for_coordinator(&other_snapshot);
+        let mut other = other_plan
             .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
             .expect("计划与预算一致");
-        let foreign = other.start().expect("允许签发另一请求的首次尝试");
+        let foreign = other
+            .start(&other_eligibility)
+            .expect("允许签发另一请求的首次尝试");
         let mismatched = not_sent_for(foreign, FailureClass::Connect);
-        let _current = coordinator.start().expect("允许签发当前请求的首次尝试");
+        let _current = coordinator
+            .start(&eligibility)
+            .expect("允许签发当前请求的首次尝试");
 
         assert!(matches!(
-            coordinator.complete(mismatched),
+            coordinator.complete(mismatched, &eligibility),
             Err(AttemptCompleteError::Mismatched)
         ));
         assert!(coordinator.is_stopped());
         assert!(!coordinator.has_active_attempt());
         assert!(matches!(
-            coordinator.start(),
+            coordinator.start(&eligibility),
             Err(AttemptStartError::Stopped)
         ));
     }
 
     #[test]
     fn coordinator_rejects_retry_budget_that_cannot_reach_every_stage() {
-        let result = plan_for_coordinator()
-            .into_attempt_coordinator(RetryPolicy::new(1, 3_000).expect("策略有效"));
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
+        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
+        let (plan, _) = plan_for_coordinator(&snapshot);
+        let result = plan.into_attempt_coordinator(RetryPolicy::new(1, 3_000).expect("策略有效"));
 
         assert!(matches!(
             result,
