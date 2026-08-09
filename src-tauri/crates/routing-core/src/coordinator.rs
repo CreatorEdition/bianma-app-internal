@@ -100,6 +100,13 @@ pub(crate) enum AttemptStartError {
     Stopped,
 }
 
+/// 创建协调器被拒绝的原因。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AttemptCoordinatorBuildError {
+    /// 重试预算不足以消费已编译计划中的每个 Stage。
+    InsufficientAttemptBudget,
+}
+
 /// 尝试完成被拒绝的原因。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AttemptCompleteError {
@@ -137,9 +144,15 @@ pub(crate) struct AttemptCoordinator {
 }
 
 impl AttemptCoordinator {
-    pub(crate) fn new(plan: RoutePlan, policy: RetryPolicy) -> Self {
+    pub(crate) fn new(
+        plan: RoutePlan,
+        policy: RetryPolicy,
+    ) -> Result<Self, AttemptCoordinatorBuildError> {
+        if policy.max_attempts() < plan.len() {
+            return Err(AttemptCoordinatorBuildError::InsufficientAttemptBudget);
+        }
         let coordinator = allocate_coordinator_id();
-        Self {
+        Ok(Self {
             plan,
             gate: RetryGate::new(policy),
             coordinator,
@@ -147,7 +160,7 @@ impl AttemptCoordinator {
             next_id: 1,
             active: None,
             stopped: coordinator.is_none(),
-        }
+        })
     }
 
     /// 返回是否已有永久停止结论。

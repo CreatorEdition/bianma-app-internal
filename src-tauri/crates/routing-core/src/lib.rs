@@ -21,7 +21,7 @@ pub use attempt::{
     AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState, SendPhase,
     UpstreamWriteState,
 };
-use coordinator::AttemptCoordinator;
+use coordinator::{AttemptCoordinator, AttemptCoordinatorBuildError};
 pub use ingress::*;
 
 macro_rules! id_type {
@@ -51,6 +51,10 @@ id_type!(
 id_type!(
     /// 路由目标标识。
     RouteTargetId
+);
+id_type!(
+    /// 路由阶段的稳定标识。
+    RouteStageId
 );
 id_type!(
     /// 站点标识。
@@ -86,7 +90,6 @@ pub struct RouteTarget {
     endpoint: EndpointId,
     account: AccountId,
     credential: CredentialId,
-    priority: u16,
 }
 
 impl RouteTarget {
@@ -98,7 +101,6 @@ impl RouteTarget {
         endpoint: EndpointId,
         account: AccountId,
         credential: CredentialId,
-        priority: u16,
     ) -> Self {
         Self {
             id,
@@ -107,7 +109,6 @@ impl RouteTarget {
             endpoint,
             account,
             credential,
-            priority,
         }
     }
 
@@ -140,11 +141,6 @@ impl RouteTarget {
     pub const fn credential(self) -> CredentialId {
         self.credential
     }
-
-    /// 返回较小数值优先的静态优先级。
-    pub const fn priority(self) -> u16 {
-        self.priority
-    }
 }
 
 /// 路由目标在当前不可变快照中的可用状态。
@@ -161,36 +157,48 @@ pub enum TargetState {
     Disabled,
 }
 
-/// 快照中的一个目标候选。
+/// 与稳定 RouteStage 绑定的快照目标候选。
+///
+/// 同一 Stage 的候选必须在快照中连续出现；候选顺序定义 Stage 的执行顺序，禁止靠
+/// Target 数值、惩罚或全局游标让后续 Stage 抢占前序 Stage。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RouteCandidate {
+    stage: RouteStageId,
     target: RouteTarget,
     state: TargetState,
 }
 
 impl RouteCandidate {
     /// 创建可用候选。
-    pub const fn ready(target: RouteTarget, penalty: u16) -> Self {
+    pub const fn ready(stage: RouteStageId, target: RouteTarget, penalty: u16) -> Self {
         Self {
+            stage,
             target,
             state: TargetState::Ready { penalty },
         }
     }
 
     /// 创建冷却中的候选。
-    pub const fn cooling_down(target: RouteTarget) -> Self {
+    pub const fn cooling_down(stage: RouteStageId, target: RouteTarget) -> Self {
         Self {
+            stage,
             target,
             state: TargetState::CoolingDown,
         }
     }
 
     /// 创建禁用候选。
-    pub const fn disabled(target: RouteTarget) -> Self {
+    pub const fn disabled(stage: RouteStageId, target: RouteTarget) -> Self {
         Self {
+            stage,
             target,
             state: TargetState::Disabled,
         }
+    }
+
+    /// 返回所属的稳定路由阶段。
+    pub const fn stage(self) -> RouteStageId {
+        self.stage
     }
 
     /// 返回绑定目标。
@@ -207,11 +215,11 @@ impl RouteCandidate {
 /// 路由目标排序策略。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RoutingStrategy {
-    /// 严格按静态优先级形成 `A -> B -> C`。
+    /// 严格按阶段顺序与阶段内声明顺序形成 `A -> B -> C`。
     Priority,
-    /// 在静态优先级序列上按请求游标轮转起点。
+    /// 按请求游标只在每个阶段内轮转，不得让后续阶段抢占前序阶段。
     RoundRobin,
-    /// 优先选择当前惩罚值更低的目标，再按静态优先级排序。
+    /// 只在每个阶段内优先选择当前惩罚值更低的目标。
     LeastPenalty,
 }
 
@@ -224,8 +232,12 @@ pub enum PlanError {
     TooManyCandidates,
     /// 最大尝试数为零或超过固定上限。
     InvalidMaxAttempts,
+    /// 总尝试预算不足以首次访问每个已配置路由阶段。
+    InsufficientMaxAttemptsForStages,
     /// 同一快照重复出现相同目标。
     DuplicateTarget,
+    /// 同一阶段的候选在快照中被拆成了不连续的多个片段。
+    NonContiguousStage,
     /// 当前没有可用目标。
     NoEligibleTargets,
     /// 路由计划与传入快照版本不一致。
@@ -259,6 +271,7 @@ impl<'a> RoutingSnapshot<'a> {
         if max_attempts == 0 || usize::from(max_attempts) > MAX_ROUTE_TARGETS {
             return Err(PlanError::InvalidMaxAttempts);
         }
+        let mut stage_count = 0usize;
         for (index, candidate) in candidates.iter().enumerate() {
             if candidates[..index]
                 .iter()
@@ -266,6 +279,18 @@ impl<'a> RoutingSnapshot<'a> {
             {
                 return Err(PlanError::DuplicateTarget);
             }
+            if index == 0 || candidates[index - 1].stage != candidate.stage {
+                if candidates[..index]
+                    .iter()
+                    .any(|previous| previous.stage == candidate.stage)
+                {
+                    return Err(PlanError::NonContiguousStage);
+                }
+                stage_count += 1;
+            }
+        }
+        if usize::from(max_attempts) < stage_count {
+            return Err(PlanError::InsufficientMaxAttemptsForStages);
         }
         Ok(Self {
             version,
@@ -296,71 +321,86 @@ impl<'a> RoutingSnapshot<'a> {
             .find(|candidate| candidate.target.id == target_id)
             .map(|candidate| &candidate.target)
     }
+
+    fn stage_for(&self, target_id: RouteTargetId) -> Option<RouteStageId> {
+        self.candidates
+            .iter()
+            .find(|candidate| candidate.target.id == target_id)
+            .map(|candidate| candidate.stage)
+    }
 }
 
 #[derive(Clone, Copy)]
 struct CandidateOrder {
     index: u8,
     penalty: u16,
-    priority: u16,
 }
 
 impl CandidateOrder {
     const EMPTY: Self = Self {
         index: 0,
         penalty: 0,
-        priority: 0,
     };
 }
 
-/// 无状态、无分配的路由计划器。
+/// 无状态、无分配的 Stage-first 路由计划器。
 pub struct RoutePlanner;
 
 impl RoutePlanner {
     /// 根据快照与请求游标生成有界计划。
+    ///
+    /// 每个有可用候选的 Stage 只签发一个 Target；RoundRobin 与 LeastPenalty 仅决定
+    /// 当前 Stage 的首选 Target。动态同 Stage failover 需要后续独立的策略、额度和
+    /// 健康合同，不能由本编译器把同级 Target 静默扩成自动重试池。
     pub fn plan(
         snapshot: &RoutingSnapshot<'_>,
         request_cursor: u64,
     ) -> Result<RoutePlan, PlanError> {
-        let mut ordered = [CandidateOrder::EMPTY; MAX_ROUTE_TARGETS];
-        let mut eligible_count = 0usize;
-
-        for (index, candidate) in snapshot.candidates.iter().enumerate() {
-            let TargetState::Ready { penalty } = candidate.state else {
-                continue;
-            };
-            ordered[eligible_count] = CandidateOrder {
-                index: index as u8,
-                penalty,
-                priority: candidate.target.priority,
-            };
-            eligible_count += 1;
-        }
-
-        if eligible_count == 0 {
-            return Err(PlanError::NoEligibleTargets);
-        }
-
-        let eligible = &mut ordered[..eligible_count];
-        match snapshot.strategy {
-            RoutingStrategy::Priority | RoutingStrategy::RoundRobin => {
-                eligible.sort_unstable_by_key(|item| (item.priority, item.index));
-            }
-            RoutingStrategy::LeastPenalty => {
-                eligible.sort_unstable_by_key(|item| (item.penalty, item.priority, item.index));
-            }
-        }
-
-        let rotation = if snapshot.strategy == RoutingStrategy::RoundRobin {
-            request_cursor as usize % eligible_count
-        } else {
-            0
-        };
-        let plan_len = eligible_count.min(usize::from(snapshot.max_attempts));
         let mut target_ids = [RouteTargetId::INVALID; MAX_ROUTE_TARGETS];
-        for (plan_index, slot) in target_ids[..plan_len].iter_mut().enumerate() {
-            let source = eligible[(plan_index + rotation) % eligible_count];
-            *slot = snapshot.candidates[usize::from(source.index)].target.id;
+        let mut plan_len = 0usize;
+        let mut stage_start = 0usize;
+
+        while stage_start < snapshot.candidates.len()
+            && plan_len < usize::from(snapshot.max_attempts)
+        {
+            let stage = snapshot.candidates[stage_start].stage;
+            let mut ordered = [CandidateOrder::EMPTY; MAX_ROUTE_TARGETS];
+            let mut eligible_count = 0usize;
+            let mut stage_end = stage_start;
+
+            while stage_end < snapshot.candidates.len()
+                && snapshot.candidates[stage_end].stage == stage
+            {
+                let candidate = snapshot.candidates[stage_end];
+                if let TargetState::Ready { penalty } = candidate.state {
+                    ordered[eligible_count] = CandidateOrder {
+                        index: stage_end as u8,
+                        penalty,
+                    };
+                    eligible_count += 1;
+                }
+                stage_end += 1;
+            }
+
+            if eligible_count > 0 {
+                let eligible = &mut ordered[..eligible_count];
+                if snapshot.strategy == RoutingStrategy::LeastPenalty {
+                    eligible.sort_unstable_by_key(|item| (item.penalty, item.index));
+                }
+                let rotation = if snapshot.strategy == RoutingStrategy::RoundRobin {
+                    request_cursor as usize % eligible_count
+                } else {
+                    0
+                };
+                let source = eligible[rotation];
+                target_ids[plan_len] = snapshot.candidates[usize::from(source.index)].target.id;
+                plan_len += 1;
+            }
+            stage_start = stage_end;
+        }
+
+        if plan_len == 0 {
+            return Err(PlanError::NoEligibleTargets);
         }
 
         Ok(RoutePlan {
@@ -381,7 +421,10 @@ pub struct RoutePlan {
 impl RoutePlan {
     /// 消费计划并创建只允许线性推进的 Attempt 协调器。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn into_attempt_coordinator(self, policy: RetryPolicy) -> AttemptCoordinator {
+    pub(crate) fn into_attempt_coordinator(
+        self,
+        policy: RetryPolicy,
+    ) -> Result<AttemptCoordinator, AttemptCoordinatorBuildError> {
         AttemptCoordinator::new(self, policy)
     }
 
@@ -398,6 +441,24 @@ impl RoutePlan {
     /// 判断计划是否为空。
     pub const fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// 在同版本快照中解析指定尝试所属的稳定路由阶段。
+    pub fn stage_id(
+        &self,
+        snapshot: &RoutingSnapshot<'_>,
+        attempt_index: u8,
+    ) -> Result<Option<RouteStageId>, PlanError> {
+        if self.snapshot_version != snapshot.version {
+            return Err(PlanError::StaleSnapshot);
+        }
+        let Some(target_id) = self.target_id(attempt_index) else {
+            return Ok(None);
+        };
+        snapshot
+            .stage_for(target_id)
+            .map(Some)
+            .ok_or(PlanError::UnknownTarget)
     }
 
     /// 返回指定尝试对应的目标标识。
@@ -467,6 +528,10 @@ impl RetryPolicy {
             max_attempts,
             retry_after_cap_ms,
         })
+    }
+
+    pub(crate) const fn max_attempts(&self) -> u8 {
+        self.max_attempts
     }
 }
 
@@ -559,7 +624,8 @@ impl RetryGate {
 #[cfg(test)]
 mod tests {
     use super::coordinator::{
-        AttemptCompleteError, AttemptPermit, AttemptStartError, CoordinatorStep,
+        AttemptCompleteError, AttemptCoordinatorBuildError, AttemptPermit, AttemptStartError,
+        CoordinatorStep,
     };
     use super::*;
 
@@ -567,7 +633,11 @@ mod tests {
         RouteTargetId::new(value).expect("测试 ID 非零")
     }
 
-    fn target(value: u64, priority: u16) -> RouteTarget {
+    fn stage(value: u64) -> RouteStageId {
+        RouteStageId::new(value).expect("测试阶段 ID 非零")
+    }
+
+    fn target(value: u64) -> RouteTarget {
         RouteTarget::new(
             id(value),
             SiteId::new(value).expect("站点 ID 非零"),
@@ -575,8 +645,19 @@ mod tests {
             EndpointId::new(value).expect("端点 ID 非零"),
             AccountId::new(value).expect("账户 ID 非零"),
             CredentialId::new(value).expect("凭据 ID 非零"),
-            priority,
         )
+    }
+
+    fn ready(stage_value: u64, target_value: u64, penalty: u16) -> RouteCandidate {
+        RouteCandidate::ready(stage(stage_value), target(target_value), penalty)
+    }
+
+    fn cooling_down(stage_value: u64, target_value: u64) -> RouteCandidate {
+        RouteCandidate::cooling_down(stage(stage_value), target(target_value))
+    }
+
+    fn disabled(stage_value: u64, target_value: u64) -> RouteCandidate {
+        RouteCandidate::disabled(stage(stage_value), target(target_value))
     }
 
     fn version(value: u64) -> SnapshotVersion {
@@ -639,10 +720,7 @@ mod tests {
     }
 
     fn plan_for_coordinator() -> RoutePlan {
-        let candidates = [
-            RouteCandidate::ready(target(1, 1), 0),
-            RouteCandidate::ready(target(2, 2), 0),
-        ];
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
         RoutePlanner::plan(&snapshot, 0).expect("存在可用目标")
     }
@@ -667,6 +745,8 @@ mod tests {
     fn identifier_rejects_zero() {
         assert_eq!(RouteTargetId::new(0), None);
         assert_eq!(RouteTargetId::new(9).map(RouteTargetId::get), Some(9));
+        assert_eq!(RouteStageId::new(0), None);
+        assert_eq!(RouteStageId::new(3).map(RouteStageId::get), Some(3));
     }
 
     #[test]
@@ -676,29 +756,38 @@ mod tests {
             Some(PlanError::NoCandidates)
         );
 
-        let duplicate = [
-            RouteCandidate::ready(target(1, 1), 0),
-            RouteCandidate::ready(target(1, 2), 0),
-        ];
+        let duplicate = [ready(1, 1, 0), ready(2, 1, 0)];
         assert_eq!(
             RoutingSnapshot::new(version(1), &duplicate, RoutingStrategy::Priority, 1).err(),
             Some(PlanError::DuplicateTarget)
         );
 
-        let candidates = [RouteCandidate::ready(target(1, 1), 0)];
+        let candidates = [ready(1, 1, 0)];
         assert_eq!(
             RoutingSnapshot::new(version(1), &candidates, RoutingStrategy::Priority, 0).err(),
             Some(PlanError::InvalidMaxAttempts)
+        );
+
+        let non_contiguous = [ready(1, 1, 0), ready(2, 2, 0), ready(1, 3, 0)];
+        assert_eq!(
+            RoutingSnapshot::new(version(1), &non_contiguous, RoutingStrategy::Priority, 3,).err(),
+            Some(PlanError::NonContiguousStage)
+        );
+
+        let two_stages = [ready(1, 1, 0), ready(2, 2, 0)];
+        assert_eq!(
+            RoutingSnapshot::new(version(1), &two_stages, RoutingStrategy::Priority, 1).err(),
+            Some(PlanError::InsufficientMaxAttemptsForStages)
         );
     }
 
     #[test]
     fn priority_plan_filters_and_orders_targets() {
         let candidates = [
-            RouteCandidate::ready(target(1, 20), 7),
-            RouteCandidate::cooling_down(target(2, 1)),
-            RouteCandidate::ready(target(3, 10), 9),
-            RouteCandidate::disabled(target(4, 0)),
+            cooling_down(1, 2),
+            ready(1, 3, 9),
+            ready(2, 1, 7),
+            disabled(3, 4),
         ];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 3);
         let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
@@ -710,38 +799,41 @@ mod tests {
     }
 
     #[test]
-    fn round_robin_only_rotates_sorted_start() {
-        let candidates = [
-            RouteCandidate::ready(target(1, 10), 0),
-            RouteCandidate::ready(target(2, 20), 0),
-            RouteCandidate::ready(target(3, 30), 0),
-        ];
+    fn round_robin_only_rotates_inside_each_stage() {
+        let candidates = [ready(1, 1, 0), ready(1, 2, 0), ready(2, 3, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::RoundRobin, 3);
-        let plan = RoutePlanner::plan(&snapshot, 4).expect("存在可用目标");
+        let plan = RoutePlanner::plan(&snapshot, 1).expect("存在可用目标");
 
         assert_eq!(plan.target_id(0), Some(id(2)));
         assert_eq!(plan.target_id(1), Some(id(3)));
-        assert_eq!(plan.target_id(2), Some(id(1)));
+        assert_eq!(plan.target_id(2), None);
     }
 
     #[test]
-    fn least_penalty_is_deterministic() {
-        let candidates = [
-            RouteCandidate::ready(target(1, 10), 8),
-            RouteCandidate::ready(target(2, 30), 2),
-            RouteCandidate::ready(target(3, 20), 2),
-        ];
+    fn least_penalty_is_scoped_to_stage() {
+        let candidates = [ready(1, 1, 8), ready(1, 2, 2), ready(2, 3, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::LeastPenalty, 3);
         let plan = RoutePlanner::plan(&snapshot, 99).expect("存在可用目标");
 
+        assert_eq!(plan.target_id(0), Some(id(2)));
+        assert_eq!(plan.target_id(1), Some(id(3)));
+        assert_eq!(plan.target_id(2), None);
+    }
+
+    #[test]
+    fn next_stage_is_used_only_when_current_stage_has_no_eligible_target() {
+        let candidates = [cooling_down(1, 1), disabled(1, 2), ready(2, 3, 0)];
+        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 3);
+        let plan = RoutePlanner::plan(&snapshot, 0).expect("后一阶段存在可用目标");
+
+        assert_eq!(plan.len(), 1);
         assert_eq!(plan.target_id(0), Some(id(3)));
-        assert_eq!(plan.target_id(1), Some(id(2)));
-        assert_eq!(plan.target_id(2), Some(id(1)));
+        assert_eq!(plan.target_id(1), None);
     }
 
     #[test]
     fn plan_is_bound_to_snapshot_version() {
-        let candidates = [RouteCandidate::ready(target(1, 1), 0)];
+        let candidates = [ready(1, 1, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 1);
         let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
         let stale = RoutingSnapshot::new(version(2), &candidates, RoutingStrategy::Priority, 1)
@@ -757,11 +849,19 @@ mod tests {
     }
 
     #[test]
+    fn plan_exposes_stage_identity_for_each_attempt() {
+        let candidates = [ready(11, 1, 0), ready(22, 2, 0)];
+        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
+        let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
+
+        assert_eq!(plan.stage_id(&snapshot, 0), Ok(Some(stage(11))));
+        assert_eq!(plan.stage_id(&snapshot, 1), Ok(Some(stage(22))));
+        assert_eq!(plan.stage_id(&snapshot, 2), Ok(None));
+    }
+
+    #[test]
     fn retry_advances_only_with_replay_proof() {
-        let candidates = [
-            RouteCandidate::ready(target(1, 1), 0),
-            RouteCandidate::ready(target(2, 2), 0),
-        ];
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
         let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
         let policy = RetryPolicy::new(2, 5_000).expect("策略有效");
@@ -783,10 +883,7 @@ mod tests {
 
     #[test]
     fn only_trusted_zero_byte_rejection_honors_bounded_retry_after() {
-        let candidates = [
-            RouteCandidate::ready(target(1, 1), 0),
-            RouteCandidate::ready(target(2, 2), 0),
-        ];
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
         let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
         let policy = RetryPolicy::new(2, 3_000).expect("策略有效");
@@ -808,10 +905,7 @@ mod tests {
 
     #[test]
     fn bytes_or_sse_semantics_never_replay_even_with_trusted_proof() {
-        let candidates = [
-            RouteCandidate::ready(target(1, 1), 0),
-            RouteCandidate::ready(target(2, 2), 0),
-        ];
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
         let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
         let gate = RetryGate::new(RetryPolicy::new(2, 3_000).expect("策略有效"));
@@ -857,10 +951,7 @@ mod tests {
 
     #[test]
     fn retry_stops_for_terminal_conditions() {
-        let candidates = [
-            RouteCandidate::ready(target(1, 1), 0),
-            RouteCandidate::ready(target(2, 2), 0),
-        ];
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
         let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
         let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
         let policy = RetryPolicy::new(2, 1_000).expect("策略有效");
@@ -887,7 +978,8 @@ mod tests {
     #[test]
     fn coordinator_only_advances_once_and_in_plan_order() {
         let mut coordinator = plan_for_coordinator()
-            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
+            .expect("计划与预算一致");
         let first = coordinator.start().expect("允许签发首次尝试");
         assert_eq!(first.index(), 0);
         assert_eq!(first.target(), id(1));
@@ -931,7 +1023,8 @@ mod tests {
     #[test]
     fn coordinator_stops_after_written_request_or_regular_rate_limit() {
         let mut coordinator = plan_for_coordinator()
-            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
+            .expect("计划与预算一致");
         let first = coordinator.start().expect("允许签发首次尝试");
         let written = sent_for(first, FailureClass::RateLimited);
         assert!(matches!(
@@ -945,7 +1038,8 @@ mod tests {
     #[test]
     fn coordinator_never_issues_next_after_sse_or_downstream_commit() {
         let mut semantic = plan_for_coordinator()
-            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
+            .expect("计划与预算一致");
         let permit = semantic.start().expect("允许签发首次尝试");
         let mut tracker = attempt::AttemptTracker::from_permit(permit);
         tracker.request_write_started().expect("允许记录写入");
@@ -963,7 +1057,8 @@ mod tests {
         assert!(semantic.is_stopped());
 
         let mut downstream = plan_for_coordinator()
-            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
+            .expect("计划与预算一致");
         let permit = downstream.start().expect("允许签发首次尝试");
         let mut tracker = attempt::AttemptTracker::from_permit(permit);
         tracker.downstream_committed().expect("允许下游提交");
@@ -978,9 +1073,11 @@ mod tests {
     #[test]
     fn other_coordinator_completion_fails_closed_without_next_permit() {
         let mut coordinator = plan_for_coordinator()
-            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
+            .expect("计划与预算一致");
         let mut other = plan_for_coordinator()
-            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
+            .expect("计划与预算一致");
         let foreign = other.start().expect("允许签发另一请求的首次尝试");
         let mismatched = not_sent_for(foreign, FailureClass::Connect);
         let _current = coordinator.start().expect("允许签发当前请求的首次尝试");
@@ -994,6 +1091,17 @@ mod tests {
         assert!(matches!(
             coordinator.start(),
             Err(AttemptStartError::Stopped)
+        ));
+    }
+
+    #[test]
+    fn coordinator_rejects_retry_budget_that_cannot_reach_every_stage() {
+        let result = plan_for_coordinator()
+            .into_attempt_coordinator(RetryPolicy::new(1, 3_000).expect("策略有效"));
+
+        assert!(matches!(
+            result,
+            Err(AttemptCoordinatorBuildError::InsufficientAttemptBudget)
         ));
     }
 

@@ -1,13 +1,13 @@
 use routing_core::{
     AccountId, CredentialId, EndpointId, ModelDeploymentId, RouteCandidate, RoutePlanner,
-    RouteTarget, RoutingSnapshot, RoutingStrategy, SiteId, SnapshotVersion,
+    RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy, SiteId, SnapshotVersion,
 };
 use std::hint::black_box;
 use std::time::Instant;
 
 const ITERATIONS: u64 = 100_000;
 
-fn target(value: u64, priority: u16) -> RouteTarget {
+fn target(value: u64) -> RouteTarget {
     RouteTarget::new(
         routing_core::RouteTargetId::new(value).expect("基准 ID 非零"),
         SiteId::new(value).expect("站点 ID 非零"),
@@ -15,15 +15,16 @@ fn target(value: u64, priority: u16) -> RouteTarget {
         EndpointId::new(value).expect("端点 ID 非零"),
         AccountId::new(value).expect("账户 ID 非零"),
         CredentialId::new(value).expect("凭据 ID 非零"),
-        priority,
     )
 }
 
 fn main() {
-    let mut candidates = [RouteCandidate::ready(target(1, 1), 0); 16];
+    let first_stage = RouteStageId::new(1).expect("基准阶段 ID 非零");
+    let mut candidates = [RouteCandidate::ready(first_stage, target(1), 0); 16];
     for (index, candidate) in candidates.iter_mut().enumerate() {
         let value = (index + 1) as u64;
-        *candidate = RouteCandidate::ready(target(value, index as u16), index as u16);
+        let stage = RouteStageId::new((index / 4 + 1) as u64).expect("基准阶段 ID 非零");
+        *candidate = RouteCandidate::ready(stage, target(value), index as u16);
     }
     let snapshot = RoutingSnapshot::new(
         SnapshotVersion::new(1).expect("快照版本非零"),
