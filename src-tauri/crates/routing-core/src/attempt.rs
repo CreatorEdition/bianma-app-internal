@@ -1,10 +1,13 @@
 //! 单次发送、流式语义与安全重放的最小合同。
 //!
 //! 本模块只记录固定大小的状态，不执行网络 I/O，也不解析 HTTP、SSE 或错误文本。
-//! 外部调用方只能读取 [`AttemptOutcome`]；可重放结果只能由 crate 内受控的
-//! [`AttemptTracker`] 与受信执行前拒绝证明共同生成。
+//! 结果只能由 crate 内受控的 [`AttemptTracker`] 与受信执行前拒绝证明共同生成；Tracker
+//! 必须消费 Coordinator 许可，防止一次 Attempt 被重复发送。
 
-use super::FailureClass;
+use super::{
+    coordinator::{AttemptId, AttemptPermit, CoordinatorId},
+    FailureClass,
+};
 
 /// 发送尝试的单调阶段。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,15 +94,19 @@ impl TrustedPreExecutionRejection {
 /// 最终结果通过消费本记录器生成。
 #[derive(Debug)]
 pub(crate) struct AttemptTracker {
+    permit: AttemptPermit,
     phase: SendPhase,
     write: UpstreamWriteState,
     downstream: DownstreamCommitState,
 }
 
 impl AttemptTracker {
-    /// 从尚未写入的状态创建记录器。
-    pub(crate) const fn new() -> Self {
+    /// 消费 Coordinator 签发的单次许可并创建状态机。
+    ///
+    /// 许可被移动进 Tracker，因而同一个 Attempt 不可能被构造为两个独立的发送器。
+    pub(crate) const fn from_permit(permit: AttemptPermit) -> Self {
         Self {
+            permit,
             phase: SendPhase::Pending,
             write: UpstreamWriteState::NoBytesProven,
             downstream: DownstreamCommitState::NotCommitted,
@@ -170,12 +177,25 @@ impl AttemptTracker {
         Ok(())
     }
 
-    /// 消费记录器并生成不可变结果。
+    /// 消费记录器并生成只能被 Coordinator 消费的完成对象。
     ///
     /// `trusted_rejection` 只接受 crate 内受信适配器合同签发的证明；普通 HTTP 429
     /// 或 Retry-After 必须传入 `None`，并在发生请求写入后得到不可重放结果。
-    pub(crate) fn into_outcome(
+    pub(crate) fn into_completion(
         self,
+        failure: FailureClass,
+        retry_after_ms: Option<u64>,
+        trusted_rejection: Option<TrustedPreExecutionRejection>,
+    ) -> AttemptCompletion {
+        let outcome = self.build_outcome(failure, retry_after_ms, trusted_rejection);
+        AttemptCompletion {
+            permit: self.permit,
+            outcome,
+        }
+    }
+
+    fn build_outcome(
+        &self,
         failure: FailureClass,
         retry_after_ms: Option<u64>,
         trusted_rejection: Option<TrustedPreExecutionRejection>,
@@ -206,13 +226,48 @@ impl AttemptTracker {
             charge,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_only(id: u8) -> Self {
+        Self::from_permit(AttemptPermit::test_only(id))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_outcome_for_test(
+        self,
+        failure: FailureClass,
+        retry_after_ms: Option<u64>,
+        trusted_rejection: Option<TrustedPreExecutionRejection>,
+    ) -> AttemptOutcome {
+        self.build_outcome(failure, retry_after_ms, trusted_rejection)
+    }
+}
+
+/// 绑定不可复制许可的 Attempt 完成对象。
+///
+/// 字段、构造器与解构路径均保持 crate-private。Coordinator 必须消费该对象，不能把
+/// Permit 与 Outcome 拆开并重新启动一次 Attempt。
+#[derive(Debug)]
+pub(crate) struct AttemptCompletion {
+    permit: AttemptPermit,
+    outcome: AttemptOutcome,
+}
+
+impl AttemptCompletion {
+    pub(crate) fn matches(&self, coordinator: CoordinatorId, id: AttemptId) -> bool {
+        self.permit.belongs_to(coordinator) && self.permit.attempt_id() == id
+    }
+
+    pub(crate) const fn outcome(&self) -> &AttemptOutcome {
+        &self.outcome
+    }
 }
 
 /// 由 crate 内受控观察生成的一次失败结果。
 ///
 /// 此类型的字段与构造路径均不对外开放。`RetryGate` 可以读取它并决定下一条路径，
 /// 但调用方不能自行制造 `NotSent` 或 `PreExecutionRejected`。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct AttemptOutcome {
     failure: FailureClass,
     delivery: DeliveryState,
@@ -225,40 +280,40 @@ pub struct AttemptOutcome {
 
 impl AttemptOutcome {
     /// 返回失败类别。
-    pub const fn failure(self) -> FailureClass {
+    pub const fn failure(&self) -> FailureClass {
         self.failure
     }
 
     /// 返回交付状态。
-    pub const fn delivery(self) -> DeliveryState {
+    pub const fn delivery(&self) -> DeliveryState {
         self.delivery
     }
 
     /// 返回最终发送阶段。
-    pub const fn phase(self) -> SendPhase {
+    pub const fn phase(&self) -> SendPhase {
         self.phase
     }
 
     /// 返回最终上游写入状态。
-    pub const fn write_state(self) -> UpstreamWriteState {
+    pub const fn write_state(&self) -> UpstreamWriteState {
         self.write
     }
 
     /// 返回最终下游提交状态。
-    pub const fn downstream_state(self) -> DownstreamCommitState {
+    pub const fn downstream_state(&self) -> DownstreamCommitState {
         self.downstream
     }
 
     /// 返回保守的上游计费状态。
-    pub const fn charge_state(self) -> ChargeState {
+    pub const fn charge_state(&self) -> ChargeState {
         self.charge
     }
 
-    pub(crate) fn downstream_committed(self) -> bool {
+    pub(crate) fn downstream_committed(&self) -> bool {
         self.downstream == DownstreamCommitState::Committed
     }
 
-    pub(crate) const fn retry_after_ms(self) -> Option<u64> {
+    pub(crate) const fn retry_after_ms(&self) -> Option<u64> {
         self.retry_after_ms
     }
 }
@@ -285,12 +340,13 @@ mod tests {
             "Attempt 合同运行时代码过大: {code_lines} 行"
         );
         assert!(core::mem::size_of::<AttemptOutcome>() <= 32);
+        assert!(core::mem::size_of::<AttemptTracker>() <= 32);
+        assert!(core::mem::size_of::<AttemptCompletion>() <= 64);
     }
 
     #[test]
     fn transitions_are_monotonic_and_bounded() {
-        let mut tracker = AttemptTracker::new();
-        assert_eq!(core::mem::size_of::<AttemptTracker>(), 3);
+        let mut tracker = AttemptTracker::test_only(1);
         assert_eq!(
             tracker.first_semantic_event_observed(),
             Err(AttemptTransitionError::InvalidPhase)
@@ -313,7 +369,7 @@ mod tests {
 
     #[test]
     fn downstream_commit_can_close_any_in_flight_attempt() {
-        let mut tracker = AttemptTracker::new();
+        let mut tracker = AttemptTracker::test_only(1);
         tracker.downstream_committed().expect("允许先提交下游响应");
         assert_eq!(tracker.phase(), SendPhase::DownstreamCommitted);
         assert_eq!(tracker.downstream_state(), DownstreamCommitState::Committed);
@@ -325,21 +381,21 @@ mod tests {
 
     #[test]
     fn write_state_never_returns_to_a_safe_value() {
-        let mut tracker = AttemptTracker::new();
+        let mut tracker = AttemptTracker::test_only(1);
         tracker.write_state_unknown().expect("允许标记未知");
         assert_eq!(tracker.write_state(), UpstreamWriteState::Unknown);
         assert_eq!(
             tracker.request_write_started(),
             Err(AttemptTransitionError::InvalidPhase)
         );
-        let outcome = tracker.into_outcome(FailureClass::Timeout, None, None);
+        let outcome = tracker.into_outcome_for_test(FailureClass::Timeout, None, None);
         assert_eq!(outcome.delivery(), DeliveryState::Unknown);
         assert_eq!(outcome.charge_state(), ChargeState::Unknown);
     }
 
     #[test]
     fn written_bytes_and_semantic_event_override_trusted_rejection() {
-        let mut tracker = AttemptTracker::new();
+        let mut tracker = AttemptTracker::test_only(1);
         tracker.request_write_started().expect("允许开始写入");
         tracker
             .upstream_response_observed()
@@ -347,7 +403,7 @@ mod tests {
         tracker
             .first_semantic_event_observed()
             .expect("允许观察语义事件");
-        let outcome = tracker.into_outcome(
+        let outcome = tracker.into_outcome_for_test(
             FailureClass::RateLimited,
             Some(1_000),
             Some(TrustedPreExecutionRejection::registered()),

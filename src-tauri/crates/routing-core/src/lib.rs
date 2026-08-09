@@ -13,12 +13,15 @@ pub const MAX_ROUTE_TARGETS: usize = 16;
 // 可伪造的 Attempt 构造路径。单测会覆盖该内部状态机。
 #[cfg_attr(not(test), allow(dead_code))]
 mod attempt;
+#[cfg_attr(not(test), allow(dead_code))]
+mod coordinator;
 mod ingress;
 
 pub use attempt::{
     AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState, SendPhase,
     UpstreamWriteState,
 };
+use coordinator::AttemptCoordinator;
 pub use ingress::*;
 
 macro_rules! id_type {
@@ -376,6 +379,12 @@ pub struct RoutePlan {
 }
 
 impl RoutePlan {
+    /// 消费计划并创建只允许线性推进的 Attempt 协调器。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn into_attempt_coordinator(self, policy: RetryPolicy) -> AttemptCoordinator {
+        AttemptCoordinator::new(self, policy)
+    }
+
     /// 返回快照版本。
     pub const fn snapshot_version(&self) -> SnapshotVersion {
         self.snapshot_version
@@ -478,7 +487,8 @@ pub enum RetryStopReason {
 
 /// ReplayGate 对下一步的唯一决策。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RetryDecision {
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum RetryDecision {
     /// 推进到计划中的下一个目标。
     Advance {
         /// 推进前的有界等待时间。
@@ -489,22 +499,23 @@ pub enum RetryDecision {
 }
 
 /// 保守的重试与路径推进门禁。
-pub struct RetryGate {
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct RetryGate {
     policy: RetryPolicy,
 }
 
 impl RetryGate {
     /// 创建门禁。
-    pub const fn new(policy: RetryPolicy) -> Self {
+    pub(crate) const fn new(policy: RetryPolicy) -> Self {
         Self { policy }
     }
 
     /// 根据计划位置与尝试结果决定是否推进。
-    pub fn decide(
+    pub(crate) fn decide(
         &self,
         plan: &RoutePlan,
         attempt_index: u8,
-        outcome: AttemptOutcome,
+        outcome: &AttemptOutcome,
     ) -> RetryDecision {
         if outcome.downstream_committed() {
             return RetryDecision::Stop(RetryStopReason::DownstreamCommitted);
@@ -547,6 +558,9 @@ impl RetryGate {
 
 #[cfg(test)]
 mod tests {
+    use super::coordinator::{
+        AttemptCompleteError, AttemptPermit, AttemptStartError, CoordinatorStep,
+    };
     use super::*;
 
     fn id(value: u64) -> RouteTargetId {
@@ -578,26 +592,26 @@ mod tests {
     }
 
     fn not_sent(failure: FailureClass, retry_after_ms: Option<u64>) -> AttemptOutcome {
-        attempt::AttemptTracker::new().into_outcome(failure, retry_after_ms, None)
+        attempt::AttemptTracker::test_only(1).into_outcome_for_test(failure, retry_after_ms, None)
     }
 
     fn sent(failure: FailureClass, retry_after_ms: Option<u64>) -> AttemptOutcome {
-        let mut tracker = attempt::AttemptTracker::new();
+        let mut tracker = attempt::AttemptTracker::test_only(1);
         tracker.request_write_started().expect("允许记录写入");
-        tracker.into_outcome(failure, retry_after_ms, None)
+        tracker.into_outcome_for_test(failure, retry_after_ms, None)
     }
 
     fn delivery_unknown(failure: FailureClass) -> AttemptOutcome {
-        let mut tracker = attempt::AttemptTracker::new();
+        let mut tracker = attempt::AttemptTracker::test_only(1);
         tracker.write_state_unknown().expect("允许标记未知");
-        tracker.into_outcome(failure, None, None)
+        tracker.into_outcome_for_test(failure, None, None)
     }
 
     fn trusted_pre_execution_rejected(
         failure: FailureClass,
         retry_after_ms: Option<u64>,
     ) -> AttemptOutcome {
-        attempt::AttemptTracker::new().into_outcome(
+        attempt::AttemptTracker::test_only(1).into_outcome_for_test(
             failure,
             retry_after_ms,
             Some(attempt::TrustedPreExecutionRejection::registered()),
@@ -605,13 +619,32 @@ mod tests {
     }
 
     fn downstream_committed(failure: FailureClass) -> AttemptOutcome {
-        let mut tracker = attempt::AttemptTracker::new();
+        let mut tracker = attempt::AttemptTracker::test_only(1);
         tracker.request_write_started().expect("允许记录写入");
         tracker
             .upstream_response_observed()
             .expect("允许记录响应头");
         tracker.downstream_committed().expect("允许下游提交");
-        tracker.into_outcome(failure, None, None)
+        tracker.into_outcome_for_test(failure, None, None)
+    }
+
+    fn not_sent_for(permit: AttemptPermit, failure: FailureClass) -> attempt::AttemptCompletion {
+        attempt::AttemptTracker::from_permit(permit).into_completion(failure, None, None)
+    }
+
+    fn sent_for(permit: AttemptPermit, failure: FailureClass) -> attempt::AttemptCompletion {
+        let mut tracker = attempt::AttemptTracker::from_permit(permit);
+        tracker.request_write_started().expect("允许记录写入");
+        tracker.into_completion(failure, None, None)
+    }
+
+    fn plan_for_coordinator() -> RoutePlan {
+        let candidates = [
+            RouteCandidate::ready(target(1, 1), 0),
+            RouteCandidate::ready(target(2, 2), 0),
+        ];
+        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
+        RoutePlanner::plan(&snapshot, 0).expect("存在可用目标")
     }
 
     #[test]
@@ -735,15 +768,15 @@ mod tests {
         let gate = RetryGate::new(policy);
 
         assert_eq!(
-            gate.decide(&plan, 0, not_sent(FailureClass::Connect, None)),
+            gate.decide(&plan, 0, &not_sent(FailureClass::Connect, None)),
             RetryDecision::Advance { delay_ms: 0 }
         );
         assert_eq!(
-            gate.decide(&plan, 0, sent(FailureClass::Server, None)),
+            gate.decide(&plan, 0, &sent(FailureClass::Server, None)),
             RetryDecision::Stop(RetryStopReason::ReplayNotProven)
         );
         assert_eq!(
-            gate.decide(&plan, 0, delivery_unknown(FailureClass::Timeout)),
+            gate.decide(&plan, 0, &delivery_unknown(FailureClass::Timeout)),
             RetryDecision::Stop(RetryStopReason::ReplayNotProven)
         );
     }
@@ -763,12 +796,12 @@ mod tests {
             gate.decide(
                 &plan,
                 0,
-                trusted_pre_execution_rejected(FailureClass::RateLimited, Some(30_000))
+                &trusted_pre_execution_rejected(FailureClass::RateLimited, Some(30_000))
             ),
             RetryDecision::Advance { delay_ms: 3_000 }
         );
         assert_eq!(
-            gate.decide(&plan, 0, sent(FailureClass::RateLimited, Some(1_000))),
+            gate.decide(&plan, 0, &sent(FailureClass::RateLimited, Some(1_000))),
             RetryDecision::Stop(RetryStopReason::ReplayNotProven)
         );
     }
@@ -783,13 +816,13 @@ mod tests {
         let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
         let gate = RetryGate::new(RetryPolicy::new(2, 3_000).expect("策略有效"));
 
-        let mut bytes_written = attempt::AttemptTracker::new();
+        let mut bytes_written = attempt::AttemptTracker::test_only(1);
         bytes_written.request_write_started().expect("允许记录写入");
         assert_eq!(
             gate.decide(
                 &plan,
                 0,
-                bytes_written.into_outcome(
+                &bytes_written.into_outcome_for_test(
                     FailureClass::RateLimited,
                     Some(1_000),
                     Some(attempt::TrustedPreExecutionRejection::registered()),
@@ -798,7 +831,7 @@ mod tests {
             RetryDecision::Stop(RetryStopReason::ReplayNotProven)
         );
 
-        let mut semantic_event = attempt::AttemptTracker::new();
+        let mut semantic_event = attempt::AttemptTracker::test_only(1);
         semantic_event
             .request_write_started()
             .expect("允许记录写入");
@@ -812,7 +845,7 @@ mod tests {
             gate.decide(
                 &plan,
                 0,
-                semantic_event.into_outcome(
+                &semantic_event.into_outcome_for_test(
                     FailureClass::RateLimited,
                     Some(1_000),
                     Some(attempt::TrustedPreExecutionRejection::registered()),
@@ -834,26 +867,140 @@ mod tests {
         let gate = RetryGate::new(policy);
 
         assert_eq!(
-            gate.decide(&plan, 0, delivery_unknown(FailureClass::Cancelled)),
+            gate.decide(&plan, 0, &delivery_unknown(FailureClass::Cancelled)),
             RetryDecision::Stop(RetryStopReason::Cancelled)
         );
         assert_eq!(
-            gate.decide(&plan, 0, downstream_committed(FailureClass::Server)),
+            gate.decide(&plan, 0, &downstream_committed(FailureClass::Server)),
             RetryDecision::Stop(RetryStopReason::DownstreamCommitted)
         );
         assert_eq!(
-            gate.decide(&plan, 0, not_sent(FailureClass::Authentication, None)),
+            gate.decide(&plan, 0, &not_sent(FailureClass::Authentication, None)),
             RetryDecision::Stop(RetryStopReason::NonRetryable)
         );
         assert_eq!(
-            gate.decide(&plan, 1, not_sent(FailureClass::Connect, None)),
+            gate.decide(&plan, 1, &not_sent(FailureClass::Connect, None)),
             RetryDecision::Stop(RetryStopReason::Exhausted)
         );
     }
 
     #[test]
+    fn coordinator_only_advances_once_and_in_plan_order() {
+        let mut coordinator = plan_for_coordinator()
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+        let first = coordinator.start().expect("允许签发首次尝试");
+        assert_eq!(first.index(), 0);
+        assert_eq!(first.target(), id(1));
+        assert!(coordinator.has_active_attempt());
+        assert!(matches!(
+            coordinator.start(),
+            Err(AttemptStartError::ActiveAttempt)
+        ));
+
+        let first_outcome = not_sent_for(first, FailureClass::Connect);
+        let CoordinatorStep::Next {
+            permit: second,
+            delay_ms,
+        } = coordinator
+            .complete(first_outcome)
+            .expect("零写入连接失败允许推进")
+        else {
+            panic!("应签发唯一的第二次尝试");
+        };
+        assert_eq!(delay_ms, 0);
+        assert_eq!(second.index(), 1);
+        assert_eq!(second.target(), id(2));
+        assert!(coordinator.has_active_attempt());
+        assert!(matches!(
+            coordinator.start(),
+            Err(AttemptStartError::ActiveAttempt)
+        ));
+
+        let second_outcome = not_sent_for(second, FailureClass::Connect);
+        assert!(matches!(
+            coordinator.complete(second_outcome).expect("第二次可完成"),
+            CoordinatorStep::Stop(RetryStopReason::Exhausted)
+        ));
+        assert!(coordinator.is_stopped());
+        assert!(matches!(
+            coordinator.start(),
+            Err(AttemptStartError::Stopped)
+        ));
+    }
+
+    #[test]
+    fn coordinator_stops_after_written_request_or_regular_rate_limit() {
+        let mut coordinator = plan_for_coordinator()
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+        let first = coordinator.start().expect("允许签发首次尝试");
+        let written = sent_for(first, FailureClass::RateLimited);
+        assert!(matches!(
+            coordinator.complete(written).expect("写后结果可完成"),
+            CoordinatorStep::Stop(RetryStopReason::ReplayNotProven)
+        ));
+        assert!(coordinator.is_stopped());
+        assert!(!coordinator.has_active_attempt());
+    }
+
+    #[test]
+    fn coordinator_never_issues_next_after_sse_or_downstream_commit() {
+        let mut semantic = plan_for_coordinator()
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+        let permit = semantic.start().expect("允许签发首次尝试");
+        let mut tracker = attempt::AttemptTracker::from_permit(permit);
+        tracker.request_write_started().expect("允许记录写入");
+        tracker
+            .upstream_response_observed()
+            .expect("允许记录响应头");
+        tracker
+            .first_semantic_event_observed()
+            .expect("允许记录首个语义事件");
+        let completion = tracker.into_completion(FailureClass::Server, None, None);
+        assert!(matches!(
+            semantic.complete(completion).expect("语义事件可完成"),
+            CoordinatorStep::Stop(RetryStopReason::ReplayNotProven)
+        ));
+        assert!(semantic.is_stopped());
+
+        let mut downstream = plan_for_coordinator()
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+        let permit = downstream.start().expect("允许签发首次尝试");
+        let mut tracker = attempt::AttemptTracker::from_permit(permit);
+        tracker.downstream_committed().expect("允许下游提交");
+        let completion = tracker.into_completion(FailureClass::Server, None, None);
+        assert!(matches!(
+            downstream.complete(completion).expect("下游提交可完成"),
+            CoordinatorStep::Stop(RetryStopReason::DownstreamCommitted)
+        ));
+        assert!(downstream.is_stopped());
+    }
+
+    #[test]
+    fn other_coordinator_completion_fails_closed_without_next_permit() {
+        let mut coordinator = plan_for_coordinator()
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+        let mut other = plan_for_coordinator()
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"));
+        let foreign = other.start().expect("允许签发另一请求的首次尝试");
+        let mismatched = not_sent_for(foreign, FailureClass::Connect);
+        let _current = coordinator.start().expect("允许签发当前请求的首次尝试");
+
+        assert!(matches!(
+            coordinator.complete(mismatched),
+            Err(AttemptCompleteError::Mismatched)
+        ));
+        assert!(coordinator.is_stopped());
+        assert!(!coordinator.has_active_attempt());
+        assert!(matches!(
+            coordinator.start(),
+            Err(AttemptStartError::Stopped)
+        ));
+    }
+
+    #[test]
     fn route_plan_stays_small_and_stack_only() {
         assert!(core::mem::size_of::<RoutePlan>() <= 160);
+        assert!(core::mem::size_of::<AttemptCoordinator>() <= 224);
         assert_eq!(core::mem::size_of::<RouteTargetId>(), 8);
     }
 }
