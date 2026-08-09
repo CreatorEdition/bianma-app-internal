@@ -43,4 +43,4 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 - `cargo clippy --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked -- -D warnings`
 - `cargo bench --manifest-path src-tauri/Cargo.toml -p routing-core --bench route_planner --locked`
 
-`routing-core` 当前仍是未接入生产转发链的纯 Rust 领域切片：仅基于内存快照做有界路由计划与保守重试决策，不读取数据库/文件、不启动后台线程、不执行网络请求，也不承载 ContextPipeline。
+`routing-core` 当前仍是未接入生产转发链的纯 Rust 领域切片：仅基于内存快照做闭集入站分类、有界路由计划与保守重试决策，不读取数据库/文件、不启动后台线程、不执行网络请求，也不承载 ContextPipeline；本地 compact 可被分类为本地 handler，但压缩、记忆和图的实现不会进入模型 RoutePlan 或该核心。

@@ -9,6 +9,9 @@
 /// 单个路由计划允许的最大目标数。
 pub const MAX_ROUTE_TARGETS: usize = 16;
 
+mod ingress;
+pub use ingress::*;
+
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
