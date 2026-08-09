@@ -15,6 +15,7 @@ pub const MAX_ROUTE_TARGETS: usize = 16;
 mod account_selector;
 #[cfg_attr(not(test), allow(dead_code))]
 mod attempt;
+mod compiled_snapshot;
 #[cfg_attr(not(test), allow(dead_code))]
 mod coordinator;
 mod ingress;
@@ -24,6 +25,7 @@ pub use attempt::{
     AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState, SendPhase,
     UpstreamWriteState,
 };
+pub use compiled_snapshot::*;
 use coordinator::{AttemptCoordinator, AttemptCoordinatorBuildError};
 pub use ingress::*;
 
@@ -245,6 +247,8 @@ pub enum PlanError {
     DuplicateTarget,
     /// 同一已编译计划重复引用相同模型部署。
     DuplicateDeployment,
+    /// 路由目标引用了当前编译代中不存在的账户选择合同。
+    UnknownAccountSelector,
     /// 同一阶段的候选在快照中被拆成了不连续的多个片段。
     NonContiguousStage,
     /// 当前没有可用目标。
@@ -267,7 +271,7 @@ pub struct RoutingSnapshot<'a> {
 
 impl<'a> RoutingSnapshot<'a> {
     /// 验证并创建快照视图。
-    pub fn new(
+    pub(crate) fn new(
         version: SnapshotVersion,
         candidates: &'a [RouteCandidate],
         strategy: RoutingStrategy,
@@ -663,13 +667,32 @@ mod tests {
     }
 
     fn target_with_deployment(value: u64, deployment_value: u64) -> RouteTarget {
+        target_with_selector(value, deployment_value, value)
+    }
+
+    fn target_with_selector(value: u64, deployment_value: u64, selector_value: u64) -> RouteTarget {
         RouteTarget::new(
             id(value),
             SiteId::new(value).expect("站点 ID 非零"),
             ModelDeploymentId::new(deployment_value).expect("部署 ID 非零"),
             EndpointId::new(value).expect("端点 ID 非零"),
-            AccountSelectorId::new(value).expect("账户选择合同 ID 非零"),
+            AccountSelectorId::new(selector_value).expect("账户选择合同 ID 非零"),
         )
+    }
+
+    fn selector_definition<'a>(
+        selector_value: u64,
+        units: &'a [QuotaSelectionUnit<'a>],
+        members: &'a [AccountSelectorMember],
+    ) -> AccountSelectorDefinition<'a> {
+        AccountSelectorDefinition::new(
+            AccountSelectorId::new(selector_value).expect("账户选择合同 ID 非零"),
+            CredentialSelectionPolicy::PriorityFailover,
+            QuotaTopologySource::ConservativeDefault,
+            units,
+            members,
+        )
+        .expect("测试账户选择合同有效")
     }
 
     fn ready(stage_value: u64, target_value: u64, penalty: u16) -> RouteCandidate {
@@ -861,6 +884,142 @@ mod tests {
         assert_eq!(
             RoutingSnapshot::new(version(1), &two_stages, RoutingStrategy::Priority, 1).err(),
             Some(PlanError::InsufficientMaxAttemptsForStages)
+        );
+    }
+
+    #[test]
+    fn compiled_snapshot_rejects_unknown_account_selector() {
+        let groups = [QuotaGroupId::new(2).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(2).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(2).expect("测试账户 ID 非零"),
+            CredentialId::new(2).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(2).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors = [selector_definition(2, &units, &members)];
+        let candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_selector(1, 1, 1),
+            0,
+        )];
+
+        assert_eq!(
+            CompiledRoutingSnapshot::compile(
+                version(1),
+                &candidates,
+                RoutingStrategy::Priority,
+                1,
+                &selectors,
+            )
+            .err(),
+            Some(CompiledRoutingSnapshotError::Plan(
+                PlanError::UnknownAccountSelector
+            ))
+        );
+    }
+
+    #[test]
+    fn compiled_snapshot_keeps_shared_selector_and_stage_first_plan() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors = [selector_definition(1, &units, &members)];
+        let candidates = [
+            RouteCandidate::ready(stage(1), target_with_selector(1, 11, 1), 0),
+            RouteCandidate::ready(stage(1), target_with_selector(2, 12, 1), 9),
+            RouteCandidate::ready(stage(2), target_with_selector(3, 13, 1), 0),
+        ];
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates,
+            RoutingStrategy::Priority,
+            3,
+            &selectors,
+        )
+        .expect("共享账户选择合同的快照有效");
+
+        assert_eq!(
+            compiled.selector(AccountSelectorId::new(1).expect("测试选择合同 ID 非零")),
+            Some(&selectors[0])
+        );
+        let plan = plan(compiled.routing(), 0).expect("存在可用目标");
+        assert_eq!(plan.len(), 2);
+        assert_eq!(plan.target_id(0), Some(id(1)));
+        assert_eq!(plan.target_id(1), Some(id(3)));
+    }
+
+    #[test]
+    fn compiled_snapshots_do_not_mix_catalogs() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors_a = [selector_definition(1, &units, &members)];
+        let selectors_b = [selector_definition(2, &units, &members)];
+        let candidates_a = [RouteCandidate::ready(
+            stage(1),
+            target_with_selector(1, 1, 1),
+            0,
+        )];
+        let candidates_b = [RouteCandidate::ready(
+            stage(1),
+            target_with_selector(2, 2, 2),
+            0,
+        )];
+        let compiled_a = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates_a,
+            RoutingStrategy::Priority,
+            1,
+            &selectors_a,
+        )
+        .expect("第一个编译快照有效");
+        let compiled_b = CompiledRoutingSnapshot::compile(
+            version(2),
+            &candidates_b,
+            RoutingStrategy::Priority,
+            1,
+            &selectors_b,
+        )
+        .expect("第二个编译快照有效");
+
+        assert_eq!(
+            compiled_a.selector(AccountSelectorId::new(1).expect("测试选择合同 ID 非零")),
+            Some(&selectors_a[0])
+        );
+        assert_eq!(
+            compiled_a.selector(AccountSelectorId::new(2).expect("测试选择合同 ID 非零")),
+            None
+        );
+        assert_eq!(
+            compiled_b.selector(AccountSelectorId::new(1).expect("测试选择合同 ID 非零")),
+            None
+        );
+        assert_eq!(
+            compiled_b.selector(AccountSelectorId::new(2).expect("测试选择合同 ID 非零")),
+            Some(&selectors_b[0])
         );
     }
 

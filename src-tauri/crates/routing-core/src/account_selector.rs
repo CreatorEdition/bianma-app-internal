@@ -15,6 +15,9 @@ pub const MAX_ACCOUNT_SELECTOR_MEMBERS: usize = MAX_ROUTE_TARGETS;
 /// 单个账户选择合同允许的最大独立额度单元数。
 pub const MAX_QUOTA_SELECTION_UNITS: usize = MAX_ROUTE_TARGETS;
 
+/// 一个编译路由快照允许引用的最大账户选择合同数。
+pub const MAX_ACCOUNT_SELECTORS: usize = MAX_ROUTE_TARGETS;
+
 /// 单个独立额度单元允许关联的最大额度组数。
 pub const MAX_QUOTA_GROUPS_PER_UNIT: usize = MAX_ROUTE_TARGETS;
 
@@ -283,6 +286,68 @@ impl<'a> AccountSelectorDefinition<'a> {
     }
 }
 
+/// 构造不可变账户选择合同目录时的拒绝原因。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountSelectorCatalogError {
+    /// 目录没有任何账户选择合同。
+    Empty,
+    /// 目录超过固定上限。
+    TooMany,
+    /// 同一账户选择合同标识在目录中重复出现。
+    DuplicateId,
+}
+
+/// 与一个已编译路由快照同代的账户选择合同目录。
+///
+/// 目录只借用经过验证的静态定义，使用有界线性查找；它不是全局注册表，也不承担
+/// 账户选择、健康、额度或运行时状态。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AccountSelectorCatalog<'a> {
+    selectors: &'a [AccountSelectorDefinition<'a>],
+}
+
+impl<'a> AccountSelectorCatalog<'a> {
+    /// 验证并创建一个固定上限的账户选择合同目录。
+    pub fn new(
+        selectors: &'a [AccountSelectorDefinition<'a>],
+    ) -> Result<Self, AccountSelectorCatalogError> {
+        if selectors.is_empty() {
+            return Err(AccountSelectorCatalogError::Empty);
+        }
+        if selectors.len() > MAX_ACCOUNT_SELECTORS {
+            return Err(AccountSelectorCatalogError::TooMany);
+        }
+        for (index, selector) in selectors.iter().enumerate() {
+            if selectors[..index]
+                .iter()
+                .any(|previous| previous.id == selector.id)
+            {
+                return Err(AccountSelectorCatalogError::DuplicateId);
+            }
+        }
+        Ok(Self { selectors })
+    }
+
+    /// 返回目录中的账户选择合同数量。
+    pub const fn len(&self) -> usize {
+        self.selectors.len()
+    }
+
+    /// 返回目录是否为空；经由 [`Self::new`] 构造的目录始终返回 `false`。
+    pub const fn is_empty(&self) -> bool {
+        self.selectors.is_empty()
+    }
+
+    /// 根据稳定标识有界查找账户选择合同。
+    pub fn get(&self, id: AccountSelectorId) -> Option<&AccountSelectorDefinition<'a>> {
+        self.selectors.iter().find(|selector| selector.id == id)
+    }
+
+    pub(crate) fn contains(&self, id: AccountSelectorId) -> bool {
+        self.get(id).is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,5 +606,45 @@ mod tests {
         assert!(core::mem::size_of::<AccountSelectorDefinition<'_>>() <= 56);
         assert!(core::mem::size_of::<QuotaSelectionUnit<'_>>() <= 32);
         assert!(core::mem::size_of::<AccountSelectorMember>() <= 32);
+    }
+
+    #[test]
+    fn catalog_rejects_empty_over_capacity_and_duplicate_ids() {
+        let groups = [group(1)];
+        let units = [unit(1, 1, &groups)];
+        let members = [member(1, 1, 1)];
+        let definition = AccountSelectorDefinition::new(
+            selector(1),
+            CredentialSelectionPolicy::PriorityFailover,
+            QuotaTopologySource::ConservativeDefault,
+            &units,
+            &members,
+        )
+        .expect("测试选择合同有效");
+        let duplicate = [definition, definition];
+        let too_many = [definition; MAX_ACCOUNT_SELECTORS + 1];
+        let single = [definition];
+
+        assert_eq!(
+            AccountSelectorCatalog::new(&[]),
+            Err(AccountSelectorCatalogError::Empty)
+        );
+        assert_eq!(
+            AccountSelectorCatalog::new(&too_many),
+            Err(AccountSelectorCatalogError::TooMany)
+        );
+        assert_eq!(
+            AccountSelectorCatalog::new(&duplicate),
+            Err(AccountSelectorCatalogError::DuplicateId)
+        );
+
+        let catalog = AccountSelectorCatalog::new(&single).expect("目录有效");
+        assert_eq!(catalog.len(), 1);
+        assert!(!catalog.is_empty());
+        assert_eq!(
+            catalog.get(selector(1)).map(|item| item.id()),
+            Some(selector(1))
+        );
+        assert_eq!(catalog.get(selector(2)), None);
     }
 }

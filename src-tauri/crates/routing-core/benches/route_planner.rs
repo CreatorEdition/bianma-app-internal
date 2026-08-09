@@ -1,9 +1,13 @@
 use routing_core::{
-    AccountSelectorId, EndpointId, IngressClassifier, IngressRequest, ModelDeploymentId,
-    OperationId, RouteCandidate, RoutePlanner, RouteStageId, RouteTarget, RoutingSnapshot,
-    RoutingStrategy, SiteId, SnapshotVersion, VerifiedIngressDisposition,
+    AccountId, AccountSelectorDefinition, AccountSelectorId, AccountSelectorMember,
+    CompiledRoutingSnapshot, CredentialId, CredentialSelectionPolicy, EndpointId,
+    IngressClassifier, IngressRequest, ModelDeploymentId, OperationId, QuotaGroupId,
+    QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RouteCandidate, RoutePlanner,
+    RouteStageId, RouteTarget, RoutingStrategy, SiteId, SnapshotVersion,
+    VerifiedIngressDisposition,
 };
 use std::hint::black_box;
+use std::num::NonZeroU16;
 use std::time::Instant;
 
 const ITERATIONS: u64 = 100_000;
@@ -14,7 +18,7 @@ fn target(value: u64) -> RouteTarget {
         SiteId::new(value).expect("站点 ID 非零"),
         ModelDeploymentId::new(value).expect("部署 ID 非零"),
         EndpointId::new(value).expect("端点 ID 非零"),
-        AccountSelectorId::new(value).expect("账户选择合同 ID 非零"),
+        AccountSelectorId::new(1).expect("账户选择合同 ID 非零"),
     )
 }
 
@@ -26,13 +30,35 @@ fn main() {
         let stage = RouteStageId::new((index / 4 + 1) as u64).expect("基准阶段 ID 非零");
         *candidate = RouteCandidate::ready(stage, target(value), index as u16);
     }
-    let snapshot = RoutingSnapshot::new(
+    let quota_groups = [QuotaGroupId::new(1).expect("基准额度组 ID 非零")];
+    let units = [QuotaSelectionUnit::new(
+        QuotaSelectionUnitId::new(1).expect("基准额度单元 ID 非零"),
+        NonZeroU16::new(1).expect("基准权重非零"),
+        &quota_groups,
+    )];
+    let members = [AccountSelectorMember::new(
+        AccountId::new(1).expect("基准账户 ID 非零"),
+        CredentialId::new(1).expect("基准凭据 ID 非零"),
+        QuotaSelectionUnitId::new(1).expect("基准额度单元 ID 非零"),
+        0,
+    )];
+    let selectors = [AccountSelectorDefinition::new(
+        AccountSelectorId::new(1).expect("基准选择合同 ID 非零"),
+        CredentialSelectionPolicy::PriorityFailover,
+        QuotaTopologySource::ConservativeDefault,
+        &units,
+        &members,
+    )
+    .expect("基准选择合同有效")];
+    let compiled = CompiledRoutingSnapshot::compile(
         SnapshotVersion::new(1).expect("快照版本非零"),
         &candidates,
         RoutingStrategy::LeastPenalty,
         16,
+        &selectors,
     )
-    .expect("基准快照有效");
+    .expect("基准编译快照有效");
+    let snapshot = compiled.routing();
     let disposition = IngressClassifier::new()
         .classify(IngressRequest::routed(
             OperationId::CONVERSATION,
@@ -46,8 +72,7 @@ fn main() {
     let started = Instant::now();
     let mut checksum = 0u64;
     for cursor in 0..ITERATIONS {
-        let plan =
-            black_box(RoutePlanner::plan(&request, &snapshot, cursor).expect("基准计划有效"));
+        let plan = black_box(RoutePlanner::plan(&request, snapshot, cursor).expect("基准计划有效"));
         checksum = checksum.wrapping_add(u64::from(plan.len()));
         checksum = checksum.wrapping_add(
             plan.target_id((cursor % u64::from(plan.len())) as u8)
