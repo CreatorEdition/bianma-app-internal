@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,11 +16,37 @@ const readText = (relativePath) =>
 const readTextIfExists = (relativePath) =>
   fileExists(relativePath) ? readText(relativePath) : "";
 
+const listGit = (args) =>
+  execFileSync("git", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+  })
+    .split("\0")
+    .filter(Boolean);
+
 const failures = [];
 
 const assertCondition = (condition, message) => {
   if (!condition) {
     failures.push(message);
+  }
+};
+
+const assertUniqueField = (content, field, expectedValue, label) => {
+  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const values = [
+    ...content.matchAll(new RegExp(`^${escapedField}:\\s*(.*?)\\s*$`, "gm")),
+  ].map((match) => match[1]);
+
+  assertCondition(
+    values.length === 1,
+    `${label} 必须且只能声明一次 ${field}。`,
+  );
+  if (values.length === 1) {
+    assertCondition(
+      values[0] === expectedValue,
+      `${label} 的 ${field} 必须保持 ${expectedValue}，当前为 ${values[0]}。`,
+    );
   }
 };
 
@@ -30,6 +57,29 @@ const cargoToml = readText("src-tauri/Cargo.toml");
 const releaseApprovalChecklist = readTextIfExists(
   "docs/open-source-migration/public-release-approval-checklist-2026-07-08.md",
 );
+const updaterLatestJsonGate = readTextIfExists(
+  "docs/open-source-migration/public-updater-latest-json-gate-2026-07-08.md",
+);
+const trackedReleaseArtifactPaths = listGit(["ls-files", "-z"]).filter(
+  (trackedPath) => {
+    const normalizedPath = trackedPath.replace(/\\/g, "/").toLowerCase();
+    return (
+      path.posix.basename(normalizedPath) === "latest.json" ||
+      normalizedPath.startsWith("release-assets/")
+    );
+  },
+);
+const trackedWorkflowPaths = listGit([
+  "ls-files",
+  "-z",
+  "--",
+  ".github/workflows/*.yml",
+  ".github/workflows/*.yaml",
+]);
+const trackedWorkflows = trackedWorkflowPaths.map((workflowPath) => [
+  workflowPath,
+  readText(workflowPath),
+]);
 const requiredFlatpakPaths = [
   "flatpak/com.ccswitch.desktop.desktop",
   "flatpak/com.ccswitch.desktop.metainfo.xml",
@@ -95,16 +145,9 @@ assertCondition(
   !/^\s*release:\s*$/m.test(workflow),
   "release workflow 当前不得通过 release 事件发布。",
 );
-assertCondition(
-  !/\bcontents:\s*write\b/.test(workflow),
-  "release workflow 当前不得申请 contents: write 发布权限。",
-);
-assertCondition(
-  !/\bid-token:\s*write\b/.test(workflow),
-  "release workflow 当前不得申请 id-token: write 发布权限。",
-);
-
 const forbiddenWorkflowPatterns = [
+  ["contents: write 发布权限", /\bcontents:\s*write\b/],
+  ["id-token: write 发布权限", /\bid-token:\s*write\b/],
   ["Tauri 私钥", /TAURI_SIGNING_PRIVATE_KEY/],
   ["Apple 证书", /APPLE_CERTIFICATE/],
   ["Apple 密码", /APPLE_PASSWORD/],
@@ -129,10 +172,12 @@ const forbiddenWorkflowPatterns = [
 ];
 
 for (const [label, pattern] of forbiddenWorkflowPatterns) {
-  assertCondition(
-    !pattern.test(workflow),
-    `release workflow 当前不得包含 ${label} 相关逻辑。`,
-  );
+  for (const [workflowPath, workflowContent] of trackedWorkflows) {
+    assertCondition(
+      !pattern.test(workflowContent),
+      `公开 workflow ${workflowPath} 当前不得包含 ${label} 相关逻辑。`,
+    );
+  }
 }
 
 const endpoints = tauriConfig?.plugins?.updater?.endpoints ?? [];
@@ -222,6 +267,47 @@ for (const requiredReleaseGate of [
     `公开发布人工审批 checklist 缺少门禁项：${requiredReleaseGate}`,
   );
 }
+assertCondition(
+  fileExists(
+    "docs/open-source-migration/public-updater-latest-json-gate-2026-07-08.md",
+  ),
+  "公开 updater/latest.json 门禁文档必须存在，避免 latest.json 上传边界只停留在口头说明。",
+);
+for (const [field, expectedValue] of [
+  ["Status", "BLOCKED"],
+  ["latest_json_upload_allowed", "false"],
+  ["release_artifact_upload_allowed", "false"],
+  ["updater_manifest_generation_allowed", "false"],
+  ["rollback_plan_status", "pending"],
+  ["signature_key_match_status", "pending"],
+]) {
+  assertUniqueField(
+    updaterLatestJsonGate,
+    field,
+    expectedValue,
+    "公开 updater/latest.json 门禁",
+  );
+}
+assertCondition(
+  !/^\s*-\s*\[[xX]\]\s+/m.test(updaterLatestJsonGate),
+  "公开 updater/latest.json 门禁当前不得出现已勾选证据项。",
+);
+for (const requiredUpdaterEvidence of [
+  "latest.json source verified",
+  "updater signature verified",
+  "public endpoint verified",
+  "rollback plan verified",
+  "upload approval recorded",
+]) {
+  assertCondition(
+    updaterLatestJsonGate.includes(`- [ ] ${requiredUpdaterEvidence}`),
+    `公开 updater/latest.json 门禁文档缺少未勾选证据项：${requiredUpdaterEvidence}`,
+  );
+}
+assertCondition(
+  trackedReleaseArtifactPaths.length === 0,
+  `公开仓当前不得跟踪 latest.json 或 release-assets 发布产物：${trackedReleaseArtifactPaths.join(", ")}`,
+);
 
 const flatpakCompatibilityChecks = [
   [

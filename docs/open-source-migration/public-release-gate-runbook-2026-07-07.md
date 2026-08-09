@@ -44,6 +44,17 @@
 - checklist 中不得出现已勾选审批项。
 - checklist 必须覆盖版本策略、Windows 签名、macOS 签名与 notarization、Linux 打包、`latest.json`、构建矩阵、artifact manifest 和人工审批记录。
 
+## 当前已自动化的 updater / latest.json 门禁
+
+公开 updater 与 `latest.json` 门禁见 `docs/open-source-migration/public-updater-latest-json-gate-2026-07-08.md`。在真实发布链路落地前，预检脚本会强制：
+
+- PR / main CI 与手动 `Public Release Preflight` workflow 都必须执行公开发布预检脚本。
+- 门禁文档必须存在且保持 `Status: BLOCKED`。
+- `latest_json_upload_allowed`、`release_artifact_upload_allowed` 与 `updater_manifest_generation_allowed` 必须保持 `false`。
+- 所有公开 workflow 都不得包含 updater manifest 生成、release artifact 上传或私有签名发布逻辑。
+- 仓内不得跟踪任何目录下的 `latest.json` 或根级 `release-assets/**`。
+- 门禁文档必须覆盖 source、signature、endpoint、rollback 和 upload approval 证据项。
+
 ## 当前允许的自动检查
 
 运行：
@@ -62,6 +73,7 @@ node scripts/audit-public-release-preflight.mjs
 - Tauri updater endpoint 仍指向 `CreatorEdition/bianma-app`，且不指向 `bianma-app-product`、`data.bianma.ai`、internal 或 private 通道。
 - `package.json`、`src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json` 的版本号一致，并继续保持 `0.0.1` 占位版本。
 - 公开发布人工审批 checklist 存在，且继续保持 blocked / 未勾选状态。
+- 公开 updater / `latest.json` 门禁存在，且继续保持 blocked / 禁止上传状态。
 - `ccswitch` legacy deep link scheme 仍保留。
 
 ## 禁止事项

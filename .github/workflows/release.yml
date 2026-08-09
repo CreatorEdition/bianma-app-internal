@@ -10,6 +10,17 @@ jobs:
   preflight:
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Audit public release boundary
+        run: node scripts/audit-public-release-preflight.mjs
+
       - name: Explain release boundary
         run: |
           echo "bianma-app 是 Bianma 唯一正式开源主仓。"
