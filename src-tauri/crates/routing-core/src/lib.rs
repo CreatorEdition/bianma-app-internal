@@ -9,7 +9,16 @@
 /// 单个路由计划允许的最大目标数。
 pub const MAX_ROUTE_TARGETS: usize = 16;
 
+// 当前切片只定义合同，生产 Transport 适配器尚未接线；不能为消除未使用告警而暴露
+// 可伪造的 Attempt 构造路径。单测会覆盖该内部状态机。
+#[cfg_attr(not(test), allow(dead_code))]
+mod attempt;
 mod ingress;
+
+pub use attempt::{
+    AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState, SendPhase,
+    UpstreamWriteState,
+};
 pub use ingress::*;
 
 macro_rules! id_type {
@@ -432,98 +441,6 @@ pub enum FailureClass {
     Unknown,
 }
 
-/// 请求是否可能已经到达上游。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DeliveryState {
-    /// 传输层证明没有写出请求字节。
-    NotSent,
-    /// 受信适配器证明上游在执行前明确拒绝。
-    PreExecutionRejected,
-    /// 请求已经写出。
-    Sent,
-    /// 无法证明是否写出。
-    Unknown,
-}
-
-/// 一次失败尝试的最小结果。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AttemptOutcome {
-    failure: FailureClass,
-    delivery: DeliveryState,
-    downstream_committed: bool,
-    retry_after_ms: Option<u64>,
-}
-
-impl AttemptOutcome {
-    /// 构造可证明未发送的失败。
-    pub const fn not_sent(failure: FailureClass, retry_after_ms: Option<u64>) -> Self {
-        Self {
-            failure,
-            delivery: DeliveryState::NotSent,
-            downstream_committed: false,
-            retry_after_ms,
-        }
-    }
-
-    /// 构造由受信适配器证明的执行前拒绝。
-    pub const fn pre_execution_rejected(
-        failure: FailureClass,
-        retry_after_ms: Option<u64>,
-    ) -> Self {
-        Self {
-            failure,
-            delivery: DeliveryState::PreExecutionRejected,
-            downstream_committed: false,
-            retry_after_ms,
-        }
-    }
-
-    /// 构造请求已发送但尚未提交下游响应的失败。
-    pub const fn sent(failure: FailureClass, retry_after_ms: Option<u64>) -> Self {
-        Self {
-            failure,
-            delivery: DeliveryState::Sent,
-            downstream_committed: false,
-            retry_after_ms,
-        }
-    }
-
-    /// 构造发送状态未知的失败。
-    pub const fn delivery_unknown(failure: FailureClass) -> Self {
-        Self {
-            failure,
-            delivery: DeliveryState::Unknown,
-            downstream_committed: false,
-            retry_after_ms: None,
-        }
-    }
-
-    /// 构造已经向客户端提交响应的失败。
-    pub const fn downstream_committed(failure: FailureClass) -> Self {
-        Self {
-            failure,
-            delivery: DeliveryState::Sent,
-            downstream_committed: true,
-            retry_after_ms: None,
-        }
-    }
-
-    /// 构造客户端取消结果。
-    pub const fn cancelled() -> Self {
-        Self::delivery_unknown(FailureClass::Cancelled)
-    }
-
-    /// 返回失败类别。
-    pub const fn failure(self) -> FailureClass {
-        self.failure
-    }
-
-    /// 返回交付状态。
-    pub const fn delivery(self) -> DeliveryState {
-        self.delivery
-    }
-}
-
 /// 重试策略。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetryPolicy {
@@ -589,10 +506,10 @@ impl RetryGate {
         attempt_index: u8,
         outcome: AttemptOutcome,
     ) -> RetryDecision {
-        if outcome.downstream_committed {
+        if outcome.downstream_committed() {
             return RetryDecision::Stop(RetryStopReason::DownstreamCommitted);
         }
-        if outcome.failure == FailureClass::Cancelled {
+        if outcome.failure() == FailureClass::Cancelled {
             return RetryDecision::Stop(RetryStopReason::Cancelled);
         }
         if attempt_index.saturating_add(1) >= plan.len
@@ -601,7 +518,7 @@ impl RetryGate {
             return RetryDecision::Stop(RetryStopReason::Exhausted);
         }
         if matches!(
-            outcome.failure,
+            outcome.failure(),
             FailureClass::Authentication
                 | FailureClass::InvalidRequest
                 | FailureClass::Protocol
@@ -610,15 +527,15 @@ impl RetryGate {
             return RetryDecision::Stop(RetryStopReason::NonRetryable);
         }
         if !matches!(
-            outcome.delivery,
+            outcome.delivery(),
             DeliveryState::NotSent | DeliveryState::PreExecutionRejected
         ) {
             return RetryDecision::Stop(RetryStopReason::ReplayNotProven);
         }
 
-        let delay_ms = if outcome.failure == FailureClass::RateLimited {
+        let delay_ms = if outcome.failure() == FailureClass::RateLimited {
             outcome
-                .retry_after_ms
+                .retry_after_ms()
                 .unwrap_or_default()
                 .min(self.policy.retry_after_cap_ms)
         } else {
@@ -658,6 +575,43 @@ mod tests {
         max_attempts: u8,
     ) -> RoutingSnapshot<'a> {
         RoutingSnapshot::new(version(1), candidates, strategy, max_attempts).expect("测试快照有效")
+    }
+
+    fn not_sent(failure: FailureClass, retry_after_ms: Option<u64>) -> AttemptOutcome {
+        attempt::AttemptTracker::new().into_outcome(failure, retry_after_ms, None)
+    }
+
+    fn sent(failure: FailureClass, retry_after_ms: Option<u64>) -> AttemptOutcome {
+        let mut tracker = attempt::AttemptTracker::new();
+        tracker.request_write_started().expect("允许记录写入");
+        tracker.into_outcome(failure, retry_after_ms, None)
+    }
+
+    fn delivery_unknown(failure: FailureClass) -> AttemptOutcome {
+        let mut tracker = attempt::AttemptTracker::new();
+        tracker.write_state_unknown().expect("允许标记未知");
+        tracker.into_outcome(failure, None, None)
+    }
+
+    fn trusted_pre_execution_rejected(
+        failure: FailureClass,
+        retry_after_ms: Option<u64>,
+    ) -> AttemptOutcome {
+        attempt::AttemptTracker::new().into_outcome(
+            failure,
+            retry_after_ms,
+            Some(attempt::TrustedPreExecutionRejection::registered()),
+        )
+    }
+
+    fn downstream_committed(failure: FailureClass) -> AttemptOutcome {
+        let mut tracker = attempt::AttemptTracker::new();
+        tracker.request_write_started().expect("允许记录写入");
+        tracker
+            .upstream_response_observed()
+            .expect("允许记录响应头");
+        tracker.downstream_committed().expect("允许下游提交");
+        tracker.into_outcome(failure, None, None)
     }
 
     #[test]
@@ -781,29 +735,21 @@ mod tests {
         let gate = RetryGate::new(policy);
 
         assert_eq!(
-            gate.decide(
-                &plan,
-                0,
-                AttemptOutcome::not_sent(FailureClass::Connect, None)
-            ),
+            gate.decide(&plan, 0, not_sent(FailureClass::Connect, None)),
             RetryDecision::Advance { delay_ms: 0 }
         );
         assert_eq!(
-            gate.decide(&plan, 0, AttemptOutcome::sent(FailureClass::Server, None)),
+            gate.decide(&plan, 0, sent(FailureClass::Server, None)),
             RetryDecision::Stop(RetryStopReason::ReplayNotProven)
         );
         assert_eq!(
-            gate.decide(
-                &plan,
-                0,
-                AttemptOutcome::delivery_unknown(FailureClass::Timeout)
-            ),
+            gate.decide(&plan, 0, delivery_unknown(FailureClass::Timeout)),
             RetryDecision::Stop(RetryStopReason::ReplayNotProven)
         );
     }
 
     #[test]
-    fn trusted_rate_limit_honors_bounded_retry_after() {
+    fn only_trusted_zero_byte_rejection_honors_bounded_retry_after() {
         let candidates = [
             RouteCandidate::ready(target(1, 1), 0),
             RouteCandidate::ready(target(2, 2), 0),
@@ -817,15 +763,60 @@ mod tests {
             gate.decide(
                 &plan,
                 0,
-                AttemptOutcome::pre_execution_rejected(FailureClass::RateLimited, Some(30_000))
+                trusted_pre_execution_rejected(FailureClass::RateLimited, Some(30_000))
             ),
             RetryDecision::Advance { delay_ms: 3_000 }
         );
         assert_eq!(
+            gate.decide(&plan, 0, sent(FailureClass::RateLimited, Some(1_000))),
+            RetryDecision::Stop(RetryStopReason::ReplayNotProven)
+        );
+    }
+
+    #[test]
+    fn bytes_or_sse_semantics_never_replay_even_with_trusted_proof() {
+        let candidates = [
+            RouteCandidate::ready(target(1, 1), 0),
+            RouteCandidate::ready(target(2, 2), 0),
+        ];
+        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
+        let plan = RoutePlanner::plan(&snapshot, 0).expect("存在可用目标");
+        let gate = RetryGate::new(RetryPolicy::new(2, 3_000).expect("策略有效"));
+
+        let mut bytes_written = attempt::AttemptTracker::new();
+        bytes_written.request_write_started().expect("允许记录写入");
+        assert_eq!(
             gate.decide(
                 &plan,
                 0,
-                AttemptOutcome::sent(FailureClass::RateLimited, Some(1_000))
+                bytes_written.into_outcome(
+                    FailureClass::RateLimited,
+                    Some(1_000),
+                    Some(attempt::TrustedPreExecutionRejection::registered()),
+                )
+            ),
+            RetryDecision::Stop(RetryStopReason::ReplayNotProven)
+        );
+
+        let mut semantic_event = attempt::AttemptTracker::new();
+        semantic_event
+            .request_write_started()
+            .expect("允许记录写入");
+        semantic_event
+            .upstream_response_observed()
+            .expect("允许记录响应头");
+        semantic_event
+            .first_semantic_event_observed()
+            .expect("允许记录首个语义事件");
+        assert_eq!(
+            gate.decide(
+                &plan,
+                0,
+                semantic_event.into_outcome(
+                    FailureClass::RateLimited,
+                    Some(1_000),
+                    Some(attempt::TrustedPreExecutionRejection::registered()),
+                )
             ),
             RetryDecision::Stop(RetryStopReason::ReplayNotProven)
         );
@@ -843,31 +834,19 @@ mod tests {
         let gate = RetryGate::new(policy);
 
         assert_eq!(
-            gate.decide(&plan, 0, AttemptOutcome::cancelled()),
+            gate.decide(&plan, 0, delivery_unknown(FailureClass::Cancelled)),
             RetryDecision::Stop(RetryStopReason::Cancelled)
         );
         assert_eq!(
-            gate.decide(
-                &plan,
-                0,
-                AttemptOutcome::downstream_committed(FailureClass::Server)
-            ),
+            gate.decide(&plan, 0, downstream_committed(FailureClass::Server)),
             RetryDecision::Stop(RetryStopReason::DownstreamCommitted)
         );
         assert_eq!(
-            gate.decide(
-                &plan,
-                0,
-                AttemptOutcome::not_sent(FailureClass::Authentication, None)
-            ),
+            gate.decide(&plan, 0, not_sent(FailureClass::Authentication, None)),
             RetryDecision::Stop(RetryStopReason::NonRetryable)
         );
         assert_eq!(
-            gate.decide(
-                &plan,
-                1,
-                AttemptOutcome::not_sent(FailureClass::Connect, None)
-            ),
+            gate.decide(&plan, 1, not_sent(FailureClass::Connect, None)),
             RetryDecision::Stop(RetryStopReason::Exhausted)
         );
     }
