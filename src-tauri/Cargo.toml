@@ -104,3 +104,7 @@ strip = "symbols"
 [dev-dependencies]
 serial_test = "3"
 tempfile = "3"
+
+[workspace]
+members = ["crates/routing-core"]
+resolver = "2"

@@ -39,3 +39,8 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 - `pnpm format:check`
 - `pnpm test:unit`
 - `pnpm audit:product-migration`（检查后续 product 迁移切片是否命中禁迁边界）
+- `cargo test --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked`
+- `cargo clippy --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked -- -D warnings`
+- `cargo bench --manifest-path src-tauri/Cargo.toml -p routing-core --bench route_planner --locked`
+
+`routing-core` 当前仍是未接入生产转发链的纯 Rust 领域切片：仅基于内存快照做有界路由计划与保守重试决策，不读取数据库/文件、不启动后台线程、不执行网络请求，也不承载 ContextPipeline。

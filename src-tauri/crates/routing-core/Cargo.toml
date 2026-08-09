@@ -1,0 +1,11 @@
+[package]
+name = "routing-core"
+version = "0.0.1"
+description = "Bianma 低开销纯 Rust 路由决策核心"
+edition = "2021"
+rust-version = "1.85.0"
+license = "MIT"
+publish = false
+[[bench]]
+name = "route_planner"
+harness = false

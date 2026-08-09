@@ -97,3 +97,10 @@ jobs:
 
       - name: Run tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: routing-core dependency boundary
+        shell: bash
+        run: test "$(cargo tree --manifest-path src-tauri/Cargo.toml -p routing-core --locked --edges normal --prefix none | wc -l)" -eq 1
+
+      - name: routing-core release benchmark smoke
+        run: cargo bench --manifest-path src-tauri/Cargo.toml -p routing-core --bench route_planner --locked
