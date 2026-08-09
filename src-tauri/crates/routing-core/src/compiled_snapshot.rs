@@ -4,8 +4,8 @@
 //! Planner 热路径、RoutePlan、Coordinator 或 Attempt 状态机。
 
 use super::{
-    AccountSelectorCatalog, AccountSelectorCatalogError, AccountSelectorDefinition,
-    AccountSelectorId, PlanError, RouteCandidate, RoutingSnapshot, RoutingStrategy,
+    AccountSelectorCatalog, AccountSelectorCatalogError, AccountSelectorDefinition, PlanError,
+    RouteCandidate, RoutePlan, RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy,
     SnapshotVersion,
 };
 
@@ -16,6 +16,42 @@ pub enum CompiledRoutingSnapshotError {
     Catalog(AccountSelectorCatalogError),
     /// 路由候选或路由快照形状非法。
     Plan(PlanError),
+}
+
+/// 一次计划尝试在同代编译快照中解析出的完整静态路由配置。
+///
+/// 该值不选择 Account/Credential，也不包含健康、额度、租约、Secret、传输或请求内容。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedRouteTarget<'a> {
+    snapshot_version: SnapshotVersion,
+    stage: RouteStageId,
+    target: RouteTarget,
+    selector: &'a AccountSelectorDefinition<'a>,
+}
+
+impl<'a> ResolvedRouteTarget<'a> {
+    /// 返回解析所用的编译快照版本。
+    pub const fn snapshot_version(self) -> SnapshotVersion {
+        self.snapshot_version
+    }
+
+    /// 返回当前尝试所属的稳定路由阶段。
+    pub const fn stage(self) -> RouteStageId {
+        self.stage
+    }
+
+    /// 返回当前尝试绑定的完整路由目标。
+    pub const fn target(self) -> RouteTarget {
+        self.target
+    }
+
+    /// 返回与该目标同代的账户选择合同。
+    ///
+    /// 仅供 crate 内受控执行层消费，crate 外不能取得裸 Definition 再手工配对计划。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn selector(self) -> &'a AccountSelectorDefinition<'a> {
+        self.selector
+    }
 }
 
 /// 同时持有路由候选快照与账户选择合同目录的不可变编译结果。
@@ -58,8 +94,32 @@ impl<'a> CompiledRoutingSnapshot<'a> {
         &self.routing
     }
 
-    /// 在同一编译代内查询账户选择合同。
-    pub fn selector(&self, id: AccountSelectorId) -> Option<&AccountSelectorDefinition<'a>> {
-        self.catalog.get(id)
+    /// 解析计划中某次尝试的同代 Target 与账户选择合同。
+    ///
+    /// 先用当前快照验证计划版本与 Target，再从同一编译代的 catalog 查询 selector；任何
+    /// 理论不变量破坏均 fail closed，绝不回退到外部或全局目录。
+    pub fn resolve_plan_target(
+        &self,
+        plan: &RoutePlan,
+        attempt_index: u8,
+    ) -> Result<Option<ResolvedRouteTarget<'a>>, PlanError> {
+        let Some(target) = plan.resolve(&self.routing, attempt_index)? else {
+            return Ok(None);
+        };
+        let stage = self
+            .routing
+            .stage_for(target.id())
+            .ok_or(PlanError::UnknownTarget)?;
+        let selector = self
+            .catalog
+            .get(target.account_selector())
+            .ok_or(PlanError::UnknownAccountSelector)?;
+
+        Ok(Some(ResolvedRouteTarget {
+            snapshot_version: self.routing.version(),
+            stage,
+            target: *target,
+            selector,
+        }))
     }
 }

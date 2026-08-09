@@ -339,7 +339,7 @@ impl<'a> AccountSelectorCatalog<'a> {
     }
 
     /// 根据稳定标识有界查找账户选择合同。
-    pub fn get(&self, id: AccountSelectorId) -> Option<&AccountSelectorDefinition<'a>> {
+    pub(crate) fn get(&self, id: AccountSelectorId) -> Option<&'a AccountSelectorDefinition<'a>> {
         self.selectors.iter().find(|selector| selector.id == id)
     }
 

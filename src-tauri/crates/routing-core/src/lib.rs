@@ -952,14 +952,32 @@ mod tests {
         )
         .expect("共享账户选择合同的快照有效");
 
-        assert_eq!(
-            compiled.selector(AccountSelectorId::new(1).expect("测试选择合同 ID 非零")),
-            Some(&selectors[0])
-        );
         let plan = plan(compiled.routing(), 0).expect("存在可用目标");
         assert_eq!(plan.len(), 2);
         assert_eq!(plan.target_id(0), Some(id(1)));
         assert_eq!(plan.target_id(1), Some(id(3)));
+        let resolved = compiled
+            .resolve_plan_target(&plan, 0)
+            .expect("计划与快照一致")
+            .expect("首个尝试存在");
+        assert_eq!(resolved.snapshot_version(), version(1));
+        assert_eq!(resolved.stage(), stage(1));
+        assert_eq!(resolved.target(), target_with_selector(1, 11, 1));
+        assert_eq!(resolved.selector(), &selectors[0]);
+        let resolved = compiled
+            .resolve_plan_target(&plan, 1)
+            .expect("计划与快照一致")
+            .expect("第二次尝试存在");
+        assert_eq!(resolved.snapshot_version(), version(1));
+        assert_eq!(resolved.stage(), stage(2));
+        assert_eq!(resolved.target(), target_with_selector(3, 13, 1));
+        assert_eq!(resolved.selector(), &selectors[0]);
+        assert_eq!(
+            compiled
+                .resolve_plan_target(&plan, 2)
+                .expect("越界尝试不是错误"),
+            None
+        );
     }
 
     #[test]
@@ -1005,22 +1023,36 @@ mod tests {
         )
         .expect("第二个编译快照有效");
 
+        let plan_a = plan(compiled_a.routing(), 0).expect("第一个计划有效");
+        let plan_b = plan(compiled_b.routing(), 0).expect("第二个计划有效");
+
         assert_eq!(
-            compiled_a.selector(AccountSelectorId::new(1).expect("测试选择合同 ID 非零")),
+            compiled_a
+                .resolve_plan_target(&plan_a, 0)
+                .expect("第一个计划与快照一致")
+                .map(ResolvedRouteTarget::selector),
             Some(&selectors_a[0])
         );
         assert_eq!(
-            compiled_a.selector(AccountSelectorId::new(2).expect("测试选择合同 ID 非零")),
-            None
-        );
-        assert_eq!(
-            compiled_b.selector(AccountSelectorId::new(1).expect("测试选择合同 ID 非零")),
-            None
-        );
-        assert_eq!(
-            compiled_b.selector(AccountSelectorId::new(2).expect("测试选择合同 ID 非零")),
+            compiled_b
+                .resolve_plan_target(&plan_b, 0)
+                .expect("第二个计划与快照一致")
+                .map(ResolvedRouteTarget::selector),
             Some(&selectors_b[0])
         );
+        assert_eq!(
+            compiled_a.resolve_plan_target(&plan_b, 0),
+            Err(PlanError::StaleSnapshot)
+        );
+        assert_eq!(
+            compiled_b.resolve_plan_target(&plan_a, 0),
+            Err(PlanError::StaleSnapshot)
+        );
+    }
+
+    #[test]
+    fn resolved_route_target_stays_small_and_stack_only() {
+        assert!(core::mem::size_of::<ResolvedRouteTarget<'_>>() <= 128);
     }
 
     #[test]
