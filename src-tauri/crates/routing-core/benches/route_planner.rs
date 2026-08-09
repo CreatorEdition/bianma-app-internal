@@ -1,9 +1,9 @@
 use routing_core::{
     AccountId, AccountSelectorDefinition, AccountSelectorId, AccountSelectorMember,
     CompiledRoutingSnapshot, CredentialId, CredentialSelectionPolicy, EndpointId,
-    IngressClassifier, IngressRequest, ModelDeploymentId, OperationId, QuotaGroupId,
-    QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RouteCandidate, RoutePlanner,
-    RouteStageId, RouteTarget, RoutingStrategy, SiteId, SnapshotVersion,
+    IngressClassifier, IngressRequest, ModelDeploymentDefinition, ModelDeploymentId, OperationId,
+    QuotaGroupId, QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RouteCandidate,
+    RoutePlanner, RouteStageId, RouteTarget, RoutingStrategy, SiteId, SnapshotVersion,
     VerifiedIngressDisposition,
 };
 use std::hint::black_box;
@@ -30,6 +30,14 @@ fn main() {
         let stage = RouteStageId::new((index / 4 + 1) as u64).expect("基准阶段 ID 非零");
         *candidate = RouteCandidate::ready(stage, target(value), index as u16);
     }
+    let deployments: [ModelDeploymentDefinition; 16] = core::array::from_fn(|index| {
+        let value = (index + 1) as u64;
+        ModelDeploymentDefinition::new(
+            ModelDeploymentId::new(value).expect("基准部署 ID 非零"),
+            SiteId::new(value).expect("基准站点 ID 非零"),
+            EndpointId::new(value).expect("基准端点 ID 非零"),
+        )
+    });
     let quota_groups = [QuotaGroupId::new(1).expect("基准额度组 ID 非零")];
     let units = [QuotaSelectionUnit::new(
         QuotaSelectionUnitId::new(1).expect("基准额度单元 ID 非零"),
@@ -55,6 +63,7 @@ fn main() {
         &candidates,
         RoutingStrategy::LeastPenalty,
         16,
+        &deployments,
         &selectors,
     )
     .expect("基准编译快照有效");

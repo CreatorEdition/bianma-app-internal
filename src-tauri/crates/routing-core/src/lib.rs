@@ -19,6 +19,7 @@ mod compiled_snapshot;
 #[cfg_attr(not(test), allow(dead_code))]
 mod coordinator;
 mod ingress;
+mod model_deployment;
 
 pub use account_selector::*;
 pub use attempt::{
@@ -28,6 +29,7 @@ pub use attempt::{
 pub use compiled_snapshot::*;
 use coordinator::{AttemptCoordinator, AttemptCoordinatorBuildError};
 pub use ingress::*;
+pub use model_deployment::*;
 
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -249,6 +251,12 @@ pub enum PlanError {
     DuplicateDeployment,
     /// 路由目标引用了当前编译代中不存在的账户选择合同。
     UnknownAccountSelector,
+    /// 路由目标引用了当前编译代中不存在的模型部署。
+    UnknownModelDeployment,
+    /// 路由目标的站点与模型部署定义不一致。
+    TargetDeploymentSiteMismatch,
+    /// 路由目标的端点与模型部署定义不一致。
+    TargetDeploymentEndpointMismatch,
     /// 同一阶段的候选在快照中被拆成了不连续的多个片段。
     NonContiguousStage,
     /// 当前没有可用目标。
@@ -680,6 +688,18 @@ mod tests {
         )
     }
 
+    fn deployment_definition(
+        deployment_value: u64,
+        site_value: u64,
+        endpoint_value: u64,
+    ) -> ModelDeploymentDefinition {
+        ModelDeploymentDefinition::new(
+            ModelDeploymentId::new(deployment_value).expect("测试部署 ID 非零"),
+            SiteId::new(site_value).expect("测试站点 ID 非零"),
+            EndpointId::new(endpoint_value).expect("测试端点 ID 非零"),
+        )
+    }
+
     fn selector_definition<'a>(
         selector_value: u64,
         units: &'a [QuotaSelectionUnit<'a>],
@@ -907,6 +927,7 @@ mod tests {
             target_with_selector(1, 1, 1),
             0,
         )];
+        let deployments = [deployment_definition(1, 1, 1)];
 
         assert_eq!(
             CompiledRoutingSnapshot::compile(
@@ -914,6 +935,7 @@ mod tests {
                 &candidates,
                 RoutingStrategy::Priority,
                 1,
+                &deployments,
                 &selectors,
             )
             .err(),
@@ -921,6 +943,72 @@ mod tests {
                 PlanError::UnknownAccountSelector
             ))
         );
+    }
+
+    #[test]
+    fn compiled_snapshot_rejects_invalid_model_deployment_binding() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors = [selector_definition(1, &units, &members)];
+        let unknown_deployment = [RouteCandidate::ready(
+            stage(1),
+            target_with_selector(1, 2, 1),
+            0,
+        )];
+        let site_mismatch = [RouteCandidate::ready(
+            stage(1),
+            target_with_selector(1, 1, 1),
+            0,
+        )];
+        let endpoint_mismatch = [RouteCandidate::ready(
+            stage(1),
+            target_with_selector(1, 1, 1),
+            0,
+        )];
+        let known_deployment = [deployment_definition(1, 1, 1)];
+        let wrong_site = [deployment_definition(1, 2, 1)];
+        let wrong_endpoint = [deployment_definition(1, 1, 2)];
+
+        for (candidates, deployments, expected) in [
+            (
+                &unknown_deployment[..],
+                &known_deployment[..],
+                PlanError::UnknownModelDeployment,
+            ),
+            (
+                &site_mismatch[..],
+                &wrong_site[..],
+                PlanError::TargetDeploymentSiteMismatch,
+            ),
+            (
+                &endpoint_mismatch[..],
+                &wrong_endpoint[..],
+                PlanError::TargetDeploymentEndpointMismatch,
+            ),
+        ] {
+            assert_eq!(
+                CompiledRoutingSnapshot::compile(
+                    version(1),
+                    candidates,
+                    RoutingStrategy::Priority,
+                    1,
+                    deployments,
+                    &selectors,
+                )
+                .err(),
+                Some(CompiledRoutingSnapshotError::Plan(expected))
+            );
+        }
     }
 
     #[test]
@@ -943,11 +1031,17 @@ mod tests {
             RouteCandidate::ready(stage(1), target_with_selector(2, 12, 1), 9),
             RouteCandidate::ready(stage(2), target_with_selector(3, 13, 1), 0),
         ];
+        let deployments = [
+            deployment_definition(11, 1, 1),
+            deployment_definition(12, 2, 2),
+            deployment_definition(13, 3, 3),
+        ];
         let compiled = CompiledRoutingSnapshot::compile(
             version(1),
             &candidates,
             RoutingStrategy::Priority,
             3,
+            &deployments,
             &selectors,
         )
         .expect("共享账户选择合同的快照有效");
@@ -963,7 +1057,13 @@ mod tests {
         assert_eq!(resolved.snapshot_version(), version(1));
         assert_eq!(resolved.stage(), stage(1));
         assert_eq!(resolved.target(), target_with_selector(1, 11, 1));
+        assert_eq!(resolved.deployment(), &deployments[0]);
         assert_eq!(resolved.selector(), &selectors[0]);
+        let debug = format!("{resolved:?}");
+        assert!(debug.starts_with("ResolvedRouteTarget { snapshot_version:"));
+        assert!(debug.contains("target: RouteTarget"));
+        assert!(!debug.contains("AccountSelectorDefinition"));
+        assert!(!debug.contains("ModelDeploymentDefinition"));
         let resolved = compiled
             .resolve_plan_target(&plan, 1)
             .expect("计划与快照一致")
@@ -971,6 +1071,7 @@ mod tests {
         assert_eq!(resolved.snapshot_version(), version(1));
         assert_eq!(resolved.stage(), stage(2));
         assert_eq!(resolved.target(), target_with_selector(3, 13, 1));
+        assert_eq!(resolved.deployment(), &deployments[2]);
         assert_eq!(resolved.selector(), &selectors[0]);
         assert_eq!(
             compiled
@@ -1006,11 +1107,14 @@ mod tests {
             target_with_selector(2, 2, 2),
             0,
         )];
+        let deployments_a = [deployment_definition(1, 1, 1)];
+        let deployments_b = [deployment_definition(2, 2, 2)];
         let compiled_a = CompiledRoutingSnapshot::compile(
             version(1),
             &candidates_a,
             RoutingStrategy::Priority,
             1,
+            &deployments_a,
             &selectors_a,
         )
         .expect("第一个编译快照有效");
@@ -1019,6 +1123,7 @@ mod tests {
             &candidates_b,
             RoutingStrategy::Priority,
             1,
+            &deployments_b,
             &selectors_b,
         )
         .expect("第二个编译快照有效");
@@ -1030,8 +1135,22 @@ mod tests {
             compiled_a
                 .resolve_plan_target(&plan_a, 0)
                 .expect("第一个计划与快照一致")
+                .map(ResolvedRouteTarget::deployment),
+            Some(&deployments_a[0])
+        );
+        assert_eq!(
+            compiled_a
+                .resolve_plan_target(&plan_a, 0)
+                .expect("第一个计划与快照一致")
                 .map(ResolvedRouteTarget::selector),
             Some(&selectors_a[0])
+        );
+        assert_eq!(
+            compiled_b
+                .resolve_plan_target(&plan_b, 0)
+                .expect("第二个计划与快照一致")
+                .map(ResolvedRouteTarget::deployment),
+            Some(&deployments_b[0])
         );
         assert_eq!(
             compiled_b
