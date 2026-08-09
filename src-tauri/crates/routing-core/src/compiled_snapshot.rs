@@ -1,21 +1,27 @@
 //! 路由候选、模型部署与账户选择合同的同代编译快照。
 //!
-//! 本模块只在快照编译时验证 Target 对 ModelDeployment 和 AccountSelector 的引用完整性。
-//! catalog 不会进入 Planner 热路径、RoutePlan、Coordinator 或 Attempt 状态机。
+//! 本模块只在快照编译时验证 Target 对 ModelDeployment、AccountSelector、Account 与
+//! Credential 的静态引用完整性。catalog 不会进入 Planner 热路径、RoutePlan、Coordinator
+//! 或 Attempt 状态机。
 
 use super::{
-    AccountSelectorCatalog, AccountSelectorCatalogError, AccountSelectorDefinition,
-    ModelDeploymentCatalog, ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError,
-    RouteCandidate, RoutePlan, RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy,
-    SnapshotVersion,
+    AccountCatalog, AccountCatalogError, AccountCredentialDefinitions, AccountSelectorCatalog,
+    AccountSelectorCatalogError, AccountSelectorDefinition, CredentialCatalog,
+    CredentialCatalogError, ModelDeploymentCatalog, ModelDeploymentCatalogError,
+    ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan, RouteStageId, RouteTarget,
+    RoutingSnapshot, RoutingStrategy, SnapshotVersion,
 };
 use core::fmt;
 
 /// 编译路由快照时的拒绝原因。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompiledRoutingSnapshotError {
+    /// 账户目录本身非法。
+    AccountCatalog(AccountCatalogError),
     /// 账户选择合同目录本身非法。
     Catalog(AccountSelectorCatalogError),
+    /// 凭据目录本身非法。
+    CredentialCatalog(CredentialCatalogError),
     /// 模型部署目录本身非法。
     DeploymentCatalog(ModelDeploymentCatalogError),
     /// 路由候选或路由快照形状非法。
@@ -78,7 +84,7 @@ impl<'a> ResolvedRouteTarget<'a> {
     }
 }
 
-/// 同时持有路由候选快照、模型部署目录与账户选择合同目录的不可变编译结果。
+/// 同时持有路由候选快照、模型部署目录、账户选择合同和静态身份目录的不可变编译结果。
 ///
 /// 该类型是 crate 外构造 RoutingSnapshot 的唯一入口。它只借用同代配置，不维护全局
 /// registry，也不在请求热路径重复查询 catalog。
@@ -86,16 +92,21 @@ pub struct CompiledRoutingSnapshot<'a> {
     routing: RoutingSnapshot<'a>,
     deployments: ModelDeploymentCatalog<'a>,
     selectors: AccountSelectorCatalog<'a>,
+    #[allow(dead_code)]
+    accounts: AccountCatalog<'a>,
+    #[allow(dead_code)]
+    credentials: CredentialCatalog<'a>,
 }
 
 impl<'a> CompiledRoutingSnapshot<'a> {
-    /// 编译候选、模型部署与账户选择合同，并拒绝任何悬空或不一致引用。
+    /// 编译候选、模型部署、账户选择合同与静态身份目录，并拒绝任何悬空或不一致引用。
     pub fn compile(
         version: SnapshotVersion,
         candidates: &'a [RouteCandidate],
         strategy: RoutingStrategy,
         max_attempts: u8,
         deployments: &'a [ModelDeploymentDefinition],
+        account_credentials: AccountCredentialDefinitions<'a>,
         selectors: &'a [AccountSelectorDefinition<'a>],
     ) -> Result<Self, CompiledRoutingSnapshotError> {
         let routing = RoutingSnapshot::new(version, candidates, strategy, max_attempts)
@@ -135,10 +146,52 @@ impl<'a> CompiledRoutingSnapshot<'a> {
             ));
         }
 
+        let accounts = AccountCatalog::new(account_credentials.accounts())
+            .map_err(CompiledRoutingSnapshotError::AccountCatalog)?;
+        let credentials = CredentialCatalog::new(account_credentials.credentials(), &accounts)
+            .map_err(CompiledRoutingSnapshotError::CredentialCatalog)?;
+
+        for candidate in candidates {
+            let target = candidate.target();
+            let deployment =
+                deployments
+                    .get(target.deployment())
+                    .ok_or(CompiledRoutingSnapshotError::Plan(
+                        PlanError::UnknownModelDeployment,
+                    ))?;
+            let selector = selectors.get(target.account_selector()).ok_or(
+                CompiledRoutingSnapshotError::Plan(PlanError::UnknownAccountSelector),
+            )?;
+
+            for member in selector.members() {
+                let account =
+                    accounts
+                        .get(member.account())
+                        .ok_or(CompiledRoutingSnapshotError::Plan(
+                            PlanError::UnknownAccount,
+                        ))?;
+                let credential = credentials.get(member.credential()).ok_or(
+                    CompiledRoutingSnapshotError::Plan(PlanError::UnknownCredential),
+                )?;
+                if credential.account() != member.account() {
+                    return Err(CompiledRoutingSnapshotError::Plan(
+                        PlanError::CredentialAccountMismatch,
+                    ));
+                }
+                if account.site() != deployment.site() {
+                    return Err(CompiledRoutingSnapshotError::Plan(
+                        PlanError::AccountDeploymentSiteMismatch,
+                    ));
+                }
+            }
+        }
+
         Ok(Self {
             routing,
             deployments,
             selectors,
+            accounts,
+            credentials,
         })
     }
 

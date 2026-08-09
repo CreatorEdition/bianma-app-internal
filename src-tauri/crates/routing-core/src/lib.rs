@@ -12,6 +12,7 @@ pub const MAX_ROUTE_TARGETS: usize = 16;
 
 // 当前切片只定义合同，生产 Transport 适配器尚未接线；不能为消除未使用告警而暴露
 // 可伪造的 Attempt 构造路径。单测会覆盖该内部状态机。
+mod account_credential;
 mod account_selector;
 #[cfg_attr(not(test), allow(dead_code))]
 mod attempt;
@@ -21,6 +22,7 @@ mod coordinator;
 mod ingress;
 mod model_deployment;
 
+pub use account_credential::*;
 pub use account_selector::*;
 pub use attempt::{
     AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState, SendPhase,
@@ -257,6 +259,14 @@ pub enum PlanError {
     TargetDeploymentSiteMismatch,
     /// 路由目标的端点与模型部署定义不一致。
     TargetDeploymentEndpointMismatch,
+    /// 账户选择成员引用了当前编译代中不存在的账户。
+    UnknownAccount,
+    /// 账户选择成员引用了当前编译代中不存在的凭据。
+    UnknownCredential,
+    /// 账户选择成员声明的账户与凭据 owner 不一致。
+    CredentialAccountMismatch,
+    /// 账户所属站点与当前路由目标的模型部署站点不一致。
+    AccountDeploymentSiteMismatch,
     /// 同一阶段的候选在快照中被拆成了不连续的多个片段。
     NonContiguousStage,
     /// 当前没有可用目标。
@@ -679,11 +689,21 @@ mod tests {
     }
 
     fn target_with_selector(value: u64, deployment_value: u64, selector_value: u64) -> RouteTarget {
+        target_with_binding(value, value, deployment_value, value, selector_value)
+    }
+
+    fn target_with_binding(
+        target_value: u64,
+        site_value: u64,
+        deployment_value: u64,
+        endpoint_value: u64,
+        selector_value: u64,
+    ) -> RouteTarget {
         RouteTarget::new(
-            id(value),
-            SiteId::new(value).expect("站点 ID 非零"),
+            id(target_value),
+            SiteId::new(site_value).expect("站点 ID 非零"),
             ModelDeploymentId::new(deployment_value).expect("部署 ID 非零"),
-            EndpointId::new(value).expect("端点 ID 非零"),
+            EndpointId::new(endpoint_value).expect("端点 ID 非零"),
             AccountSelectorId::new(selector_value).expect("账户选择合同 ID 非零"),
         )
     }
@@ -700,6 +720,20 @@ mod tests {
         )
     }
 
+    fn account_definition(account_value: u64, site_value: u64) -> AccountDefinition {
+        AccountDefinition::new(
+            AccountId::new(account_value).expect("测试账户 ID 非零"),
+            SiteId::new(site_value).expect("测试站点 ID 非零"),
+        )
+    }
+
+    fn credential_definition(credential_value: u64, account_value: u64) -> CredentialDefinition {
+        CredentialDefinition::new(
+            CredentialId::new(credential_value).expect("测试凭据 ID 非零"),
+            AccountId::new(account_value).expect("测试账户 ID 非零"),
+        )
+    }
+
     fn selector_definition<'a>(
         selector_value: u64,
         units: &'a [QuotaSelectionUnit<'a>],
@@ -713,6 +747,25 @@ mod tests {
             members,
         )
         .expect("测试账户选择合同有效")
+    }
+
+    fn compile_result<'a>(
+        candidates: &'a [RouteCandidate],
+        deployments: &'a [ModelDeploymentDefinition],
+        accounts: &'a [AccountDefinition],
+        credentials: &'a [CredentialDefinition],
+        selectors: &'a [AccountSelectorDefinition<'a>],
+    ) -> Result<(), CompiledRoutingSnapshotError> {
+        CompiledRoutingSnapshot::compile(
+            version(1),
+            candidates,
+            RoutingStrategy::Priority,
+            1,
+            deployments,
+            AccountCredentialDefinitions::new(accounts, credentials),
+            selectors,
+        )
+        .map(|_| ())
     }
 
     fn ready(stage_value: u64, target_value: u64, penalty: u16) -> RouteCandidate {
@@ -928,6 +981,8 @@ mod tests {
             0,
         )];
         let deployments = [deployment_definition(1, 1, 1)];
+        let accounts = [account_definition(1, 1)];
+        let credentials = [credential_definition(1, 1)];
 
         assert_eq!(
             CompiledRoutingSnapshot::compile(
@@ -936,6 +991,7 @@ mod tests {
                 RoutingStrategy::Priority,
                 1,
                 &deployments,
+                AccountCredentialDefinitions::new(&accounts, &credentials),
                 &selectors,
             )
             .err(),
@@ -978,6 +1034,8 @@ mod tests {
         let known_deployment = [deployment_definition(1, 1, 1)];
         let wrong_site = [deployment_definition(1, 2, 1)];
         let wrong_endpoint = [deployment_definition(1, 1, 2)];
+        let accounts = [account_definition(1, 1)];
+        let credentials = [credential_definition(1, 1)];
 
         for (candidates, deployments, expected) in [
             (
@@ -1003,12 +1061,229 @@ mod tests {
                     RoutingStrategy::Priority,
                     1,
                     deployments,
+                    AccountCredentialDefinitions::new(&accounts, &credentials),
                     &selectors,
                 )
                 .err(),
                 Some(CompiledRoutingSnapshotError::Plan(expected))
             );
         }
+    }
+
+    #[test]
+    fn compiled_snapshot_rejects_invalid_account_and_credential_catalogs() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors = [selector_definition(1, &units, &members)];
+        let candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_selector(1, 1, 1),
+            0,
+        )];
+        let deployments = [deployment_definition(1, 1, 1)];
+        let accounts = [account_definition(1, 1)];
+        let unknown_owner = [credential_definition(1, 2)];
+
+        assert_eq!(
+            compile_result(&candidates, &deployments, &[], &[], &selectors),
+            Err(CompiledRoutingSnapshotError::AccountCatalog(
+                AccountCatalogError::Empty
+            ))
+        );
+        assert_eq!(
+            compile_result(&candidates, &deployments, &accounts, &[], &selectors),
+            Err(CompiledRoutingSnapshotError::CredentialCatalog(
+                CredentialCatalogError::Empty
+            ))
+        );
+        assert_eq!(
+            compile_result(
+                &candidates,
+                &deployments,
+                &accounts,
+                &unknown_owner,
+                &selectors,
+            ),
+            Err(CompiledRoutingSnapshotError::CredentialCatalog(
+                CredentialCatalogError::UnknownOwnerAccount
+            ))
+        );
+    }
+
+    #[test]
+    fn compiled_snapshot_rejects_invalid_selector_member_bindings() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_selector(1, 1, 1),
+            0,
+        )];
+        let deployments = [deployment_definition(1, 1, 1)];
+
+        let unknown_account_members = [AccountSelectorMember::new(
+            AccountId::new(2).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let unknown_account_selectors = [selector_definition(1, &units, &unknown_account_members)];
+        let account_one = [account_definition(1, 1)];
+        let credential_one = [credential_definition(1, 1)];
+        assert_eq!(
+            compile_result(
+                &candidates,
+                &deployments,
+                &account_one,
+                &credential_one,
+                &unknown_account_selectors,
+            ),
+            Err(CompiledRoutingSnapshotError::Plan(
+                PlanError::UnknownAccount
+            ))
+        );
+
+        let unknown_credential_members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(2).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let unknown_credential_selectors =
+            [selector_definition(1, &units, &unknown_credential_members)];
+        assert_eq!(
+            compile_result(
+                &candidates,
+                &deployments,
+                &account_one,
+                &credential_one,
+                &unknown_credential_selectors,
+            ),
+            Err(CompiledRoutingSnapshotError::Plan(
+                PlanError::UnknownCredential
+            ))
+        );
+
+        let mismatched_members = [AccountSelectorMember::new(
+            AccountId::new(2).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let mismatched_selectors = [selector_definition(1, &units, &mismatched_members)];
+        let two_accounts = [account_definition(1, 1), account_definition(2, 1)];
+        assert_eq!(
+            compile_result(
+                &candidates,
+                &deployments,
+                &two_accounts,
+                &credential_one,
+                &mismatched_selectors,
+            ),
+            Err(CompiledRoutingSnapshotError::Plan(
+                PlanError::CredentialAccountMismatch
+            ))
+        );
+
+        let cross_site_members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let cross_site_selectors = [selector_definition(1, &units, &cross_site_members)];
+        let other_site_account = [account_definition(1, 2)];
+        assert_eq!(
+            compile_result(
+                &candidates,
+                &deployments,
+                &other_site_account,
+                &credential_one,
+                &cross_site_selectors,
+            ),
+            Err(CompiledRoutingSnapshotError::Plan(
+                PlanError::AccountDeploymentSiteMismatch
+            ))
+        );
+    }
+
+    #[test]
+    fn compiled_snapshot_allows_same_site_accounts_and_shared_quota_unit() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(7).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [
+            AccountSelectorMember::new(
+                AccountId::new(1).expect("测试账户 ID 非零"),
+                CredentialId::new(1).expect("测试凭据 ID 非零"),
+                QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+                0,
+            ),
+            AccountSelectorMember::new(
+                AccountId::new(1).expect("测试账户 ID 非零"),
+                CredentialId::new(2).expect("测试凭据 ID 非零"),
+                QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+                0,
+            ),
+            AccountSelectorMember::new(
+                AccountId::new(2).expect("测试账户 ID 非零"),
+                CredentialId::new(3).expect("测试凭据 ID 非零"),
+                QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+                0,
+            ),
+        ];
+        let selectors = [selector_definition(1, &units, &members)];
+        let candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_selector(1, 1, 1),
+            0,
+        )];
+        let deployments = [deployment_definition(1, 1, 1)];
+        let accounts = [account_definition(1, 1), account_definition(2, 1)];
+        let credentials = [
+            credential_definition(1, 1),
+            credential_definition(2, 1),
+            credential_definition(3, 2),
+        ];
+
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates,
+            RoutingStrategy::Priority,
+            1,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("同站账户与多凭据静态关系有效");
+
+        assert_eq!(compiled.routing().version(), version(1));
+        assert_eq!(selectors[0].members().len(), 3);
+        assert_eq!(
+            selectors[0]
+                .unit(QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"))
+                .expect("额度单元存在")
+                .effective_weight()
+                .get(),
+            7
+        );
     }
 
     #[test]
@@ -1027,21 +1302,24 @@ mod tests {
         )];
         let selectors = [selector_definition(1, &units, &members)];
         let candidates = [
-            RouteCandidate::ready(stage(1), target_with_selector(1, 11, 1), 0),
-            RouteCandidate::ready(stage(1), target_with_selector(2, 12, 1), 9),
-            RouteCandidate::ready(stage(2), target_with_selector(3, 13, 1), 0),
+            RouteCandidate::ready(stage(1), target_with_binding(1, 1, 11, 1, 1), 0),
+            RouteCandidate::ready(stage(1), target_with_binding(2, 1, 12, 2, 1), 9),
+            RouteCandidate::ready(stage(2), target_with_binding(3, 1, 13, 3, 1), 0),
         ];
         let deployments = [
             deployment_definition(11, 1, 1),
-            deployment_definition(12, 2, 2),
-            deployment_definition(13, 3, 3),
+            deployment_definition(12, 1, 2),
+            deployment_definition(13, 1, 3),
         ];
+        let accounts = [account_definition(1, 1)];
+        let credentials = [credential_definition(1, 1)];
         let compiled = CompiledRoutingSnapshot::compile(
             version(1),
             &candidates,
             RoutingStrategy::Priority,
             3,
             &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
             &selectors,
         )
         .expect("共享账户选择合同的快照有效");
@@ -1070,7 +1348,7 @@ mod tests {
             .expect("第二次尝试存在");
         assert_eq!(resolved.snapshot_version(), version(1));
         assert_eq!(resolved.stage(), stage(2));
-        assert_eq!(resolved.target(), target_with_selector(3, 13, 1));
+        assert_eq!(resolved.target(), target_with_binding(3, 1, 13, 3, 1));
         assert_eq!(resolved.deployment(), &deployments[2]);
         assert_eq!(resolved.selector(), &selectors[0]);
         assert_eq!(
@@ -1109,12 +1387,17 @@ mod tests {
         )];
         let deployments_a = [deployment_definition(1, 1, 1)];
         let deployments_b = [deployment_definition(2, 2, 2)];
+        let accounts_a = [account_definition(1, 1)];
+        let credentials_a = [credential_definition(1, 1)];
+        let accounts_b = [account_definition(1, 2)];
+        let credentials_b = [credential_definition(1, 1)];
         let compiled_a = CompiledRoutingSnapshot::compile(
             version(1),
             &candidates_a,
             RoutingStrategy::Priority,
             1,
             &deployments_a,
+            AccountCredentialDefinitions::new(&accounts_a, &credentials_a),
             &selectors_a,
         )
         .expect("第一个编译快照有效");
@@ -1124,6 +1407,7 @@ mod tests {
             RoutingStrategy::Priority,
             1,
             &deployments_b,
+            AccountCredentialDefinitions::new(&accounts_b, &credentials_b),
             &selectors_b,
         )
         .expect("第二个编译快照有效");

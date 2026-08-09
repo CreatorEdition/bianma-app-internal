@@ -1,10 +1,10 @@
 use routing_core::{
-    AccountId, AccountSelectorDefinition, AccountSelectorId, AccountSelectorMember,
-    CompiledRoutingSnapshot, CredentialId, CredentialSelectionPolicy, EndpointId,
-    IngressClassifier, IngressRequest, ModelDeploymentDefinition, ModelDeploymentId, OperationId,
-    QuotaGroupId, QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RouteCandidate,
-    RoutePlanner, RouteStageId, RouteTarget, RoutingStrategy, SiteId, SnapshotVersion,
-    VerifiedIngressDisposition,
+    AccountCredentialDefinitions, AccountDefinition, AccountId, AccountSelectorDefinition,
+    AccountSelectorId, AccountSelectorMember, CompiledRoutingSnapshot, CredentialDefinition,
+    CredentialId, CredentialSelectionPolicy, EndpointId, IngressClassifier, IngressRequest,
+    ModelDeploymentDefinition, ModelDeploymentId, OperationId, QuotaGroupId, QuotaSelectionUnit,
+    QuotaSelectionUnitId, QuotaTopologySource, RouteCandidate, RoutePlanner, RouteStageId,
+    RouteTarget, RoutingStrategy, SiteId, SnapshotVersion, VerifiedIngressDisposition,
 };
 use std::hint::black_box;
 use std::num::NonZeroU16;
@@ -15,7 +15,7 @@ const ITERATIONS: u64 = 100_000;
 fn target(value: u64) -> RouteTarget {
     RouteTarget::new(
         routing_core::RouteTargetId::new(value).expect("基准 ID 非零"),
-        SiteId::new(value).expect("站点 ID 非零"),
+        SiteId::new(1).expect("站点 ID 非零"),
         ModelDeploymentId::new(value).expect("部署 ID 非零"),
         EndpointId::new(value).expect("端点 ID 非零"),
         AccountSelectorId::new(1).expect("账户选择合同 ID 非零"),
@@ -34,7 +34,7 @@ fn main() {
         let value = (index + 1) as u64;
         ModelDeploymentDefinition::new(
             ModelDeploymentId::new(value).expect("基准部署 ID 非零"),
-            SiteId::new(value).expect("基准站点 ID 非零"),
+            SiteId::new(1).expect("基准站点 ID 非零"),
             EndpointId::new(value).expect("基准端点 ID 非零"),
         )
     });
@@ -58,12 +58,21 @@ fn main() {
         &members,
     )
     .expect("基准选择合同有效")];
+    let accounts = [AccountDefinition::new(
+        AccountId::new(1).expect("基准账户 ID 非零"),
+        SiteId::new(1).expect("基准站点 ID 非零"),
+    )];
+    let credentials = [CredentialDefinition::new(
+        CredentialId::new(1).expect("基准凭据 ID 非零"),
+        AccountId::new(1).expect("基准账户 ID 非零"),
+    )];
     let compiled = CompiledRoutingSnapshot::compile(
         SnapshotVersion::new(1).expect("快照版本非零"),
         &candidates,
         RoutingStrategy::LeastPenalty,
         16,
         &deployments,
+        AccountCredentialDefinitions::new(&accounts, &credentials),
         &selectors,
     )
     .expect("基准编译快照有效");
