@@ -1,7 +1,8 @@
 //! Bianma 的低开销纯 Rust 路由决策核心。
 //!
-//! 本 crate 只负责基于内存快照生成有界路由计划，并在一次尝试结束后给出保守的
-//! 下一步决策。它不依赖 Tauri、数据库、网络客户端、异步运行时或 ContextPipeline。
+//! 本 crate 只负责验证不可变路由/账户选择合同、基于内存快照生成有界路由计划，并在
+//! 一次尝试结束后给出保守的下一步决策。它不依赖 Tauri、数据库、网络客户端、异步
+//! 运行时或 ContextPipeline。
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -11,12 +12,14 @@ pub const MAX_ROUTE_TARGETS: usize = 16;
 
 // 当前切片只定义合同，生产 Transport 适配器尚未接线；不能为消除未使用告警而暴露
 // 可伪造的 Attempt 构造路径。单测会覆盖该内部状态机。
+mod account_selector;
 #[cfg_attr(not(test), allow(dead_code))]
 mod attempt;
 #[cfg_attr(not(test), allow(dead_code))]
 mod coordinator;
 mod ingress;
 
+pub use account_selector::*;
 pub use attempt::{
     AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState, SendPhase,
     UpstreamWriteState,
@@ -79,6 +82,14 @@ id_type!(
 id_type!(
     /// 凭据标识。
     CredentialId
+);
+id_type!(
+    /// 额度组标识。
+    QuotaGroupId
+);
+id_type!(
+    /// 账户选择合同内独立额度单元的稳定标识。
+    QuotaSelectionUnitId
 );
 
 impl RouteTargetId {
