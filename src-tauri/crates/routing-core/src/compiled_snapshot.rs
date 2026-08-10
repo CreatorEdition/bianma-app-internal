@@ -31,16 +31,30 @@ pub enum CompiledRoutingSnapshotError {
 /// 一次计划尝试在同代编译快照中解析出的完整静态路由配置。
 ///
 /// 该值不选择 Account/Credential，也不包含健康、额度、租约、Secret、传输或请求内容。
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct ResolvedRouteTarget<'a> {
+#[derive(Clone, Copy)]
+pub struct ResolvedRouteTarget<'snapshot, 'config> {
+    routing: &'snapshot RoutingSnapshot<'config>,
     snapshot_version: SnapshotVersion,
     stage: RouteStageId,
     target: RouteTarget,
-    deployment: &'a ModelDeploymentDefinition,
-    selector: &'a AccountSelectorDefinition<'a>,
+    deployment: &'config ModelDeploymentDefinition,
+    selector: &'config AccountSelectorDefinition<'config>,
 }
 
-impl fmt::Debug for ResolvedRouteTarget<'_> {
+impl PartialEq for ResolvedRouteTarget<'_, '_> {
+    fn eq(&self, other: &Self) -> bool {
+        core::ptr::eq(self.routing, other.routing)
+            && self.snapshot_version == other.snapshot_version
+            && self.stage == other.stage
+            && self.target == other.target
+            && self.deployment == other.deployment
+            && self.selector == other.selector
+    }
+}
+
+impl Eq for ResolvedRouteTarget<'_, '_> {}
+
+impl fmt::Debug for ResolvedRouteTarget<'_, '_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ResolvedRouteTarget")
@@ -51,7 +65,7 @@ impl fmt::Debug for ResolvedRouteTarget<'_> {
     }
 }
 
-impl<'a> ResolvedRouteTarget<'a> {
+impl<'snapshot, 'config> ResolvedRouteTarget<'snapshot, 'config> {
     /// 返回解析所用的编译快照版本。
     pub const fn snapshot_version(self) -> SnapshotVersion {
         self.snapshot_version
@@ -71,7 +85,7 @@ impl<'a> ResolvedRouteTarget<'a> {
     ///
     /// 仅供 crate 内受控执行层消费，crate 外不能取得裸 Definition 再手工配对计划。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn deployment(self) -> &'a ModelDeploymentDefinition {
+    pub(crate) const fn deployment(self) -> &'config ModelDeploymentDefinition {
         self.deployment
     }
 
@@ -79,8 +93,16 @@ impl<'a> ResolvedRouteTarget<'a> {
     ///
     /// 仅供 crate 内受控执行层消费，crate 外不能取得裸 Definition 再手工配对计划。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn selector(self) -> &'a AccountSelectorDefinition<'a> {
+    pub(crate) const fn selector(self) -> &'config AccountSelectorDefinition<'config> {
         self.selector
+    }
+
+    /// 判断是否由指定的同一 RoutingSnapshot 实例解析而来。
+    ///
+    /// 版本号或 TargetId 相同不足以代表静态配置相同；冷却能力必须依赖这一实例身份
+    /// 拒绝跨快照归因。
+    pub(crate) fn matches_snapshot(&self, snapshot: &RoutingSnapshot<'config>) -> bool {
+        core::ptr::eq(self.routing, snapshot)
     }
 }
 
@@ -204,11 +226,11 @@ impl<'a> CompiledRoutingSnapshot<'a> {
     ///
     /// 先用当前快照验证计划版本与 Target，再从同一编译代的 catalog 查询 deployment 与
     /// selector；任何理论不变量破坏均 fail closed，绝不回退到外部或全局目录。
-    pub fn resolve_plan_target(
-        &self,
-        plan: &RoutePlan<'_, 'a>,
+    pub fn resolve_plan_target<'snapshot>(
+        &'snapshot self,
+        plan: &RoutePlan<'snapshot, 'a>,
         attempt_index: u8,
-    ) -> Result<Option<ResolvedRouteTarget<'a>>, PlanError> {
+    ) -> Result<Option<ResolvedRouteTarget<'snapshot, 'a>>, PlanError> {
         if !core::ptr::eq(plan.snapshot, &self.routing) {
             return Err(PlanError::StaleSnapshot);
         }
@@ -229,6 +251,7 @@ impl<'a> CompiledRoutingSnapshot<'a> {
             .ok_or(PlanError::UnknownAccountSelector)?;
 
         Ok(Some(ResolvedRouteTarget {
+            routing: &self.routing,
             snapshot_version: self.routing.version(),
             stage,
             target: *target,

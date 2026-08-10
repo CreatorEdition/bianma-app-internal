@@ -6,8 +6,83 @@
 
 use super::{
     coordinator::{AttemptId, AttemptPermit, CoordinatorId},
-    FailureClass,
+    health::{HealthTick, RateLimitScope},
+    FailureClass, ResolvedRouteTarget, RouteTarget,
 };
+
+/// 尝试绑定的限流上报器创建失败原因。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RateLimitReporterError {
+    /// Attempt 许可与同代已解析目标不属于同一个 RoutingSnapshot 或 RouteTarget。
+    TargetMismatch,
+    /// 当前 Attempt 已经签发过限流上报器。
+    AlreadyReported,
+}
+
+/// 只能由当前 Attempt 受控执行层签发的一次限流上报器。
+///
+/// 构造器仅在本模块内可见，且只能由 [`AttemptTracker`] 调用。上报器既不保存 HTTP
+/// 状态、响应头或正文，也不携带交付状态或重放证明；调用 [`Self::report`] 时它会被
+/// 消费，因此单个上报器不能重复生成观测。
+pub(crate) struct AdapterRateLimitReporter {
+    target: RouteTarget,
+}
+
+impl AdapterRateLimitReporter {
+    fn for_attempt(
+        permit: &AttemptPermit<'_, '_>,
+        resolved: ResolvedRouteTarget<'_, '_>,
+    ) -> Result<Self, RateLimitReporterError> {
+        let target = resolved.target();
+        if permit.target() != target.id() || !resolved.matches_snapshot(permit.snapshot()) {
+            return Err(RateLimitReporterError::TargetMismatch);
+        }
+        Ok(Self { target })
+    }
+
+    /// 消费上报器并生成一次只能被 HealthRegistry 消费的受信限流观测。
+    pub(crate) fn report(
+        self,
+        scope: RateLimitScope,
+        deadline: HealthTick,
+    ) -> TrustedRateLimitObservation {
+        TrustedRateLimitObservation {
+            target: self.target,
+            scope,
+            deadline,
+        }
+    }
+
+    #[cfg(test)]
+    fn test_only(target: RouteTarget) -> Self {
+        Self { target }
+    }
+}
+
+/// 仅能由 [`AdapterRateLimitReporter`] 消费式签发的限流冷却观测。
+///
+/// 它没有公开构造器、不能 Clone 或 Copy，也不表达 HTTP/Delivery/Replay/Account/Quota
+/// 信息。HealthRegistry 消费它后只更新当前 Target 对应的 Site 或 Deployment 冷却。
+pub(crate) struct TrustedRateLimitObservation {
+    target: RouteTarget,
+    scope: RateLimitScope,
+    deadline: HealthTick,
+}
+
+impl TrustedRateLimitObservation {
+    pub(crate) fn into_parts(self) -> (RouteTarget, RateLimitScope, HealthTick) {
+        (self.target, self.scope, self.deadline)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_rate_limit_observation(
+    target: RouteTarget,
+    scope: RateLimitScope,
+    deadline: HealthTick,
+) -> TrustedRateLimitObservation {
+    AdapterRateLimitReporter::test_only(target).report(scope, deadline)
+}
 
 /// 发送尝试的单调阶段。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,23 +168,25 @@ impl TrustedPreExecutionRejection {
 /// “执行前拒绝”。它刻意不实现 `Clone` 或 `Copy`，状态只能向风险更高的方向前进，
 /// 最终结果通过消费本记录器生成。
 #[derive(Debug)]
-pub(crate) struct AttemptTracker {
-    permit: AttemptPermit,
+pub(crate) struct AttemptTracker<'snapshot, 'candidates> {
+    permit: AttemptPermit<'snapshot, 'candidates>,
     phase: SendPhase,
     write: UpstreamWriteState,
     downstream: DownstreamCommitState,
+    rate_limit_reporter_issued: bool,
 }
 
-impl AttemptTracker {
+impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
     /// 消费 Coordinator 签发的单次许可并创建状态机。
     ///
     /// 许可被移动进 Tracker，因而同一个 Attempt 不可能被构造为两个独立的发送器。
-    pub(crate) const fn from_permit(permit: AttemptPermit) -> Self {
+    pub(crate) const fn from_permit(permit: AttemptPermit<'snapshot, 'candidates>) -> Self {
         Self {
             permit,
             phase: SendPhase::Pending,
             write: UpstreamWriteState::NoBytesProven,
             downstream: DownstreamCommitState::NotCommitted,
+            rate_limit_reporter_issued: false,
         }
     }
 
@@ -126,6 +203,22 @@ impl AttemptTracker {
     /// 返回当前下游提交状态。
     pub(crate) const fn downstream_state(&self) -> DownstreamCommitState {
         self.downstream
+    }
+
+    /// 为当前 Attempt 与已解析 Target 签发一次受信限流上报器。
+    ///
+    /// 该方法不会修改发送、交付或重放状态；它只在适配器已经按自身受控合同确认限流
+    /// 时被调用。一个 Attempt 最多签发一次上报器，且 Target 必须与 Permit 完全一致。
+    pub(crate) fn rate_limit_reporter(
+        &mut self,
+        resolved: ResolvedRouteTarget<'_, '_>,
+    ) -> Result<AdapterRateLimitReporter, RateLimitReporterError> {
+        if self.rate_limit_reporter_issued {
+            return Err(RateLimitReporterError::AlreadyReported);
+        }
+        let reporter = AdapterRateLimitReporter::for_attempt(&self.permit, resolved)?;
+        self.rate_limit_reporter_issued = true;
+        Ok(reporter)
     }
 
     /// 记录写出首个请求字节。
@@ -186,7 +279,7 @@ impl AttemptTracker {
         failure: FailureClass,
         retry_after_ms: Option<u64>,
         trusted_rejection: Option<TrustedPreExecutionRejection>,
-    ) -> AttemptCompletion {
+    ) -> AttemptCompletion<'snapshot, 'candidates> {
         let outcome = self.build_outcome(failure, retry_after_ms, trusted_rejection);
         AttemptCompletion {
             permit: self.permit,
@@ -228,8 +321,8 @@ impl AttemptTracker {
     }
 
     #[cfg(test)]
-    pub(crate) fn test_only(id: u8) -> Self {
-        Self::from_permit(AttemptPermit::test_only(id))
+    pub(crate) fn test_only(id: u8) -> AttemptTracker<'static, 'static> {
+        AttemptTracker::from_permit(AttemptPermit::test_only(id))
     }
 
     #[cfg(test)]
@@ -248,12 +341,12 @@ impl AttemptTracker {
 /// 字段、构造器与解构路径均保持 crate-private。Coordinator 必须消费该对象，不能把
 /// Permit 与 Outcome 拆开并重新启动一次 Attempt。
 #[derive(Debug)]
-pub(crate) struct AttemptCompletion {
-    permit: AttemptPermit,
+pub(crate) struct AttemptCompletion<'snapshot, 'candidates> {
+    permit: AttemptPermit<'snapshot, 'candidates>,
     outcome: AttemptOutcome,
 }
 
-impl AttemptCompletion {
+impl AttemptCompletion<'_, '_> {
     pub(crate) fn matches(&self, coordinator: CoordinatorId, id: AttemptId) -> bool {
         self.permit.belongs_to(coordinator) && self.permit.attempt_id() == id
     }
@@ -340,8 +433,8 @@ mod tests {
             "Attempt 合同运行时代码过大: {code_lines} 行"
         );
         assert!(core::mem::size_of::<AttemptOutcome>() <= 32);
-        assert!(core::mem::size_of::<AttemptTracker>() <= 32);
-        assert!(core::mem::size_of::<AttemptCompletion>() <= 64);
+        assert!(core::mem::size_of::<AttemptTracker<'_, '_>>() <= 32);
+        assert!(core::mem::size_of::<AttemptCompletion<'_, '_>>() <= 64);
     }
 
     #[test]

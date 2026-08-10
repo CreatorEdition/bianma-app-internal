@@ -5,7 +5,8 @@
 //! Account、Credential、Quota、Secret、健康探测、线程、锁、数据库或网络。
 
 use super::{
-    ModelDeploymentId, ResolvedRouteTarget, RoutePlan, RoutingSnapshot, SiteId, MAX_ROUTE_TARGETS,
+    attempt::TrustedRateLimitObservation, ModelDeploymentId, RoutePlan, RouteTarget,
+    RoutingSnapshot, SiteId, MAX_ROUTE_TARGETS,
 };
 
 /// Registry 为 Site 维护的固定冷却槽数量。
@@ -36,7 +37,7 @@ impl HealthTick {
 
 /// 一次冷却应归属的最小范围。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CooldownScope {
+pub enum RateLimitScope {
     /// 仅冷却当前已解析 Target 的 ModelDeployment。
     Deployment,
     /// 冷却当前已解析 Target 所属的整个 Site。
@@ -73,18 +74,17 @@ impl HealthRegistry {
         }
     }
 
-    /// 从同代已解析 Target 记录一次冷却。
+    /// 消费一次受信限流观测并记录冷却。
     ///
-    /// `until` 不晚于有效 `now` 时不会创建或延长冷却；同一键只会取更晚的截止时间。
-    /// 调用方无法传入脱离 CompiledRoutingSnapshot 的任意 Target ID。
-    pub fn record_cooldown(
+    /// 该 crate-private 入口只接受 Reporter 生成的一次性 Observation；它不解析 HTTP，
+    /// 也不会改变 Attempt 的交付状态或重放资格。
+    pub(crate) fn record_rate_limit(
         &mut self,
-        resolved: ResolvedRouteTarget<'_>,
-        scope: CooldownScope,
-        until: HealthTick,
+        observation: TrustedRateLimitObservation,
         now: HealthTick,
     ) {
-        self.record_target_cooldown(resolved.target(), scope, until, now);
+        let (target, scope, deadline) = observation.into_parts();
+        self.record_target_cooldown(target, scope, deadline, now);
     }
 
     /// 为同代路由快照生成动态 eligibility 视图。
@@ -119,8 +119,8 @@ impl HealthRegistry {
 
     fn record_target_cooldown(
         &mut self,
-        target: super::RouteTarget,
-        scope: CooldownScope,
+        target: RouteTarget,
+        scope: RateLimitScope,
         until: HealthTick,
         now: HealthTick,
     ) {
@@ -130,13 +130,13 @@ impl HealthRegistry {
             return;
         }
         match scope {
-            CooldownScope::Deployment => Self::record_entry(
+            RateLimitScope::Deployment => Self::record_entry(
                 &mut self.deployment_cooldowns,
                 &mut self.overflow_until,
                 target.deployment(),
                 until,
             ),
-            CooldownScope::Site | CooldownScope::Unknown => Self::record_entry(
+            RateLimitScope::Site | RateLimitScope::Unknown => Self::record_entry(
                 &mut self.site_cooldowns,
                 &mut self.overflow_until,
                 target.site(),
@@ -246,9 +246,10 @@ impl RouteEligibility<'_, '_> {
 mod tests {
     use super::*;
     use super::{
-        super::EndpointId, super::IngressClassifier, super::IngressRequest,
-        super::ModelDeploymentId, super::OperationId, super::RouteCandidate, super::RoutePlanner,
-        super::RouteStageId, super::SnapshotVersion, super::VerifiedIngressDisposition,
+        super::attempt::test_rate_limit_observation, super::EndpointId, super::IngressClassifier,
+        super::IngressRequest, super::ModelDeploymentId, super::OperationId, super::RouteCandidate,
+        super::RoutePlanner, super::RouteStageId, super::SnapshotVersion,
+        super::VerifiedIngressDisposition,
     };
 
     fn site(value: u64) -> SiteId {
@@ -305,14 +306,26 @@ mod tests {
         request
     }
 
+    fn record_test_rate_limit(
+        registry: &mut HealthRegistry,
+        target: RouteTarget,
+        scope: RateLimitScope,
+        deadline: HealthTick,
+        now: HealthTick,
+    ) {
+        let observation = test_rate_limit_observation(target, scope, deadline);
+        registry.record_rate_limit(observation, now);
+    }
+
     #[test]
     fn deployment_cooldown_only_blocks_matching_deployment() {
         let candidates = [candidate(1, 1, 1, 1), candidate(1, 2, 1, 2)];
         let snapshot = snapshot(&candidates);
         let mut registry = HealthRegistry::new();
-        registry.record_target_cooldown(
+        record_test_rate_limit(
+            &mut registry,
             target(1, 1, 1),
-            CooldownScope::Deployment,
+            RateLimitScope::Deployment,
             HealthTick::new(10),
             HealthTick::new(1),
         );
@@ -324,7 +337,7 @@ mod tests {
 
     #[test]
     fn site_and_unknown_cooldown_block_entire_site() {
-        for scope in [CooldownScope::Site, CooldownScope::Unknown] {
+        for scope in [RateLimitScope::Site, RateLimitScope::Unknown] {
             let candidates = [
                 candidate(1, 1, 1, 1),
                 candidate(1, 2, 1, 2),
@@ -332,7 +345,8 @@ mod tests {
             ];
             let snapshot = snapshot(&candidates);
             let mut registry = HealthRegistry::new();
-            registry.record_target_cooldown(
+            record_test_rate_limit(
+                &mut registry,
                 target(1, 1, 1),
                 scope,
                 HealthTick::new(10),
@@ -347,19 +361,45 @@ mod tests {
     }
 
     #[test]
+    fn rate_limit_observation_applies_across_snapshots_with_same_deployment() {
+        let first_candidates = [candidate(1, 1, 1, 1)];
+        let second_candidates = [candidate(1, 2, 1, 1)];
+        let first_snapshot = snapshot(&first_candidates);
+        let second_snapshot = snapshot(&second_candidates);
+        let mut registry = HealthRegistry::new();
+
+        record_test_rate_limit(
+            &mut registry,
+            target(1, 1, 1),
+            RateLimitScope::Deployment,
+            HealthTick::new(10),
+            HealthTick::new(1),
+        );
+
+        assert!(!registry
+            .eligibility_for(&first_snapshot, HealthTick::new(1))
+            .allows_index(0));
+        assert!(!registry
+            .eligibility_for(&second_snapshot, HealthTick::new(1))
+            .allows_index(0));
+    }
+
+    #[test]
     fn cooldown_uses_maximum_exact_expiry_and_clamped_time() {
         let candidates = [candidate(1, 1, 1, 1)];
         let snapshot = snapshot(&candidates);
         let mut registry = HealthRegistry::new();
-        registry.record_target_cooldown(
+        record_test_rate_limit(
+            &mut registry,
             target(1, 1, 1),
-            CooldownScope::Deployment,
+            RateLimitScope::Deployment,
             HealthTick::new(20),
             HealthTick::new(10),
         );
-        registry.record_target_cooldown(
+        record_test_rate_limit(
+            &mut registry,
             target(1, 1, 1),
-            CooldownScope::Deployment,
+            RateLimitScope::Deployment,
             HealthTick::new(15),
             HealthTick::new(10),
         );
@@ -381,9 +421,10 @@ mod tests {
         let mut registry = HealthRegistry::new();
         let target = target(1, 1, 1);
 
-        registry.record_target_cooldown(
+        record_test_rate_limit(
+            &mut registry,
             target,
-            CooldownScope::Deployment,
+            RateLimitScope::Deployment,
             HealthTick::new(10),
             HealthTick::new(10),
         );
@@ -391,15 +432,17 @@ mod tests {
             .eligibility_for(&snapshot, HealthTick::new(10))
             .allows_index(0));
 
-        registry.record_target_cooldown(
+        record_test_rate_limit(
+            &mut registry,
             target,
-            CooldownScope::Deployment,
+            RateLimitScope::Deployment,
             HealthTick::new(20),
             HealthTick::new(10),
         );
-        registry.record_target_cooldown(
+        record_test_rate_limit(
+            &mut registry,
             target,
-            CooldownScope::Deployment,
+            RateLimitScope::Deployment,
             HealthTick::new(10),
             HealthTick::new(10),
         );
@@ -414,16 +457,18 @@ mod tests {
         let snapshot = snapshot(&candidates);
         let mut registry = HealthRegistry::new();
         for value in 2..=MAX_HEALTH_DEPLOYMENTS as u64 + 1 {
-            registry.record_target_cooldown(
+            record_test_rate_limit(
+                &mut registry,
                 target(value, value, value),
-                CooldownScope::Deployment,
+                RateLimitScope::Deployment,
                 HealthTick::new(20),
                 HealthTick::new(1),
             );
         }
-        registry.record_target_cooldown(
+        record_test_rate_limit(
+            &mut registry,
             target(18, 18, 18),
-            CooldownScope::Deployment,
+            RateLimitScope::Deployment,
             HealthTick::new(30),
             HealthTick::new(1),
         );
@@ -445,9 +490,10 @@ mod tests {
         ];
         let first_snapshot = snapshot(&first_stage);
         let mut registry = HealthRegistry::new();
-        registry.record_target_cooldown(
+        record_test_rate_limit(
+            &mut registry,
             target(1, 1, 1),
-            CooldownScope::Site,
+            RateLimitScope::Site,
             HealthTick::new(10),
             HealthTick::new(1),
         );

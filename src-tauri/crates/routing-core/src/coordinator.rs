@@ -3,11 +3,12 @@
 //! Coordinator 消费不可变 [`RoutePlan`](super::RoutePlan)，只签发一个活跃许可；一次
 //! 完成要么原子地签发下一个计划位置，要么永久终止。它不执行网络 I/O、等待或健康更新。
 
+use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::{
     attempt::AttemptCompletion, RetryDecision, RetryGate, RetryPolicy, RetryStopReason,
-    RouteEligibility, RoutePlan, RouteTargetId,
+    RouteEligibility, RoutePlan, RouteTargetId, RoutingSnapshot,
 };
 
 /// 进程内只增不复用的 Coordinator 标识分配器。
@@ -47,23 +48,42 @@ impl AttemptId {
 /// 许可没有公开构造器，也刻意不实现 `Clone` 或 `Copy`。它必须先被
 /// [`AttemptTracker`](super::attempt::AttemptTracker) 消费，再由私有 Completion 交给
 /// [`AttemptCoordinator::complete`]；调用方不能保留许可并制造第二次发送。
-#[derive(Debug)]
-pub(crate) struct AttemptPermit {
+pub(crate) struct AttemptPermit<'snapshot, 'candidates> {
     coordinator: CoordinatorId,
     id: AttemptId,
     index: u8,
-    target: RouteTargetId,
+    snapshot: &'snapshot RoutingSnapshot<'candidates>,
+    candidate_index: u8,
 }
 
-impl AttemptPermit {
+impl fmt::Debug for AttemptPermit<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttemptPermit")
+            .field("coordinator", &self.coordinator)
+            .field("id", &self.id)
+            .field("index", &self.index)
+            .field("target", &self.target())
+            .finish()
+    }
+}
+
+impl<'snapshot, 'candidates> AttemptPermit<'snapshot, 'candidates> {
     /// 返回计划内的单调尝试位置。
     pub(crate) const fn index(&self) -> u8 {
         self.index
     }
 
     /// 返回本次唯一绑定的路由目标。
-    pub(crate) const fn target(&self) -> RouteTargetId {
-        self.target
+    pub(crate) fn target(&self) -> RouteTargetId {
+        self.snapshot.candidates[usize::from(self.candidate_index)]
+            .target()
+            .id()
+    }
+
+    /// 返回许可绑定的唯一快照实例。
+    pub(crate) const fn snapshot(&self) -> &'snapshot RoutingSnapshot<'candidates> {
+        self.snapshot
     }
 
     pub(crate) const fn attempt_id(&self) -> AttemptId {
@@ -75,12 +95,34 @@ impl AttemptPermit {
     }
 
     #[cfg(test)]
-    pub(crate) fn test_only(id: u8) -> Self {
-        Self {
+    pub(crate) fn test_only(id: u8) -> AttemptPermit<'static, 'static> {
+        let target = RouteTargetId::new(u64::from(id)).expect("测试目标标识非零");
+        let candidates = Box::leak(Box::new([super::RouteCandidate::ready(
+            super::RouteStageId::new(1).expect("测试阶段标识非零"),
+            super::RouteTarget::new(
+                target,
+                super::SiteId::new(1).expect("测试站点标识非零"),
+                super::ModelDeploymentId::new(1).expect("测试部署标识非零"),
+                super::EndpointId::new(1).expect("测试端点标识非零"),
+                super::AccountSelectorId::new(1).expect("测试选择合同标识非零"),
+            ),
+            0,
+        )]));
+        let snapshot = Box::leak(Box::new(
+            RoutingSnapshot::new(
+                super::SnapshotVersion::new(1).expect("测试快照版本非零"),
+                candidates,
+                super::RoutingStrategy::Priority,
+                1,
+            )
+            .expect("测试快照有效"),
+        ));
+        AttemptPermit {
             coordinator: CoordinatorId(1),
             id: AttemptId::new(id).expect("测试 Attempt 标识非零"),
             index: id.saturating_sub(1),
-            target: RouteTargetId::new(u64::from(id)).expect("测试目标标识非零"),
+            snapshot,
+            candidate_index: 0,
         }
     }
 }
@@ -122,11 +164,11 @@ pub(crate) enum AttemptCompleteError {
 
 /// 完成一次 Attempt 后的唯一下一步。
 #[derive(Debug)]
-pub(crate) enum CoordinatorStep {
+pub(crate) enum CoordinatorStep<'snapshot, 'candidates> {
     /// 已原子签发下一个计划位置，调用方只能消费返回的唯一许可继续。
     Next {
         /// 下一个单次 Attempt 许可。
-        permit: AttemptPermit,
+        permit: AttemptPermit<'snapshot, 'candidates>,
         /// 在开始该 Attempt 前的有界等待时间。
         delay_ms: u64,
     },
@@ -179,7 +221,7 @@ impl<'snapshot, 'candidates> AttemptCoordinator<'snapshot, 'candidates> {
     pub(crate) fn start(
         &mut self,
         eligibility: &RouteEligibility<'snapshot, 'candidates>,
-    ) -> Result<AttemptPermit, AttemptStartError> {
+    ) -> Result<AttemptPermit<'snapshot, 'candidates>, AttemptStartError> {
         if self.stopped {
             return Err(AttemptStartError::Stopped);
         }
@@ -202,9 +244,9 @@ impl<'snapshot, 'candidates> AttemptCoordinator<'snapshot, 'candidates> {
     /// 消费匹配的 Completion，返回唯一的后续许可或永久停止结论。
     pub(crate) fn complete(
         &mut self,
-        completion: AttemptCompletion,
+        completion: AttemptCompletion<'snapshot, 'candidates>,
         eligibility: &RouteEligibility<'snapshot, 'candidates>,
-    ) -> Result<CoordinatorStep, AttemptCompleteError> {
+    ) -> Result<CoordinatorStep<'snapshot, 'candidates>, AttemptCompleteError> {
         let Some(active) = self.active else {
             return Err(AttemptCompleteError::NoActive);
         };
@@ -248,7 +290,7 @@ impl<'snapshot, 'candidates> AttemptCoordinator<'snapshot, 'candidates> {
     fn issue_next(
         &mut self,
         eligibility: &RouteEligibility<'snapshot, 'candidates>,
-    ) -> Result<Option<AttemptPermit>, ()> {
+    ) -> Result<Option<AttemptPermit<'snapshot, 'candidates>>, ()> {
         if !eligibility.supports_plan(&self.plan) {
             return Err(());
         }
@@ -267,13 +309,24 @@ impl<'snapshot, 'candidates> AttemptCoordinator<'snapshot, 'candidates> {
             let Some(next_id) = self.next_id.checked_add(1) else {
                 return Ok(None);
             };
+            let Some(candidate_index) = self
+                .plan
+                .snapshot
+                .candidates
+                .iter()
+                .position(|candidate| candidate.target().id() == target)
+                .and_then(|position| u8::try_from(position).ok())
+            else {
+                return Err(());
+            };
             self.next_id = next_id;
             self.active = Some(ActiveAttempt { id, index });
             return Ok(Some(AttemptPermit {
                 coordinator,
                 id,
                 index,
-                target,
+                snapshot: self.plan.snapshot,
+                candidate_index,
             }));
         }
         Ok(None)

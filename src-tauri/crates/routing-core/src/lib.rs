@@ -19,6 +19,7 @@ mod attempt;
 mod compiled_snapshot;
 #[cfg_attr(not(test), allow(dead_code))]
 mod coordinator;
+#[cfg_attr(not(test), allow(dead_code))]
 mod health;
 mod ingress;
 mod model_deployment;
@@ -666,6 +667,7 @@ impl RetryGate {
 
 #[cfg(test)]
 mod tests {
+    use super::attempt::test_rate_limit_observation;
     use super::coordinator::{
         AttemptCompleteError, AttemptCoordinatorBuildError, AttemptPermit, AttemptStartError,
         CoordinatorStep,
@@ -873,11 +875,17 @@ mod tests {
         tracker.into_outcome_for_test(failure, None, None)
     }
 
-    fn not_sent_for(permit: AttemptPermit, failure: FailureClass) -> attempt::AttemptCompletion {
+    fn not_sent_for<'snapshot, 'candidates>(
+        permit: AttemptPermit<'snapshot, 'candidates>,
+        failure: FailureClass,
+    ) -> attempt::AttemptCompletion<'snapshot, 'candidates> {
         attempt::AttemptTracker::from_permit(permit).into_completion(failure, None, None)
     }
 
-    fn sent_for(permit: AttemptPermit, failure: FailureClass) -> attempt::AttemptCompletion {
+    fn sent_for<'snapshot, 'candidates>(
+        permit: AttemptPermit<'snapshot, 'candidates>,
+        failure: FailureClass,
+    ) -> attempt::AttemptCompletion<'snapshot, 'candidates> {
         let mut tracker = attempt::AttemptTracker::from_permit(permit);
         tracker.request_write_started().expect("允许记录写入");
         tracker.into_completion(failure, None, None)
@@ -1475,7 +1483,7 @@ mod tests {
 
     #[test]
     fn resolved_route_target_stays_small_and_stack_only() {
-        assert!(core::mem::size_of::<ResolvedRouteTarget<'_>>() <= 128);
+        assert!(core::mem::size_of::<ResolvedRouteTarget<'_, '_>>() <= 128);
     }
 
     #[test]
@@ -1621,16 +1629,35 @@ mod tests {
         let first_eligibility = registry.eligibility_for(first.routing(), HealthTick::new(1));
         let first_plan = RoutePlanner::plan(&request, first.routing(), &first_eligibility, 0)
             .expect("第一个计划有效");
+        let cooldown_plan = RoutePlanner::plan(&request, first.routing(), &first_eligibility, 1)
+            .expect("限流尝试计划有效");
         let first_resolved = first
             .resolve_plan_target(&first_plan, 0)
             .expect("第一个计划可解析")
             .expect("第一个目标存在");
-        registry.record_cooldown(
-            first_resolved,
-            CooldownScope::Deployment,
-            HealthTick::new(10),
-            HealthTick::new(1),
-        );
+        let second_eligibility = registry.eligibility_for(second.routing(), HealthTick::new(1));
+        let second_plan = RoutePlanner::plan(&request, second.routing(), &second_eligibility, 0)
+            .expect("第二个计划有效");
+        let second_resolved = second
+            .resolve_plan_target(&second_plan, 0)
+            .expect("第二个计划可解析")
+            .expect("第二个目标存在");
+        let mut cooldown_coordinator = cooldown_plan
+            .into_attempt_coordinator(RetryPolicy::new(1, 1_000).expect("策略有效"))
+            .expect("计划与预算一致");
+        let cooldown_permit = cooldown_coordinator
+            .start(&first_eligibility)
+            .expect("限流尝试可签发");
+        let mut cooldown_tracker = attempt::AttemptTracker::from_permit(cooldown_permit);
+        assert!(matches!(
+            cooldown_tracker.rate_limit_reporter(second_resolved),
+            Err(attempt::RateLimitReporterError::TargetMismatch)
+        ));
+        let observation = cooldown_tracker
+            .rate_limit_reporter(first_resolved)
+            .expect("同 Target 可签发上报器")
+            .report(RateLimitScope::Deployment, HealthTick::new(10));
+        registry.record_rate_limit(observation, HealthTick::new(1));
         assert!(!registry
             .eligibility_for(first.routing(), HealthTick::new(1))
             .allows_index(0));
@@ -1721,24 +1748,43 @@ mod tests {
             .resolve_plan_target(&written_plan, 0)
             .expect("计划同代")
             .expect("首个目标存在");
+        let mismatched_resolved = compiled
+            .resolve_plan_target(&written_plan, 1)
+            .expect("计划同代")
+            .expect("第二个目标存在");
+        let repeated_resolved = compiled
+            .resolve_plan_target(&written_plan, 0)
+            .expect("计划同代")
+            .expect("首个目标存在");
         let mut written_coordinator = written_plan
             .into_attempt_coordinator(RetryPolicy::new(3, 1_000).expect("策略有效"))
             .expect("计划与预算一致");
         let written_first = written_coordinator
             .start(&written_initial)
             .expect("初始目标可签发");
-        written_registry.record_cooldown(
-            written_resolved,
-            CooldownScope::Deployment,
-            HealthTick::new(10),
-            HealthTick::new(1),
-        );
+        let mut written_tracker = attempt::AttemptTracker::from_permit(written_first);
+        assert!(matches!(
+            written_tracker.rate_limit_reporter(mismatched_resolved),
+            Err(attempt::RateLimitReporterError::TargetMismatch)
+        ));
+        let observation = written_tracker
+            .rate_limit_reporter(written_resolved)
+            .expect("当前目标可签发上报器")
+            .report(RateLimitScope::Deployment, HealthTick::new(10));
+        assert!(matches!(
+            written_tracker.rate_limit_reporter(repeated_resolved),
+            Err(attempt::RateLimitReporterError::AlreadyReported)
+        ));
+        written_registry.record_rate_limit(observation, HealthTick::new(1));
         let written_current =
             written_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
+        written_tracker
+            .request_write_started()
+            .expect("允许记录请求写入");
         assert!(matches!(
             written_coordinator
                 .complete(
-                    sent_for(written_first, FailureClass::RateLimited),
+                    written_tracker.into_completion(FailureClass::RateLimited, None, None),
                     &written_current
                 )
                 .expect("写后结果可完成"),
@@ -1753,10 +1799,12 @@ mod tests {
             .resolve_plan_target(&safe_plan, 1)
             .expect("计划同代")
             .expect("第二个目标存在");
-        safe_registry.record_cooldown(
-            safe_resolved,
-            CooldownScope::Deployment,
-            HealthTick::new(10),
+        safe_registry.record_rate_limit(
+            test_rate_limit_observation(
+                safe_resolved.target(),
+                RateLimitScope::Deployment,
+                HealthTick::new(10),
+            ),
             HealthTick::new(1),
         );
         let safe_current = safe_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
@@ -1800,10 +1848,12 @@ mod tests {
                 .resolve_plan_target(&exhausted_plan, attempt_index)
                 .expect("计划同代")
                 .expect("后续目标存在");
-            exhausted_registry.record_cooldown(
-                resolved,
-                CooldownScope::Deployment,
-                HealthTick::new(10),
+            exhausted_registry.record_rate_limit(
+                test_rate_limit_observation(
+                    resolved.target(),
+                    RateLimitScope::Deployment,
+                    HealthTick::new(10),
+                ),
                 HealthTick::new(1),
             );
         }
