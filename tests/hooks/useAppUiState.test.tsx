@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe("useAppUiState", () => {
-  it("opens settings tabs and switches current view to settings", () => {
+  it("opens low-frequency Settings and the dedicated Strategy and Stats views", () => {
     const setCurrentView = vi.fn();
     const { result } = renderHook(() => useAppUiState({ setCurrentView }));
 
@@ -43,8 +43,10 @@ describe("useAppUiState", () => {
       result.current.openAboutSettings();
     });
     expect(result.current.settingsDefaultTab).toBe("about");
-    expect(setCurrentView).toHaveBeenCalledTimes(4);
-    expect(setCurrentView).toHaveBeenCalledWith("settings");
+    expect(setCurrentView).toHaveBeenNthCalledWith(1, "settings");
+    expect(setCurrentView).toHaveBeenNthCalledWith(2, "strategy");
+    expect(setCurrentView).toHaveBeenNthCalledWith(3, "stats");
+    expect(setCurrentView).toHaveBeenNthCalledWith(4, "settings");
   });
 
   it("opens add, edit and usage UI state and closes them through handlers", () => {

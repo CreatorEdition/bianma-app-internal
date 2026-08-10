@@ -29,7 +29,7 @@ describe("useAppKeyboardShortcuts", () => {
     const setCurrentView = vi.fn();
     renderHook(() =>
       useAppKeyboardShortcuts({
-        currentView: "providers",
+        currentView: "home",
         setCurrentView,
       }),
     );
@@ -65,7 +65,7 @@ describe("useAppKeyboardShortcuts", () => {
     expect(setCurrentView).not.toHaveBeenCalled();
   });
 
-  it("ignores Escape on providers view and editable text targets", () => {
+  it("ignores Escape on primary views and editable text targets", () => {
     const setCurrentView = vi.fn();
     const { rerender } = renderHook(
       ({ currentView }: { currentView: AppKeyboardShortcutView }) =>
@@ -74,7 +74,7 @@ describe("useAppKeyboardShortcuts", () => {
           setCurrentView,
         }),
       {
-        initialProps: { currentView: "providers" },
+        initialProps: { currentView: "home" },
       },
     );
 
@@ -89,7 +89,7 @@ describe("useAppKeyboardShortcuts", () => {
     expect(setCurrentView).not.toHaveBeenCalled();
   });
 
-  it("returns from skillsDiscovery to skills and other views to providers", () => {
+  it("returns from skillsDiscovery to skills, Settings to Home, and other views to Services", () => {
     const setCurrentView = vi.fn();
     const { rerender } = renderHook(
       ({ currentView }: { currentView: AppKeyboardShortcutView }) =>
@@ -104,12 +104,16 @@ describe("useAppKeyboardShortcuts", () => {
 
     const skillsEvent = dispatchKeyDown(window, { key: "Escape" });
     rerender({ currentView: "settings" });
-    const providersEvent = dispatchKeyDown(window, { key: "Escape" });
+    const homeEvent = dispatchKeyDown(window, { key: "Escape" });
+    rerender({ currentView: "prompts" });
+    const servicesEvent = dispatchKeyDown(window, { key: "Escape" });
 
     expect(skillsEvent.defaultPrevented).toBe(true);
-    expect(providersEvent.defaultPrevented).toBe(true);
+    expect(homeEvent.defaultPrevented).toBe(true);
+    expect(servicesEvent.defaultPrevented).toBe(true);
     expect(setCurrentView).toHaveBeenNthCalledWith(1, "skills");
-    expect(setCurrentView).toHaveBeenNthCalledWith(2, "providers");
+    expect(setCurrentView).toHaveBeenNthCalledWith(2, "home");
+    expect(setCurrentView).toHaveBeenNthCalledWith(3, "services");
   });
 
   it("keeps one keydown listener while currentView changes through the ref", () => {

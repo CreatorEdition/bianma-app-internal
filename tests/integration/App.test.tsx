@@ -170,6 +170,16 @@ vi.mock("@/components/UpdateBadge", () => ({
   ),
 }));
 
+vi.mock("@/components/settings/SettingsPage", () => ({
+  SettingsPage: ({ strategyOnly }: { strategyOnly?: boolean }) => (
+    <div data-testid={strategyOnly ? "strategy-page" : "settings-page"} />
+  ),
+}));
+
+vi.mock("@/components/usage/UsageDashboard", () => ({
+  UsageDashboard: () => <div data-testid="stats-page" />,
+}));
+
 vi.mock("@/components/mcp/McpPanel", () => ({
   default: ({ open, onOpenChange }: any) =>
     open ? (
@@ -190,6 +200,10 @@ const renderApp = (AppComponent: ComponentType) => {
       </Suspense>
     </QueryClientProvider>,
   );
+};
+
+const openServices = () => {
+  fireEvent.click(screen.getByTestId("primary-nav-services"));
 };
 
 const APP_IMPORT_TIMEOUT_MS = 20000;
@@ -214,12 +228,47 @@ describe("App integration with MSW", () => {
 
     expect(localStorage.getItem("bianma-last-app")).toBe("codex");
     expect(localStorage.getItem("cc-switch-last-app")).toBeNull();
-    expect(localStorage.getItem("bianma-last-view")).toBe("providers");
+    expect(localStorage.getItem("bianma-last-view")).toBe("services");
     expect(localStorage.getItem("cc-switch-last-view")).toBeNull();
+  });
+
+  it("exposes the alpha primary path as real views", async () => {
+    renderApp(App);
+
+    expect(screen.getByTestId("primary-nav-home")).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    openServices();
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "claude-1",
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("primary-nav-strategy"));
+    await waitFor(() =>
+      expect(screen.getByTestId("strategy-page")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByTestId("primary-nav-stats"));
+    await waitFor(() =>
+      expect(screen.getByTestId("stats-page")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByTestId("primary-nav-home"));
+    await waitFor(() =>
+      expect(screen.getByTestId("primary-nav-home")).toHaveAttribute(
+        "aria-current",
+        "page",
+      ),
+    );
   });
 
   it("covers basic provider flows via real hooks", async () => {
     renderApp(App);
+    openServices();
 
     await waitFor(() =>
       expect(screen.getByTestId("provider-list").textContent).toContain(
@@ -276,6 +325,7 @@ describe("App integration with MSW", () => {
 
   it("shows toast when auto sync fails in background", async () => {
     renderApp(App);
+    openServices();
 
     await waitFor(() =>
       expect(screen.getByTestId("provider-list").textContent).toContain(
@@ -314,6 +364,7 @@ describe("App integration with MSW", () => {
     setLiveProviderIds("openclaw", ["deepseek-copy"]);
 
     renderApp(App);
+    openServices();
 
     fireEvent.click(screen.getByText("switch-openclaw"));
 
@@ -359,6 +410,7 @@ describe("App integration with MSW", () => {
       .mockRejectedValueOnce(new Error("broken config"));
 
     renderApp(App);
+    openServices();
 
     fireEvent.click(screen.getByText("switch-openclaw"));
 

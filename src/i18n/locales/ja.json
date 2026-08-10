@@ -42,6 +42,25 @@
     "enabled": "有効",
     "notSet": "未設定"
   },
+  "navigation": {
+    "label": "メインナビゲーション",
+    "home": "ホーム",
+    "services": "サービス",
+    "strategy": "戦略",
+    "stats": "統計"
+  },
+  "home": {
+    "title": "ローカルコーディング制御面",
+    "description": "サービス、実行戦略、利用状況から、現在のコーディングワークフローの準備状態を確認します。",
+    "currentProvider": "現在のサービス: {{name}}",
+    "providerCount": "設定済みサービス {{count}} 件",
+    "proxyReady": "ローカルプロキシが引き継ぎ中です",
+    "proxyNotReady": "ローカルプロキシは未引き継ぎです",
+    "servicesDescription": "現在のアプリのモデルサービスを確認、切り替え、設定します。",
+    "strategyDescription": "ローカルプロキシ、引き継ぎ、フェイルオーバーを管理します。",
+    "statsDescription": "最近のリクエスト、利用量、コストの傾向を確認します。",
+    "statsDetail": "利用統計を開く"
+  },
   "apiKeyInput": {
     "placeholder": "API Key を入力",
     "show": "API Key を表示",

@@ -18,6 +18,9 @@ import {
   KeyRound,
   Shield,
   Cpu,
+  Home,
+  Boxes,
+  Route,
 } from "lucide-react";
 import type { Provider, VisibleApps } from "@/types";
 import type { EnvConflict } from "@/types/env";
@@ -53,6 +56,7 @@ import {
 } from "@/lib/storageKeys";
 import { AppSwitcher } from "@/components/AppSwitcher";
 import { ProviderWorkspacePanel } from "@/components/providers/ProviderWorkspacePanel";
+import { HomeDashboard } from "@/components/home/HomeDashboard";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -77,6 +81,7 @@ import EnvPanel from "@/components/openclaw/EnvPanel";
 import ToolsPanel from "@/components/openclaw/ToolsPanel";
 import AgentsDefaultsPanel from "@/components/openclaw/AgentsDefaultsPanel";
 import OpenClawHealthBanner from "@/components/openclaw/OpenClawHealthBanner";
+import { UsageDashboard } from "@/components/usage/UsageDashboard";
 
 type View = AppKeyboardShortcutView;
 
@@ -103,6 +108,10 @@ const getInitialApp = (): AppId => {
 };
 
 const VALID_VIEWS: View[] = [
+  "home",
+  "services",
+  "strategy",
+  "stats",
   "providers",
   "settings",
   "prompts",
@@ -123,9 +132,9 @@ const getInitialView = (): View => {
     ...LAST_VIEW_LEGACY_STORAGE_KEYS,
   ]) as View | null;
   if (saved && VALID_VIEWS.includes(saved)) {
-    return saved;
+    return saved === "providers" ? "services" : saved;
   }
-  return "providers";
+  return "home";
 };
 
 function App() {
@@ -228,9 +237,19 @@ function App() {
   });
   const providers = useMemo(() => data?.providers ?? {}, [data]);
   const currentProviderId = data?.currentProviderId ?? "";
+  const currentProviderName =
+    providers[currentProviderId]?.name ??
+    (activeProviderId ? providers[activeProviderId]?.name : undefined);
+  const isServicesView =
+    currentView === "services" || currentView === "providers";
+  const isPrimaryView =
+    currentView === "home" ||
+    currentView === "services" ||
+    currentView === "strategy" ||
+    currentView === "stats";
   const isOpenClawView =
     activeApp === "openclaw" &&
-    (currentView === "providers" ||
+    (isServicesView ||
       currentView === "workspace" ||
       currentView === "sessions" ||
       currentView === "openclawEnv" ||
@@ -296,11 +315,39 @@ function App() {
   const renderContent = () => {
     const content = (() => {
       switch (currentView) {
+        case "home":
+          return (
+            <HomeDashboard
+              activeAppLabel={t(`apps.${activeApp}`)}
+              providerCount={Object.keys(providers).length}
+              currentProviderName={currentProviderName}
+              isProxyReady={isProxyRunning && isCurrentAppTakeoverActive}
+              onOpenServices={() => setCurrentView("services")}
+              onOpenStrategy={() => setCurrentView("strategy")}
+              onOpenStats={openUsageSettings}
+            />
+          );
+        case "strategy":
+          return (
+            <SettingsPage
+              open={true}
+              onOpenChange={() => setCurrentView("home")}
+              onImportSuccess={handleImportSuccess}
+              defaultTab="proxy"
+              strategyOnly
+            />
+          );
+        case "stats":
+          return (
+            <div className="px-6 py-6">
+              <UsageDashboard />
+            </div>
+          );
         case "settings":
           return (
             <SettingsPage
               open={true}
-              onOpenChange={() => setCurrentView("providers")}
+              onOpenChange={() => setCurrentView("home")}
               onImportSuccess={handleImportSuccess}
               defaultTab={settingsDefaultTab}
             />
@@ -310,7 +357,7 @@ function App() {
             <PromptPanel
               ref={promptPanelRef}
               open={true}
-              onOpenChange={() => setCurrentView("providers")}
+              onOpenChange={() => setCurrentView("services")}
               appId={activeApp}
             />
           );
@@ -333,12 +380,12 @@ function App() {
           return (
             <UnifiedMcpPanel
               ref={mcpPanelRef}
-              onOpenChange={() => setCurrentView("providers")}
+              onOpenChange={() => setCurrentView("services")}
             />
           );
         case "agents":
           return (
-            <AgentsPanel onOpenChange={() => setCurrentView("providers")} />
+            <AgentsPanel onOpenChange={() => setCurrentView("services")} />
           );
         case "universal":
           return (
@@ -357,7 +404,8 @@ function App() {
           return <ToolsPanel />;
         case "openclawAgents":
           return <AgentsDefaultsPanel />;
-        default:
+        case "services":
+        case "providers":
           return (
             <div className="px-6 flex flex-col flex-1 min-h-0 overflow-hidden">
               <div className="flex-1 overflow-y-auto overflow-x-hidden pb-12 px-1">
@@ -411,6 +459,8 @@ function App() {
               </div>
             </div>
           );
+        default:
+          return null;
       }
     })();
 
@@ -468,7 +518,59 @@ function App() {
             className="flex items-center gap-1"
             style={{ WebkitAppRegion: "no-drag" } as any}
           >
-            {currentView !== "providers" ? (
+            {isPrimaryView ? (
+              <div className="flex items-center gap-2">
+                <a
+                  href={BIANMA_GITHUB_REPOSITORY_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={cn(
+                    "text-xl font-semibold transition-colors",
+                    isProxyRunning && isCurrentAppTakeoverActive
+                      ? "text-emerald-500 hover:text-emerald-600 dark:text-emerald-400 dark:hover:text-emerald-300"
+                      : "text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300",
+                  )}
+                >
+                  {BIANMA_DISPLAY_NAME}
+                </a>
+                <nav
+                  aria-label={t("navigation.label")}
+                  className="flex items-center gap-1 rounded-xl bg-muted/70 p-1"
+                >
+                  {[
+                    { view: "home", label: "navigation.home", icon: Home },
+                    {
+                      view: "services",
+                      label: "navigation.services",
+                      icon: Boxes,
+                    },
+                    {
+                      view: "strategy",
+                      label: "navigation.strategy",
+                      icon: Route,
+                    },
+                    {
+                      view: "stats",
+                      label: "navigation.stats",
+                      icon: BarChart2,
+                    },
+                  ].map(({ view, label, icon: Icon }) => (
+                    <Button
+                      key={view}
+                      variant={currentView === view ? "secondary" : "ghost"}
+                      size="sm"
+                      onClick={() => setCurrentView(view as View)}
+                      aria-current={currentView === view ? "page" : undefined}
+                      data-testid={`primary-nav-${view}`}
+                      className="gap-1.5 px-2.5"
+                    >
+                      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                      {t(label)}
+                    </Button>
+                  ))}
+                </nav>
+              </div>
+            ) : (
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
@@ -477,9 +579,12 @@ function App() {
                     setCurrentView(
                       currentView === "skillsDiscovery"
                         ? "skills"
-                        : "providers",
+                        : currentView === "settings"
+                          ? "home"
+                          : "services",
                     )
                   }
+                  aria-label={t("common.back")}
                   className="mr-2 rounded-lg"
                 >
                   <ArrowLeft className="w-4 h-4" />
@@ -504,23 +609,15 @@ function App() {
                     t("openclaw.agents.title")}
                 </h1>
               </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <div className="relative inline-flex items-center">
-                  <a
-                    href={BIANMA_GITHUB_REPOSITORY_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={cn(
-                      "text-xl font-semibold transition-colors",
-                      isProxyRunning && isCurrentAppTakeoverActive
-                        ? "text-emerald-500 hover:text-emerald-600 dark:text-emerald-400 dark:hover:text-emerald-300"
-                        : "text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300",
-                    )}
-                  >
-                    {BIANMA_DISPLAY_NAME}
-                  </a>
-                </div>
+            )}
+          </div>
+
+          <div className="flex flex-1 min-w-0 items-center justify-end gap-1.5">
+            {isPrimaryView && (
+              <div
+                className="flex shrink-0 items-center gap-1"
+                style={{ WebkitAppRegion: "no-drag" } as any}
+              >
                 <Button
                   variant="ghost"
                   size="icon"
@@ -531,25 +628,9 @@ function App() {
                   <Settings className="w-4 h-4" />
                 </Button>
                 <UpdateBadge onClick={openAboutSettings} />
-                {isCurrentAppTakeoverActive && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={openUsageSettings}
-                    title={t("usage.title", {
-                      defaultValue: "使用统计",
-                    })}
-                    className="hover:bg-black/5 dark:hover:bg-white/5"
-                  >
-                    <BarChart2 className="w-4 h-4" />
-                  </Button>
-                )}
               </div>
             )}
-          </div>
-
-          <div className="flex flex-1 min-w-0 items-center justify-end gap-1.5">
-            {currentView === "providers" &&
+            {isServicesView &&
               activeApp !== "opencode" &&
               activeApp !== "openclaw" && (
                 <div
@@ -673,7 +754,7 @@ function App() {
                     </Button>
                   </>
                 )}
-                {currentView === "providers" && (
+                {isServicesView && (
                   <>
                     <AppSwitcher
                       activeApp={activeApp}
@@ -813,7 +894,10 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in">
+      <main
+        className="flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in"
+        tabIndex={-1}
+      >
         {isOpenClawView && openclawHealthWarnings.length > 0 && (
           <OpenClawHealthBanner warnings={openclawHealthWarnings} />
         )}

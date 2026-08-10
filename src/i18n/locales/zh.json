@@ -42,6 +42,25 @@
     "enabled": "已开启",
     "notSet": "未设置"
   },
+  "navigation": {
+    "label": "主导航",
+    "home": "首页",
+    "services": "服务",
+    "strategy": "策略",
+    "stats": "统计"
+  },
+  "home": {
+    "title": "本地编码控制面",
+    "description": "从服务、运行策略和使用统计开始，快速确认当前编码工作流是否就绪。",
+    "currentProvider": "当前服务：{{name}}",
+    "providerCount": "已配置 {{count}} 个服务",
+    "proxyReady": "本地代理已接管",
+    "proxyNotReady": "本地代理尚未接管",
+    "servicesDescription": "查看、切换和配置当前应用的模型服务。",
+    "strategyDescription": "管理本地代理、接管和故障转移行为。",
+    "statsDescription": "查看最近请求、用量和成本趋势。",
+    "statsDetail": "打开使用统计"
+  },
   "apiKeyInput": {
     "placeholder": "请输入API Key",
     "show": "显示API Key",

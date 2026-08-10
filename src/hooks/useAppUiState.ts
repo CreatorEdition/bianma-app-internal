@@ -16,7 +16,7 @@ export type AppConfirmAction = {
 };
 
 interface UseAppUiStateOptions {
-  setCurrentView: (view: "settings") => void;
+  setCurrentView: (view: "settings" | "strategy" | "stats") => void;
 }
 
 /**
@@ -30,16 +30,20 @@ export function useAppUiState({ setCurrentView }: UseAppUiStateOptions) {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [usageProvider, setUsageProvider] = useState<Provider | null>(null);
-  const [confirmAction, setConfirmAction] =
-    useState<AppConfirmAction | null>(null);
+  const [confirmAction, setConfirmAction] = useState<AppConfirmAction | null>(
+    null,
+  );
 
   const effectiveEditingProvider = useLastValidValue(editingProvider);
   const effectiveUsageProvider = useLastValidValue(usageProvider);
 
   const openSettingsTab = useCallback(
-    (tab: SettingsTab) => {
+    (
+      tab: SettingsTab,
+      view: "settings" | "strategy" | "stats" = "settings",
+    ) => {
       setSettingsDefaultTab(tab);
-      setCurrentView("settings");
+      setCurrentView(view);
     },
     [setCurrentView],
   );
@@ -49,11 +53,11 @@ export function useAppUiState({ setCurrentView }: UseAppUiStateOptions) {
   }, [openSettingsTab]);
 
   const openProxySettings = useCallback(() => {
-    openSettingsTab("proxy");
+    openSettingsTab("proxy", "strategy");
   }, [openSettingsTab]);
 
   const openUsageSettings = useCallback(() => {
-    openSettingsTab("usage");
+    openSettingsTab("usage", "stats");
   }, [openSettingsTab]);
 
   const openAboutSettings = useCallback(() => {

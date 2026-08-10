@@ -19,7 +19,7 @@ const allVisible: VisibleApps = {
 
 function renderGuards({
   activeApp = "claude",
-  currentView = "providers",
+  currentView = "home",
   visibleApps = allVisible,
 }: {
   activeApp?: AppId;
@@ -93,7 +93,7 @@ describe("useAppViewGuards", () => {
     expect(setCurrentView).not.toHaveBeenCalled();
   });
 
-  it("returns unsupported future apps from sessions to providers", () => {
+  it("returns unsupported future apps from sessions to Services", () => {
     const unsupportedApp = "future" as AppId;
     expect(hasSessionSupportForApp(unsupportedApp)).toBe(false);
 
@@ -102,6 +102,6 @@ describe("useAppViewGuards", () => {
       currentView: "sessions",
     });
 
-    expect(setCurrentView).toHaveBeenCalledWith("providers");
+    expect(setCurrentView).toHaveBeenCalledWith("services");
   });
 });

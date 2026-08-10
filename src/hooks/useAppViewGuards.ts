@@ -26,7 +26,7 @@ interface UseAppViewGuardsOptions {
   currentView: AppViewGuardView;
   visibleApps: VisibleApps;
   setActiveApp: (app: AppId) => void;
-  setCurrentView: (view: "providers") => void;
+  setCurrentView: (view: AppKeyboardShortcutView) => void;
 }
 
 /**
@@ -49,7 +49,7 @@ export function useAppViewGuards({
 
   useEffect(() => {
     if (currentView === "sessions" && !hasSessionSupportForApp(activeApp)) {
-      setCurrentView("providers");
+      setCurrentView("services");
     }
   }, [activeApp, currentView, setCurrentView]);
 }

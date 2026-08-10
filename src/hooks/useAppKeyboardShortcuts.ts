@@ -2,6 +2,10 @@ import { useEffect, useRef } from "react";
 import { isTextEditableTarget } from "@/utils/domUtils";
 
 export type AppKeyboardShortcutView =
+  | "home"
+  | "services"
+  | "strategy"
+  | "stats"
   | "providers"
   | "settings"
   | "prompts"
@@ -16,7 +20,7 @@ export type AppKeyboardShortcutView =
   | "openclawTools"
   | "openclawAgents";
 
-type KeyboardShortcutTargetView = "providers" | "settings" | "skills";
+type KeyboardShortcutTargetView = AppKeyboardShortcutView;
 
 interface UseAppKeyboardShortcutsParams {
   currentView: AppKeyboardShortcutView;
@@ -24,7 +28,16 @@ interface UseAppKeyboardShortcutsParams {
 }
 
 function getEscapeTargetView(view: AppKeyboardShortcutView) {
-  return view === "skillsDiscovery" ? "skills" : "providers";
+  if (view === "skillsDiscovery") return "skills";
+  if (
+    view === "home" ||
+    view === "services" ||
+    view === "strategy" ||
+    view === "stats"
+  ) {
+    return view;
+  }
+  return view === "settings" ? "home" : "services";
 }
 
 export function useAppKeyboardShortcuts({
@@ -50,7 +63,14 @@ export function useAppKeyboardShortcuts({
       if (document.body.style.overflow === "hidden") return;
 
       const view = currentViewRef.current;
-      if (view === "providers") return;
+      if (
+        view === "home" ||
+        view === "services" ||
+        view === "strategy" ||
+        view === "stats"
+      ) {
+        return;
+      }
 
       if (isTextEditableTarget(event.target)) return;
 

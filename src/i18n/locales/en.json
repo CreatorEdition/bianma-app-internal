@@ -42,6 +42,25 @@
     "enabled": "Enabled",
     "notSet": "Not Set"
   },
+  "navigation": {
+    "label": "Primary navigation",
+    "home": "Home",
+    "services": "Services",
+    "strategy": "Strategy",
+    "stats": "Stats"
+  },
+  "home": {
+    "title": "Local coding control plane",
+    "description": "Start with services, runtime strategy, and usage to confirm that your coding workflow is ready.",
+    "currentProvider": "Current service: {{name}}",
+    "providerCount": "{{count}} configured services",
+    "proxyReady": "Local proxy is taking over",
+    "proxyNotReady": "Local proxy is not taking over",
+    "servicesDescription": "Review, switch, and configure model services for the current app.",
+    "strategyDescription": "Manage local proxy, takeover, and failover behavior.",
+    "statsDescription": "Review recent requests, usage, and cost trends.",
+    "statsDetail": "Open usage statistics"
+  },
   "apiKeyInput": {
     "placeholder": "Enter API Key",
     "show": "Show API Key",

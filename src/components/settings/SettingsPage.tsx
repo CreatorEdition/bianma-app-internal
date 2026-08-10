@@ -56,6 +56,7 @@ interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
   onImportSuccess?: () => void | Promise<void>;
   defaultTab?: string;
+  strategyOnly?: boolean;
 }
 
 export function SettingsPage({
@@ -63,6 +64,7 @@ export function SettingsPage({
   onOpenChange,
   onImportSuccess,
   defaultTab = "general",
+  strategyOnly = false,
 }: SettingsDialogProps) {
   const { t } = useTranslation();
   const {
@@ -250,6 +252,12 @@ export function SettingsPage({
       ) : isBusy ? (
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      ) : strategyOnly ? (
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-6">
+          {settings ? (
+            <ProxyTabContent settings={settings} onAutoSave={handleAutoSave} />
+          ) : null}
         </div>
       ) : (
         <Tabs
