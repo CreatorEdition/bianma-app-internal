@@ -8,13 +8,16 @@ use core::sync::atomic::{AtomicU16, Ordering};
 
 use super::{
     attempt::{
-        AttemptCompletion, AttemptSuccessCompletion, AttemptTracker, TrustedPreExecutionRejection,
+        AdapterRateLimitReporter, AdapterReplayReporter, AttemptCompletion,
+        AttemptSuccessCompletion, AttemptTracker, AttemptTransitionError, RateLimitReporterError,
+        ReplayReporterError, TrustedPreExecutionRejection,
     },
     coordinator::AttemptPermit,
     selection_input::AccountSelectionEligibility,
     selection_runtime_layout::{SelectionRuntimeBinding, SelectionRuntimeLayout},
-    CompiledRoutingSnapshot, CredentialSelectionPolicy, FailureClass, MAX_QUOTA_GROUPS_PER_UNIT,
-    MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
+    CompiledRoutingSnapshot, CredentialSelectionPolicy, FailureClass, ResolvedRouteTarget,
+    MAX_QUOTA_GROUPS_PER_UNIT, MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS,
+    MAX_TRACKED_QUOTA_GROUPS,
 };
 
 /// Registry 激活被拒绝的原因。
@@ -152,38 +155,123 @@ pub(crate) struct SelectedAttempt<'registry, 'snapshot, 'config> {
     tracker: AttemptTracker<'snapshot, 'config>,
 }
 
-/// 消费 SelectedAttempt 后的成功转换结果。
+/// Transport 交接后本地维护的终结安全见证。
+///
+/// 此状态只回答“交接终结时能否保留 `NotSent`”，不等同于上游实际字节写出状态。下游提交
+/// 是独立的不可重放证据：它可以在未记录首字节时发生，但仍必须跳过 `Unknown` 封口并由
+/// Tracker/RetryGate 终结为 `Sent` / `DownstreamCommitted`。
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TransportTerminalSafety {
+    NoBytesProven,
+    BytesWritten,
+    Unknown,
+    DownstreamCommitted,
+}
+
+/// 由 [`SelectedAttempt`] 唯一交接给未来受控 Transport 的线性尝试。
+///
+/// 它按值持有 Lease 与 Tracker，但不暴露裸 Tracker、Lease、Secret 或 Session。Transport
+/// 只能通过此包装器单调记录写出、响应和下游提交；失败、取消或不完整成功后的终结会先
+/// 保守封口未证明的写出状态，避免交接后的任何错误被错误重放。
+#[must_use = "Transport 交接后的 Attempt 必须显式终结，或在放弃时仅由 Drop 回收 Lease"]
+pub(crate) struct TransportHandoffAttempt<'registry, 'snapshot, 'config> {
+    lease: SelectedLease<'registry>,
+    tracker: AttemptTracker<'snapshot, 'config>,
+    terminal_safety: TransportTerminalSafety,
+}
+
+/// 消费 Transport 交接尝试后的成功转换结果。
 ///
 /// 未完成分支必须返还完整 Lease+Tracker，因而其固定大小显著大于成功 token。这里刻意不用
-/// `Result<_, SelectedAttempt>`：Clippy 要求为大错误值分配 Box，但这会破坏核心零堆分配
+/// `Result<_, TransportHandoffAttempt>`：Clippy 要求为大错误值分配 Box，但这会破坏核心零堆分配
 /// 合同；枚举使这一成本显式且始终在调用方栈上。
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum SelectedAttemptSuccess<'registry, 'snapshot, 'config> {
+pub(crate) enum TransportHandoffSuccess<'registry, 'snapshot, 'config> {
     /// 已释放 Lease，并生成可由 Coordinator 消费的密封成功 token。
     Completed(AttemptSuccessCompletion),
-    /// 响应前置条件不足，完整 Attempt 仍可继续记录或如实失败/取消。
-    Incomplete(SelectedAttempt<'registry, 'snapshot, 'config>),
+    /// 响应前置条件不足，完整交接 Attempt 仍可继续记录或如实失败/取消。
+    Incomplete(TransportHandoffAttempt<'registry, 'snapshot, 'config>),
 }
 
 impl<'registry, 'snapshot, 'config> SelectedAttempt<'registry, 'snapshot, 'config> {
-    /// 返回唯一 Attempt Tracker 的可变借用，供未来受控 Transport 记录发送事实。
-    pub(crate) fn tracker_mut(&mut self) -> &mut AttemptTracker<'snapshot, 'config> {
-        &mut self.tracker
+    /// 消费选择结果并创建唯一的 Transport 交接包装器。
+    ///
+    /// 交接后不再存在 crate-wide 的裸 Tracker 或直接完成入口。若 Transport 未能通过受控
+    /// writer 证明首字节写出，包装器的失败/取消出口会先记录 `Unknown`，从而禁止自动重放。
+    pub(crate) fn into_transport_handoff(
+        self,
+    ) -> TransportHandoffAttempt<'registry, 'snapshot, 'config> {
+        let Self { lease, tracker } = self;
+        TransportHandoffAttempt {
+            lease,
+            tracker,
+            terminal_safety: TransportTerminalSafety::NoBytesProven,
+        }
+    }
+}
+
+impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot, 'config> {
+    /// 记录受控 writer 已写出首个请求字节。
+    pub(crate) fn request_write_started(&mut self) -> Result<(), AttemptTransitionError> {
+        self.tracker.request_write_started()?;
+        self.terminal_safety = TransportTerminalSafety::BytesWritten;
+        Ok(())
     }
 
-    /// 先释放 Lease，再生成原有失败完成对象。
+    /// 记录 writer 无法继续证明请求写出状态。
+    pub(crate) fn write_state_unknown(&mut self) -> Result<(), AttemptTransitionError> {
+        self.tracker.write_state_unknown()?;
+        self.terminal_safety = TransportTerminalSafety::Unknown;
+        Ok(())
+    }
+
+    /// 记录已经观察到上游响应头。
+    pub(crate) fn upstream_response_observed(&mut self) -> Result<(), AttemptTransitionError> {
+        self.tracker.upstream_response_observed()
+    }
+
+    /// 记录首个经协议确认的流式语义事件。
+    pub(crate) fn first_semantic_event_observed(&mut self) -> Result<(), AttemptTransitionError> {
+        self.tracker.first_semantic_event_observed()
+    }
+
+    /// 记录响应语义已经向下游提交。
+    pub(crate) fn downstream_committed(&mut self) -> Result<(), AttemptTransitionError> {
+        self.tracker.downstream_committed()?;
+        self.terminal_safety = TransportTerminalSafety::DownstreamCommitted;
+        Ok(())
+    }
+
+    /// 为当前交接 Attempt 签发一次受信限流上报器。
+    pub(crate) fn rate_limit_reporter(
+        &mut self,
+        resolved: ResolvedRouteTarget<'_, '_>,
+    ) -> Result<AdapterRateLimitReporter, RateLimitReporterError> {
+        self.tracker.rate_limit_reporter(resolved)
+    }
+
+    /// 为当前交接 Attempt 签发一次受信执行前拒绝上报器。
+    pub(crate) fn replay_reporter(
+        &mut self,
+        resolved: ResolvedRouteTarget<'_, 'config>,
+    ) -> Result<AdapterReplayReporter<'snapshot, 'config>, ReplayReporterError> {
+        self.tracker.replay_reporter(resolved)
+    }
+
+    /// 先保守封口未证明的写出状态，再释放 Lease 并生成失败完成对象。
     pub(crate) fn into_completion(
-        self,
+        mut self,
         failure: FailureClass,
         retry_after_ms: Option<u64>,
         trusted_rejection: Option<TrustedPreExecutionRejection<'snapshot, 'config>>,
     ) -> AttemptCompletion<'snapshot, 'config> {
-        let Self { lease, tracker } = self;
+        self.seal_unproven_write_before_terminal();
+        let Self { lease, tracker, .. } = self;
         drop(lease);
         tracker.into_completion(failure, retry_after_ms, trusted_rejection)
     }
 
-    /// 先释放 Lease，再生成取消完成对象。
+    /// 先保守封口未证明的写出状态，再生成取消完成对象。
     pub(crate) fn into_cancelled_completion(self) -> AttemptCompletion<'snapshot, 'config> {
         self.into_completion(FailureClass::Cancelled, None, None)
     }
@@ -191,18 +279,37 @@ impl<'registry, 'snapshot, 'config> SelectedAttempt<'registry, 'snapshot, 'confi
     /// 将完整响应转换为密封成功对象。
     ///
     /// 仅当 Tracker 满足 C2-S0 的完整响应前置条件时才释放 Lease 并返回成功 token；否则
-    /// 原样返还完整 `SelectedAttempt`，避免丢失 Tracker 导致 Coordinator 永久保持 active。
+    /// 原样返还完整交接包装器，避免绕回 `SelectedAttempt` 后丢失 Transport 封口。
     pub(crate) fn into_success_completion(
         self,
-    ) -> SelectedAttemptSuccess<'registry, 'snapshot, 'config> {
-        let Self { lease, tracker } = self;
+    ) -> TransportHandoffSuccess<'registry, 'snapshot, 'config> {
+        let Self {
+            lease,
+            tracker,
+            terminal_safety,
+        } = self;
         match tracker.into_response_completed() {
             Ok(completion) => {
                 drop(lease);
-                SelectedAttemptSuccess::Completed(completion)
+                TransportHandoffSuccess::Completed(completion)
             }
-            Err(tracker) => SelectedAttemptSuccess::Incomplete(Self { lease, tracker }),
+            Err(tracker) => TransportHandoffSuccess::Incomplete(Self {
+                lease,
+                tracker,
+                terminal_safety,
+            }),
         }
+    }
+
+    /// 在交接后的非成功终结前，阻断任何未记录首字节写出的可重放结论。
+    fn seal_unproven_write_before_terminal(&mut self) {
+        if self.terminal_safety != TransportTerminalSafety::NoBytesProven {
+            return;
+        }
+        self.tracker
+            .write_state_unknown()
+            .expect("交接包装器的未证明写出状态必须可保守封口");
+        self.terminal_safety = TransportTerminalSafety::Unknown;
     }
 }
 
@@ -492,12 +599,13 @@ mod tests {
     use crate::{
         AccountCredentialDefinitions, AccountDefinition, AccountRuntimeDefinition,
         AccountSelectorDefinition, CompiledRoutingSnapshot, CredentialDefinition,
-        CredentialRuntimeDefinition, EndpointId, HealthRegistry, HealthTick, IngressClassifier,
-        IngressRequest, ModelDeploymentDefinition, ModelDeploymentId, OperationId, QuotaGroupId,
-        QuotaGroupRuntimeDefinition, QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource,
-        RetryPolicy, RouteCandidate, RoutePlanner, RouteStageId, RouteTarget, RouteTargetId,
-        RoutingStrategy, SelectionRuntimeDefinitions, SelectionSession, SelectorAffinitySalt,
-        SelectorRevision, SiteId, SnapshotVersion, VerifiedIngressDisposition,
+        CredentialRuntimeDefinition, DeliveryState, EndpointId, FailureClass, HealthRegistry,
+        HealthTick, IngressClassifier, IngressRequest, ModelDeploymentDefinition,
+        ModelDeploymentId, OperationId, QuotaGroupId, QuotaGroupRuntimeDefinition,
+        QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RetryPolicy, RouteCandidate,
+        RoutePlanner, RouteStageId, RouteTarget, RouteTargetId, RoutingStrategy,
+        SelectionRuntimeDefinitions, SelectionSession, SelectorAffinitySalt, SelectorRevision,
+        SiteId, SnapshotVersion, VerifiedIngressDisposition,
     };
 
     fn target_id(value: u64) -> RouteTargetId {
@@ -1202,20 +1310,34 @@ mod tests {
             PrioritySelectionStart::Selected(selected) => selected,
             _ => panic!("应取得 Lease"),
         };
-        let SelectedAttemptSuccess::Incomplete(invalid_selected) =
-            invalid_selected.into_success_completion()
+        let invalid_handoff = invalid_selected.into_transport_handoff();
+        let TransportHandoffSuccess::Incomplete(invalid_handoff) =
+            invalid_handoff.into_success_completion()
         else {
             panic!("不完整响应不能生成成功 token");
         };
         assert_eq!(registry.account_inflight(1), Some(1));
-        drop(invalid_selected);
+        let invalid_completion = invalid_handoff.into_cancelled_completion();
         assert_eq!(registry.account_inflight(1), Some(0));
-        assert!(invalid_coordinator.has_active_attempt());
+        assert_eq!(
+            invalid_completion.outcome().delivery(),
+            DeliveryState::Unknown
+        );
+        assert!(matches!(
+            invalid_coordinator
+                .complete(invalid_completion, &route_eligibility)
+                .expect("交接后取消完成可消费"),
+            crate::coordinator::CoordinatorStep::Stop(crate::RetryStopReason::Cancelled)
+        ));
 
         let mut success_coordinator = route_plan(compiled.routing(), &route_eligibility)
             .into_attempt_coordinator(RetryPolicy::new(1, 0).expect("测试策略有效"))
             .expect("成功 Coordinator 有效");
-        let mut success_selected = match registry.start_priority(
+        let success_resolved = compiled
+            .resolve_plan_target(&route_plan(compiled.routing(), &route_eligibility), 0)
+            .expect("成功计划与快照一致")
+            .expect("成功 Target 存在");
+        let success_selected = match registry.start_priority(
             success_coordinator
                 .start(&route_eligibility)
                 .expect("成功 Permit 有效"),
@@ -1224,21 +1346,26 @@ mod tests {
             PrioritySelectionStart::Selected(selected) => selected,
             _ => panic!("成功路径应取得 Lease"),
         };
-        success_selected
-            .tracker_mut()
-            .request_write_started()
-            .expect("可记录写入");
-        success_selected
-            .tracker_mut()
+        let mut success_handoff = success_selected.into_transport_handoff();
+        let _rate_limit_reporter = success_handoff
+            .rate_limit_reporter(success_resolved)
+            .expect("同代 Target 可签发限流上报器");
+        let _replay_reporter = success_handoff
+            .replay_reporter(success_resolved)
+            .expect("同代 Target 可签发回放上报器");
+        success_handoff.request_write_started().expect("可记录写入");
+        success_handoff
             .upstream_response_observed()
             .expect("可记录响应");
-        success_selected
-            .tracker_mut()
+        success_handoff
+            .first_semantic_event_observed()
+            .expect("可记录首个语义事件");
+        success_handoff
             .downstream_committed()
             .expect("可记录下游提交");
-        let success = match success_selected.into_success_completion() {
-            SelectedAttemptSuccess::Completed(success) => success,
-            SelectedAttemptSuccess::Incomplete(_) => panic!("完整响应可完成"),
+        let success = match success_handoff.into_success_completion() {
+            TransportHandoffSuccess::Completed(success) => success,
+            TransportHandoffSuccess::Incomplete(_) => panic!("完整响应可完成"),
         };
         assert_eq!(registry.account_inflight(1), Some(0));
         success_coordinator
@@ -1257,19 +1384,161 @@ mod tests {
             PrioritySelectionStart::Selected(selected) => selected,
             _ => panic!("取消路径应取得 Lease"),
         };
-        let completion = cancelled.into_cancelled_completion();
+        let completion = cancelled
+            .into_transport_handoff()
+            .into_cancelled_completion();
         assert_eq!(registry.account_inflight(1), Some(0));
+        assert_eq!(completion.outcome().delivery(), DeliveryState::Unknown);
         assert!(matches!(
             cancelled_coordinator
                 .complete(completion, &route_eligibility)
                 .expect("取消完成可消费"),
             crate::coordinator::CoordinatorStep::Stop(crate::RetryStopReason::Cancelled)
         ));
+
+        let mut downstream_coordinator = route_plan(compiled.routing(), &route_eligibility)
+            .into_attempt_coordinator(RetryPolicy::new(1, 0).expect("测试策略有效"))
+            .expect("下游提交 Coordinator 有效");
+        let downstream_selected = match registry.start_priority(
+            downstream_coordinator
+                .start(&route_eligibility)
+                .expect("下游提交 Permit 有效"),
+            account_eligibility,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("下游提交路径应取得 Lease"),
+        };
+        let mut downstream_handoff = downstream_selected.into_transport_handoff();
+        downstream_handoff
+            .downstream_committed()
+            .expect("允许记录不带首字节见证的下游提交");
+        let downstream_completion =
+            downstream_handoff.into_completion(FailureClass::Server, None, None);
+        assert_eq!(
+            downstream_completion.outcome().delivery(),
+            DeliveryState::Sent
+        );
+        assert_eq!(registry.account_inflight(1), Some(0));
+        assert!(matches!(
+            downstream_coordinator
+                .complete(downstream_completion, &route_eligibility)
+                .expect("下游提交完成可消费"),
+            crate::coordinator::CoordinatorStep::Stop(crate::RetryStopReason::DownstreamCommitted)
+        ));
+    }
+
+    #[test]
+    fn transport_handoff_unproven_failures_never_issue_next_permit() {
+        let groups_one = [group_id(1)];
+        let groups_two = [group_id(2)];
+        let units_one = [QuotaSelectionUnit::new(
+            unit_id(1),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups_one,
+        )];
+        let units_two = [QuotaSelectionUnit::new(
+            unit_id(2),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups_two,
+        )];
+        let members_one = [crate::AccountSelectorMember::new(
+            account_id(1),
+            credential_id(1),
+            unit_id(1),
+            0,
+        )];
+        let members_two = [crate::AccountSelectorMember::new(
+            account_id(2),
+            credential_id(2),
+            unit_id(2),
+            0,
+        )];
+        let selectors = [
+            selector(
+                1,
+                CredentialSelectionPolicy::PriorityFailover,
+                QuotaTopologySource::ConservativeDefault,
+                &units_one,
+                &members_one,
+            ),
+            selector(
+                2,
+                CredentialSelectionPolicy::PriorityFailover,
+                QuotaTopologySource::ConservativeDefault,
+                &units_two,
+                &members_two,
+            ),
+        ];
+        let candidates = [candidate(1, 1, 1), candidate(2, 2, 2)];
+        let deployments = [deployment(1), deployment(2)];
+        let accounts = [account(1, 1), account(2, 2)];
+        let credentials = [credential(1, 1), credential(2, 2)];
+        let compiled = compiled(
+            &candidates,
+            &deployments,
+            &accounts,
+            &credentials,
+            &selectors,
+        );
+        let group_runtime = [group_runtime(1, 1), group_runtime(2, 1)];
+        let account_runtime = [account_runtime(1, 1), account_runtime(2, 1)];
+        let credential_runtime = [credential_runtime(1, 1), credential_runtime(2, 1)];
+        let definitions =
+            SelectionRuntimeDefinitions::new(&group_runtime, &account_runtime, &credential_runtime)
+                .expect("测试定义有效");
+        let registry = registry(&compiled, &definitions);
+        let route_eligibility = route_eligibility(compiled.routing());
+
+        for (failure, mark_write_started, mark_write_unknown) in [
+            (FailureClass::RateLimited, false, false),
+            (FailureClass::Server, false, false),
+            (FailureClass::Connect, false, false),
+            (FailureClass::Server, false, true),
+            (FailureClass::RateLimited, true, false),
+        ] {
+            let plan = route_plan(compiled.routing(), &route_eligibility);
+            let account_eligibility = selection_eligibility(&compiled, &plan, 1, 1);
+            let mut coordinator = plan
+                .into_attempt_coordinator(RetryPolicy::new(2, 100).expect("测试策略有效"))
+                .expect("测试 Coordinator 有效");
+            let selected = match registry.start_priority(
+                coordinator
+                    .start(&route_eligibility)
+                    .expect("测试 Permit 有效"),
+                account_eligibility,
+            ) {
+                PrioritySelectionStart::Selected(selected) => selected,
+                _ => panic!("首 Target 应取得 Lease"),
+            };
+            let mut handoff = selected.into_transport_handoff();
+            if mark_write_started {
+                handoff.request_write_started().expect("可记录写入首字节");
+            }
+            if mark_write_unknown {
+                handoff.write_state_unknown().expect("可记录未知写出状态");
+            }
+            let completion = handoff.into_completion(failure, Some(500), None);
+            assert_eq!(
+                completion.outcome().delivery(),
+                if mark_write_started {
+                    DeliveryState::Sent
+                } else {
+                    DeliveryState::Unknown
+                }
+            );
+            assert!(matches!(
+                coordinator
+                    .complete(completion, &route_eligibility)
+                    .expect("交接后完成可消费"),
+                crate::coordinator::CoordinatorStep::Stop(crate::RetryStopReason::ReplayNotProven)
+            ));
+        }
     }
 
     #[test]
     fn fixed_state_remains_bounded() {
         assert!(core::mem::size_of::<SelectedAttempt<'_, '_, '_>>() <= 256);
+        assert!(core::mem::size_of::<TransportHandoffAttempt<'_, '_, '_>>() <= 256);
         assert!(core::mem::size_of::<SelectionLeaseRegistry<'_, '_>>() <= 6 * 1024);
     }
 }
