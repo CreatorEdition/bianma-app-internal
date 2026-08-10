@@ -171,8 +171,10 @@ enum TransportTerminalSafety {
 /// 由 [`SelectedAttempt`] 唯一交接给未来受控 Transport 的线性尝试。
 ///
 /// 它按值持有 Lease 与 Tracker，但不暴露裸 Tracker、Lease、Secret 或 Session。Transport
-/// 只能通过此包装器单调记录写出、响应和下游提交；失败、取消或不完整成功后的终结会先
-/// 保守封口未证明的写出状态，避免交接后的任何错误被错误重放。
+/// 只能通过此包装器单调记录写出、响应和下游提交；失败、取消或不完整成功后的终结默认会
+/// 保守封口未证明的写出状态，避免交接后的任何错误被错误重放。唯一例外是既有的密封受信
+/// 执行前拒绝收据：它仍必须由 Tracker 逐项校验 Attempt、Target 与快照绑定后，才可保留
+/// `PreExecutionRejected` 的重试语义。
 #[must_use = "Transport 交接后的 Attempt 必须显式终结，或在放弃时仅由 Drop 回收 Lease"]
 pub(crate) struct TransportHandoffAttempt<'registry, 'snapshot, 'config> {
     lease: SelectedLease<'registry>,
@@ -258,14 +260,21 @@ impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot
         self.tracker.replay_reporter(resolved)
     }
 
-    /// 先保守封口未证明的写出状态，再释放 Lease 并生成失败完成对象。
+    /// 释放 Lease 并生成失败完成对象。
+    ///
+    /// 默认先保守封口未证明的写出状态，令交接后的裸 429、超时、连接错误和服务端错误都
+    /// 只能得到 `Unknown`。只有已提供的密封受信执行前拒绝收据才跳过这一默认封口，并仍由
+    /// Tracker 校验其 Attempt、Target 与快照绑定；无效收据或任何已写出/下游提交证据都会
+    /// 在 Tracker 中 fail closed，不能恢复可重放结论。
     pub(crate) fn into_completion(
         mut self,
         failure: FailureClass,
         retry_after_ms: Option<u64>,
         trusted_rejection: Option<TrustedPreExecutionRejection<'snapshot, 'config>>,
     ) -> AttemptCompletion<'snapshot, 'config> {
-        self.seal_unproven_write_before_terminal();
+        if trusted_rejection.is_none() {
+            self.seal_unproven_write_before_terminal();
+        }
         let Self { lease, tracker, .. } = self;
         drop(lease);
         tracker.into_completion(failure, retry_after_ms, trusted_rejection)
@@ -1533,6 +1542,50 @@ mod tests {
                 crate::coordinator::CoordinatorStep::Stop(crate::RetryStopReason::ReplayNotProven)
             ));
         }
+
+        let receipt_plan = route_plan(compiled.routing(), &route_eligibility);
+        let receipt_resolved = compiled
+            .resolve_plan_target(&receipt_plan, 0)
+            .expect("受信拒绝计划与快照一致")
+            .expect("受信拒绝首个 Target 存在");
+        let receipt_eligibility = selection_eligibility(&compiled, &receipt_plan, 1, 1);
+        let mut receipt_coordinator = receipt_plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 100).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let receipt_selected = match registry.start_priority(
+            receipt_coordinator
+                .start(&route_eligibility)
+                .expect("受信拒绝 Permit 有效"),
+            receipt_eligibility,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("受信拒绝路径应取得首个 Target 的 Lease"),
+        };
+        let mut receipt_handoff = receipt_selected.into_transport_handoff();
+        let receipt = receipt_handoff
+            .replay_reporter(receipt_resolved)
+            .expect("同代 Target 可签发回放上报器")
+            .pre_execution_rejected(
+                crate::attempt::VerifiedPreExecutionContract::test_only_registered(
+                    receipt_resolved.target().site(),
+                    0x1001,
+                )
+                .expect("测试合同已登记"),
+            )
+            .expect("受信合同可签发执行前拒绝收据");
+        let receipt_completion =
+            receipt_handoff.into_completion(FailureClass::RateLimited, Some(500), Some(receipt));
+        assert_eq!(
+            receipt_completion.outcome().delivery(),
+            DeliveryState::PreExecutionRejected
+        );
+        let crate::coordinator::CoordinatorStep::Next { permit, .. } = receipt_coordinator
+            .complete(receipt_completion, &route_eligibility)
+            .expect("受信执行前拒绝完成可消费")
+        else {
+            panic!("受信执行前拒绝必须签发计划内下一 Permit");
+        };
+        assert_eq!(permit.target(), target_id(2));
     }
 
     #[test]
