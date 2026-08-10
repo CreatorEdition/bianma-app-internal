@@ -246,10 +246,12 @@ impl<'snapshot, 'candidates> TrustedPreExecutionRejection<'snapshot, 'candidates
 /// 最终结果通过消费本记录器生成。
 #[derive(Debug)]
 pub(crate) struct AttemptTracker<'snapshot, 'candidates> {
-    permit: AttemptPermit<'snapshot, 'candidates>,
+    pub(super) permit: AttemptPermit<'snapshot, 'candidates>,
     phase: SendPhase,
-    write: UpstreamWriteState,
-    downstream: DownstreamCommitState,
+    pub(super) write: UpstreamWriteState,
+    pub(super) downstream: DownstreamCommitState,
+    // None=未观察；Some(false)=已观察但未终结；Some(true)=已完整终结。
+    pub(super) upstream_response_state: Option<bool>,
     rate_limit_reporter_issued: bool,
     replay_reporter_issued: bool,
 }
@@ -264,6 +266,7 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
             phase: SendPhase::Pending,
             write: UpstreamWriteState::NoBytesProven,
             downstream: DownstreamCommitState::NotCommitted,
+            upstream_response_state: None,
             rate_limit_reporter_issued: false,
             replay_reporter_issued: false,
         }
@@ -343,6 +346,7 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
             return Err(AttemptTransitionError::InvalidPhase);
         }
         self.phase = SendPhase::UpstreamResponseObserved;
+        self.upstream_response_state = Some(false);
         Ok(())
     }
 

@@ -7,8 +7,9 @@ use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::{
-    attempt::AttemptCompletion, RetryDecision, RetryGate, RetryPolicy, RetryStopReason,
-    RouteEligibility, RoutePlan, RouteTargetId, RoutingSnapshot,
+    attempt::{AttemptCompletion, AttemptTracker, AttemptTransitionError},
+    RetryDecision, RetryGate, RetryPolicy, RetryStopReason, RouteEligibility, RoutePlan,
+    RouteTargetId, RoutingSnapshot,
 };
 
 /// 进程内只增不复用的 Coordinator 标识分配器。
@@ -183,6 +184,75 @@ pub(crate) enum CoordinatorStep<'snapshot, 'candidates> {
     Stop(RetryStopReason),
 }
 
+/// 已完整提交并等待显式成功终结的私有 Attempt typestate。
+///
+/// 只能由满足“上游响应终结 + 下游已提交”的 Tracker 生成；它不提供失败或重试出口。
+#[derive(Debug)]
+pub(crate) struct CompletedAttemptTracker<'snapshot, 'candidates> {
+    permit: AttemptPermit<'snapshot, 'candidates>,
+}
+
+impl<'snapshot, 'candidates> CompletedAttemptTracker<'snapshot, 'candidates> {
+    /// 仅供已通过成功条件检查的 Tracker 转移所有权。
+    pub(crate) const fn from_permit(permit: AttemptPermit<'snapshot, 'candidates>) -> Self {
+        Self { permit }
+    }
+
+    /// 消费 typestate，生成只能终结当前请求的成功完成对象。
+    pub(crate) fn into_success_completion(
+        self,
+    ) -> AttemptSuccessCompletion<'snapshot, 'candidates> {
+        AttemptSuccessCompletion {
+            permit: self.permit,
+        }
+    }
+}
+
+impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
+    /// 记录已观察到的上游响应已经完整终结。
+    ///
+    /// 它不代表成功；只有另行满足下游已提交和实际写入后，才能转为 Success Completion。
+    pub(crate) fn upstream_response_completed(&mut self) -> Result<(), AttemptTransitionError> {
+        if self.upstream_response_state != Some(false) {
+            return Err(AttemptTransitionError::InvalidPhase);
+        }
+        self.upstream_response_state = Some(true);
+        Ok(())
+    }
+
+    /// 消费已完整终结且已提交的 Tracker，封闭其失败/取消出口。
+    pub(crate) fn into_response_completed(
+        self,
+    ) -> Result<CompletedAttemptTracker<'snapshot, 'candidates>, Self> {
+        if self.upstream_response_state != Some(true)
+            || self.downstream != super::DownstreamCommitState::Committed
+            || self.write != super::UpstreamWriteState::BytesWritten
+        {
+            return Err(self);
+        }
+        Ok(CompletedAttemptTracker::from_permit(self.permit))
+    }
+}
+
+/// 仅能由 [`CompletedAttemptTracker`] 生成的成功完成对象。
+#[derive(Debug)]
+pub(crate) struct AttemptSuccessCompletion<'snapshot, 'candidates> {
+    permit: AttemptPermit<'snapshot, 'candidates>,
+}
+
+impl AttemptSuccessCompletion<'_, '_> {
+    pub(crate) fn matches(&self, coordinator: CoordinatorId, id: AttemptId) -> bool {
+        self.permit.belongs_to(coordinator) && self.permit.attempt_id() == id
+    }
+}
+
+/// 当前请求已由明确的成功完成对象终结。
+///
+/// 该零大小私有标记只由 [`AttemptCoordinator::complete_success`] 返回；它不包含下一次
+/// Permit、重试信息或发送结果，防止成功路径被误接到故障转移。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CompletedAttempt;
+
 /// 消费一个 RoutePlan、限制 Attempt 线性推进的固定大小状态机。
 pub(crate) struct AttemptCoordinator<'snapshot, 'candidates> {
     plan: RoutePlan<'snapshot, 'candidates>,
@@ -292,6 +362,34 @@ impl<'snapshot, 'candidates> AttemptCoordinator<'snapshot, 'candidates> {
                 Ok(CoordinatorStep::Stop(reason))
             }
         }
+    }
+
+    /// 消费已完整提交的私有成功完成对象，并永久终结当前请求。
+    ///
+    /// 成功路径不读取 `FailureClass`、不调用 `RetryGate`，也绝不签发下一个 Permit。完成
+    /// 对象与当前活跃 Attempt 不匹配时，Coordinator 清除 active 后 fail closed，保持与
+    /// 失败 Completion 相同的跨请求混配防护。
+    pub(crate) fn complete_success(
+        &mut self,
+        completion: AttemptSuccessCompletion<'snapshot, 'candidates>,
+    ) -> Result<CompletedAttempt, AttemptCompleteError> {
+        let Some(active) = self.active else {
+            return Err(AttemptCompleteError::NoActive);
+        };
+        let Some(coordinator) = self.coordinator else {
+            self.active = None;
+            self.stopped = true;
+            return Err(AttemptCompleteError::Mismatched);
+        };
+        if !completion.matches(coordinator, active.id) {
+            self.active = None;
+            self.stopped = true;
+            return Err(AttemptCompleteError::Mismatched);
+        }
+
+        self.active = None;
+        self.stopped = true;
+        Ok(CompletedAttempt)
     }
 
     fn issue_next(

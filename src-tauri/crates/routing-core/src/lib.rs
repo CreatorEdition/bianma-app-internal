@@ -945,6 +945,29 @@ mod tests {
         tracker.into_completion(failure, None, None)
     }
 
+    fn success_for<'snapshot, 'candidates>(
+        permit: AttemptPermit<'snapshot, 'candidates>,
+    ) -> coordinator::AttemptSuccessCompletion<'snapshot, 'candidates> {
+        let mut tracker = attempt::AttemptTracker::from_permit(permit);
+        tracker.request_write_started().expect("允许记录写入");
+        tracker
+            .upstream_response_observed()
+            .expect("允许记录响应头");
+        tracker.downstream_committed().expect("允许记录下游提交");
+        tracker
+            .upstream_response_completed()
+            .expect("允许记录完整响应");
+        tracker
+            .into_response_completed()
+            .expect("完整响应且已提交可转为成功 typestate")
+            .into_success_completion()
+    }
+
+    fn consumes_success_completion<'snapshot, 'candidates>(
+        _: coordinator::AttemptSuccessCompletion<'snapshot, 'candidates>,
+    ) {
+    }
+
     fn plan_for_coordinator<'snapshot, 'candidates>(
         snapshot: &'snapshot RoutingSnapshot<'candidates>,
     ) -> (
@@ -3227,6 +3250,101 @@ mod tests {
                 .complete(written, &eligibility)
                 .expect("写后结果可完成"),
             CoordinatorStep::Stop(RetryStopReason::ReplayNotProven)
+        ));
+        assert!(coordinator.is_stopped());
+        assert!(!coordinator.has_active_attempt());
+    }
+
+    #[test]
+    fn success_typestate_requires_written_complete_and_committed_response() {
+        let tracker = attempt::AttemptTracker::test_only(1);
+        let tracker = tracker
+            .into_response_completed()
+            .expect_err("未写入、未观察或未提交不能转为成功");
+        assert_eq!(
+            tracker
+                .into_completion(FailureClass::Connect, None, None)
+                .outcome()
+                .delivery(),
+            DeliveryState::NotSent
+        );
+
+        let mut tracker = attempt::AttemptTracker::test_only(1);
+        tracker.request_write_started().expect("允许记录写入");
+        tracker
+            .upstream_response_observed()
+            .expect("允许记录响应头");
+        tracker
+            .upstream_response_completed()
+            .expect("允许记录完整响应");
+        let tracker = tracker
+            .into_response_completed()
+            .expect_err("未提交下游不能转为成功");
+        assert_eq!(
+            tracker
+                .into_completion(FailureClass::Server, None, None)
+                .outcome()
+                .delivery(),
+            DeliveryState::Sent
+        );
+
+        let mut tracker = attempt::AttemptTracker::test_only(1);
+        tracker.request_write_started().expect("允许记录写入");
+        tracker
+            .upstream_response_observed()
+            .expect("允许记录响应头");
+        tracker
+            .upstream_response_completed()
+            .expect("允许记录完整响应");
+        tracker.downstream_committed().expect("允许记录下游提交");
+        let completion = tracker
+            .into_response_completed()
+            .expect("完整响应、已写入且下游提交可转为成功 typestate")
+            .into_success_completion();
+        consumes_success_completion(completion);
+    }
+
+    #[test]
+    fn coordinator_success_completion_terminates_without_retry() {
+        let candidates = [ready(1, 1, 0), ready(2, 2, 0)];
+        let snapshot = snapshot(&candidates, RoutingStrategy::Priority, 2);
+        let (plan, eligibility) = plan_for_coordinator(&snapshot);
+        let mut coordinator = plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 3_000).expect("策略有效"))
+            .expect("计划与预算一致");
+        let permit = coordinator.start(&eligibility).expect("允许签发首次尝试");
+
+        assert!(coordinator.complete_success(success_for(permit)).is_ok());
+        assert!(coordinator.is_stopped());
+        assert!(!coordinator.has_active_attempt());
+        assert!(matches!(
+            coordinator.start(&eligibility),
+            Err(AttemptStartError::Stopped)
+        ));
+    }
+
+    #[test]
+    fn foreign_success_completion_fails_closed() {
+        let candidates = [ready(1, 1, 0)];
+        let primary_snapshot = snapshot(&candidates, RoutingStrategy::Priority, 1);
+        let (plan, eligibility) = plan_for_coordinator(&primary_snapshot);
+        let mut coordinator = plan
+            .into_attempt_coordinator(RetryPolicy::new(1, 3_000).expect("策略有效"))
+            .expect("计划与预算一致");
+        let foreign_candidates = [ready(1, 1, 0)];
+        let foreign_snapshot = snapshot(&foreign_candidates, RoutingStrategy::Priority, 1);
+        let (foreign_plan, foreign_eligibility) = plan_for_coordinator(&foreign_snapshot);
+        let mut foreign = foreign_plan
+            .into_attempt_coordinator(RetryPolicy::new(1, 3_000).expect("策略有效"))
+            .expect("计划与预算一致");
+        let foreign_permit = foreign
+            .start(&foreign_eligibility)
+            .expect("允许签发另一请求的首次尝试");
+        let _current_permit = coordinator.start(&eligibility).expect("允许签发当前尝试");
+
+        assert!(matches!(
+            coordinator.complete_success(success_for(foreign_permit)),
+            Err(AttemptCompleteError::Mismatched)
         ));
         assert!(coordinator.is_stopped());
         assert!(!coordinator.has_active_attempt());
