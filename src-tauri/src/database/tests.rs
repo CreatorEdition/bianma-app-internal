@@ -8,8 +8,9 @@ use crate::provider::{Provider, ProviderManager};
 use indexmap::IndexMap;
 use rusqlite::{params, Connection};
 use serde_json::json;
+use serial_test::serial;
 use std::collections::HashMap;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 
 const LEGACY_SCHEMA_SQL: &str = r#"
     CREATE TABLE providers (
@@ -128,6 +129,107 @@ const ROUTING_V2_CATALOG_TABLES: &[&str] = &[
     "routing_v2_accounts",
     "routing_v2_model_deployments",
 ];
+
+/// 隔离 `Database::init` 这类会解析用户应用目录的测试，避免触碰真实数据库、
+/// 备份目录与 Windows 旧 HOME 回退路径。
+struct DatabaseInitTestHome {
+    directory: TempDir,
+    previous_test_home: Option<std::ffi::OsString>,
+    previous_home: Option<std::ffi::OsString>,
+}
+
+impl DatabaseInitTestHome {
+    fn new() -> Self {
+        let directory = tempfile::tempdir().expect("创建隔离测试目录");
+        let previous_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("CC_SWITCH_TEST_HOME", directory.path());
+        std::env::set_var("HOME", directory.path());
+        Self {
+            directory,
+            previous_test_home,
+            previous_home,
+        }
+    }
+
+    fn database_path(&self) -> std::path::PathBuf {
+        self.directory
+            .path()
+            .join(".cc-switch")
+            .join("cc-switch.db")
+    }
+
+    fn config_dir(&self) -> std::path::PathBuf {
+        self.directory.path().join(".cc-switch")
+    }
+}
+
+impl Drop for DatabaseInitTestHome {
+    fn drop(&mut self) {
+        match self.previous_test_home.take() {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        match self.previous_home.take() {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
+
+#[test]
+#[serial]
+fn database_init_rejects_future_schema_before_any_write_side_effect() {
+    let test_home = DatabaseInitTestHome::new();
+    let db_path = test_home.database_path();
+    std::fs::create_dir_all(db_path.parent().expect("数据库父目录")).expect("创建数据库父目录");
+    let conn = Connection::open(&db_path).expect("创建未来数据库");
+    Database::set_user_version(&conn, SCHEMA_VERSION + 1).expect("设置未来版本");
+    drop(conn);
+
+    let error = Database::init().err().expect("未来数据库必须拒绝打开");
+    assert_eq!(
+        error.to_string(),
+        "数据库错误: 数据库版本过新，请升级应用后再尝试。"
+    );
+
+    let conn = Connection::open(&db_path).expect("重开未来数据库");
+    let created_tables: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("统计用户表");
+    assert_eq!(created_tables, 0, "不得执行 DDL、seed 或 cleanup");
+    assert!(
+        !test_home.config_dir().join("backups").exists(),
+        "不得生成迁移前备份"
+    );
+}
+
+#[test]
+#[serial]
+fn database_init_keeps_v7_to_v8_migration_available() {
+    let test_home = DatabaseInitTestHome::new();
+    let db_path = test_home.database_path();
+    std::fs::create_dir_all(db_path.parent().expect("数据库父目录")).expect("创建数据库父目录");
+    let conn = Connection::open(&db_path).expect("创建 v7 数据库");
+    Database::set_user_version(&conn, 7).expect("设置 v7");
+    drop(conn);
+
+    let db = Database::init().expect("v7 数据库应继续迁移到 v8");
+    let conn = db.conn.lock().expect("锁定数据库");
+    assert_eq!(
+        Database::get_user_version(&conn).expect("读取迁移后版本"),
+        SCHEMA_VERSION
+    );
+    assert!(
+        Database::table_exists(&conn, "routing_v2_store_state").expect("检查状态表"),
+        "v7 到 v8 应创建本机 routing v2 状态表"
+    );
+}
 
 #[test]
 fn schema_migration_v7_to_v8_creates_routing_v2_local_catalog() {

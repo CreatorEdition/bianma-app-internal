@@ -353,15 +353,16 @@ impl Database {
         conn.execute("SAVEPOINT schema_migration;", [])
             .map_err(|e| AppError::Database(format!("开启迁移 savepoint 失败: {e}")))?;
 
-        let mut version = Self::get_user_version(conn)?;
-
-        if version > SCHEMA_VERSION {
-            conn.execute("ROLLBACK TO schema_migration;", []).ok();
-            conn.execute("RELEASE schema_migration;", []).ok();
-            return Err(AppError::Database(format!(
-                "数据库版本过新（{version}），当前应用仅支持 {SCHEMA_VERSION}，请升级应用后再尝试。"
-            )));
-        }
+        let mut version = match Self::ensure_schema_version_supported(conn) {
+            Ok(version) => version,
+            Err(error) => {
+                // 此处是纵深防御。正常启动会在任何 DDL 前执行相同检查，但这个
+                // helper 也被迁移测试和未来离线工具直接调用。
+                conn.execute("ROLLBACK TO schema_migration;", []).ok();
+                conn.execute("RELEASE schema_migration;", []).ok();
+                return Err(error);
+            }
+        };
 
         let result = (|| {
             while version < SCHEMA_VERSION {
@@ -1639,6 +1640,22 @@ impl Database {
     pub(crate) fn get_user_version(conn: &Connection) -> Result<i32, AppError> {
         conn.query_row("PRAGMA user_version;", [], |row| row.get(0))
             .map_err(|e| AppError::Database(format!("读取 user_version 失败: {e}")))
+    }
+
+    /// 在任何可能写入数据库的启动步骤前确认当前 reader 支持该 schema。
+    ///
+    /// 返回值只供启动与迁移流程继续判断旧版本；未来版本一律返回固定错误，
+    /// 不回显磁盘数据库的版本或底层 SQLite 信息。
+    pub(crate) fn ensure_schema_version_supported(conn: &Connection) -> Result<i32, AppError> {
+        let version = Self::get_user_version(conn)?;
+        if version > SCHEMA_VERSION {
+            return Err(Self::future_schema_version_error());
+        }
+        Ok(version)
+    }
+
+    fn future_schema_version_error() -> AppError {
+        AppError::Database("数据库版本过新，请升级应用后再尝试。".to_string())
     }
 
     pub(crate) fn set_user_version(conn: &Connection, version: i32) -> Result<(), AppError> {

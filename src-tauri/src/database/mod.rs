@@ -27,6 +27,7 @@ pub(crate) mod backup;
 mod backup_scope;
 mod dao;
 mod migration;
+mod routing_v2_store_gate;
 mod schema;
 
 #[cfg(test)]
@@ -116,6 +117,10 @@ impl Database {
 
         let conn = Connection::open(&db_path).map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 必须在任何 DDL、备份、seed 或启动清理之前拒绝未来数据库。否则旧 reader
+        // 的 CREATE/ALTER 可能已经改写了自己并不理解的结构。
+        Self::ensure_schema_version_supported(&conn)?;
+
         // 启用外键约束
         conn.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -169,6 +174,22 @@ impl Database {
         }
 
         Ok(db)
+    }
+
+    /// 仅在未来 routing v2 repository 打开本机无 Secret 目录时使用的访问凭据。
+    ///
+    /// 该栅栏不表示 Vault、迁移或路由执行已经就绪；它只验证当前 SQLite 的 v8
+    /// 元数据状态可被本 reader 安全识别。
+    #[allow(dead_code)]
+    pub(crate) fn acquire_routing_v2_store_access(
+        &self,
+    ) -> Result<routing_v2_store_gate::RoutingV2StoreAccess, routing_v2_store_gate::StoreGateError>
+    {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| routing_v2_store_gate::StoreGateError::Unavailable)?;
+        routing_v2_store_gate::acquire(&conn)
     }
 
     /// 创建内存数据库（用于测试）
