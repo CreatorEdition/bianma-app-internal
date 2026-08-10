@@ -120,6 +120,131 @@ const V3_8_SCHEMA_V1_SQL: &str = r#"
     );
 "#;
 
+const ROUTING_V2_CATALOG_TABLES: &[&str] = &[
+    "routing_v2_store_state",
+    "routing_v2_migration_journal",
+    "routing_v2_sites",
+    "routing_v2_endpoints",
+    "routing_v2_accounts",
+    "routing_v2_model_deployments",
+];
+
+#[test]
+fn schema_migration_v7_to_v8_creates_routing_v2_local_catalog() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    conn.execute("PRAGMA foreign_keys = ON;", [])
+        .expect("enable foreign keys");
+    Database::set_user_version(&conn, 7).expect("set user_version=7");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("apply v7 to v8 migration");
+
+    assert_eq!(
+        Database::get_user_version(&conn).expect("read user_version"),
+        SCHEMA_VERSION
+    );
+    for table in ROUTING_V2_CATALOG_TABLES {
+        assert!(
+            Database::table_exists(&conn, table).expect("check routing v2 table"),
+            "迁移后应存在 {table}"
+        );
+    }
+
+    let state: (i64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT id, migration_epoch, minimum_reader_version, rollback_generation
+             FROM routing_v2_store_state",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read routing v2 store state");
+    assert_eq!(state, (1, 1, 8, 0));
+}
+
+#[test]
+fn schema_boot_order_v7_to_v8_is_idempotent() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    conn.execute("PRAGMA foreign_keys = ON;", [])
+        .expect("enable foreign keys");
+
+    // 模拟真实启动顺序：先补齐表，再按 user_version 推进迁移。
+    Database::create_tables_on_conn(&conn).expect("create current tables");
+    Database::set_user_version(&conn, 7).expect("set user_version=7");
+    Database::apply_schema_migrations_on_conn(&conn).expect("apply v7 to v8 migration");
+    Database::apply_schema_migrations_on_conn(&conn).expect("repeat migration is idempotent");
+
+    let store_state_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM routing_v2_store_state", [], |row| {
+            row.get(0)
+        })
+        .expect("count routing v2 store state");
+    assert_eq!(store_state_count, 1, "单例状态不得因重试重复写入");
+    assert_eq!(
+        Database::get_user_version(&conn).expect("read user_version"),
+        SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn routing_v2_catalog_rejects_cross_site_deployment() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    conn.execute("PRAGMA foreign_keys = ON;", [])
+        .expect("enable foreign keys");
+    Database::create_tables_on_conn(&conn).expect("create current tables");
+
+    conn.execute(
+        "INSERT INTO routing_v2_sites (site_id, display_name) VALUES ('site-a', 'A'), ('site-b', 'B')",
+        [],
+    )
+    .expect("insert sites");
+    conn.execute(
+        "INSERT INTO routing_v2_endpoints (
+            endpoint_id, site_id, display_base_url, canonical_origin, base_path, protocol_family
+         ) VALUES ('endpoint-a', 'site-a', 'https://a.example/v1', 'https://a.example', '/v1', 'anthropic')",
+        [],
+    )
+    .expect("insert endpoint");
+
+    let error = conn
+        .execute(
+            "INSERT INTO routing_v2_model_deployments (
+                deployment_id, site_id, endpoint_id, upstream_model_id, adapter_contract_revision
+             ) VALUES ('deployment-b', 'site-b', 'endpoint-a', 'model-a', 1)",
+            [],
+        )
+        .expect_err("跨 Site 的 deployment 必须被复合外键拒绝");
+    assert!(
+        error.to_string().contains("FOREIGN KEY constraint failed"),
+        "应由复合外键拒绝跨 Site 绑定，实际错误: {error}"
+    );
+}
+
+#[test]
+fn routing_v2_catalog_rejects_duplicate_endpoint_identity() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    conn.execute("PRAGMA foreign_keys = ON;", [])
+        .expect("enable foreign keys");
+    Database::create_tables_on_conn(&conn).expect("create current tables");
+
+    conn.execute(
+        "INSERT INTO routing_v2_sites (site_id, display_name) VALUES ('site-a', 'A')",
+        [],
+    )
+    .expect("insert site");
+    let endpoint_sql = "INSERT INTO routing_v2_endpoints (
+            endpoint_id, site_id, display_base_url, canonical_origin, base_path, protocol_family
+        ) VALUES (?1, 'site-a', 'https://a.example/v1', 'https://a.example', '/v1', 'anthropic')";
+    conn.execute(endpoint_sql, ["endpoint-a"])
+        .expect("insert first endpoint");
+
+    let error = conn
+        .execute(endpoint_sql, ["endpoint-b"])
+        .expect_err("相同 Site 内的 Endpoint 身份必须唯一");
+    assert!(
+        error.to_string().contains("UNIQUE constraint failed"),
+        "应由唯一约束拒绝重复 Endpoint，实际错误: {error}"
+    );
+}
+
 #[derive(Debug)]
 struct ColumnInfo {
     r#type: String,

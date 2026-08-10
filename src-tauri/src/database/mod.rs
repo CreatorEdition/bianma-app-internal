@@ -44,7 +44,21 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 7;
+pub(crate) const SCHEMA_VERSION: i32 = 8;
+
+/// routing v2 的设备本地 SQLite 命名空间。
+///
+/// 该命名空间在现有 SQL/WebDAV 同步与自动同步触发器中一律隔离，避免未来
+/// 凭据绑定或路由元数据被旧同步链路意外传播。
+pub(crate) const ROUTING_V2_TABLE_PREFIX: &str = "routing_v2_";
+
+/// 判断对象是否属于 routing v2 的设备本地命名空间。
+pub(crate) fn is_routing_v2_table(name: &str) -> bool {
+    name.trim()
+        .as_bytes()
+        .get(..ROUTING_V2_TABLE_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(ROUTING_V2_TABLE_PREFIX.as_bytes()))
+}
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -76,6 +90,9 @@ fn register_db_change_hook(conn: &Connection) {
     conn.update_hook(Some(
         |action: Action, _database: &str, table: &str, _row_id: i64| match action {
             Action::SQLITE_INSERT | Action::SQLITE_UPDATE | Action::SQLITE_DELETE => {
+                if is_routing_v2_table(table) {
+                    return;
+                }
                 crate::services::webdav_auto_sync::notify_db_changed(table);
             }
             _ => {}

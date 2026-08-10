@@ -2,7 +2,7 @@
 //!
 //! 提供 SQL 导出/导入和二进制快照备份功能。
 
-use super::{lock_conn, Database};
+use super::{is_routing_v2_table, lock_conn, Database, ROUTING_V2_TABLE_PREFIX};
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
 use chrono::{Local, Utc};
@@ -44,7 +44,9 @@ pub struct BackupEntry {
 }
 
 impl Database {
-    /// 导出为 SQLite 兼容的 SQL 文本（内存字符串，完整导出）
+    /// 导出为 SQLite 兼容的便携 SQL 文本。
+    ///
+    /// `routing_v2_*` 属于设备本地控制面，不会进入任何 SQL 导出。
     pub fn export_sql_string(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
         Self::dump_sql(&snapshot, &[])
@@ -83,30 +85,40 @@ impl Database {
 
     /// 从 SQL 字符串导入，返回生成的备份 ID（若无备份则为空字符串）
     pub fn import_sql_string(&self, sql_raw: &str) -> Result<String, AppError> {
-        self.import_sql_string_inner(sql_raw, &[])
+        self.import_sql_string_inner(sql_raw, &[], true)
     }
 
     /// Import SQL generated for sync, then restore local-only tables from the
     /// current device snapshot before replacing the main database.
     pub(crate) fn import_sql_string_for_sync(&self, sql_raw: &str) -> Result<String, AppError> {
-        self.import_sql_string_inner(sql_raw, SYNC_PRESERVE_TABLES)
+        self.import_sql_string_inner(sql_raw, SYNC_PRESERVE_TABLES, true)
     }
 
     fn import_sql_string_inner(
         &self,
         sql_raw: &str,
         preserve_tables: &[&str],
+        preserve_routing_v2: bool,
     ) -> Result<String, AppError> {
         let sql_content = sql_raw.trim_start_matches('\u{feff}');
         Self::validate_branded_or_legacy_sql_export(sql_content)?;
+        Self::reject_routing_v2_namespace(sql_content)?;
 
         // 导入前备份现有数据库
         let backup_path = self.backup_database_file()?;
 
-        let local_snapshot = if preserve_tables.is_empty() {
+        let local_snapshot = if preserve_tables.is_empty() && !preserve_routing_v2 {
             None
         } else {
             Some(self.snapshot_to_memory()?)
+        };
+        let local_tables = match local_snapshot.as_ref() {
+            Some(snapshot) => Self::collect_local_tables_to_preserve(
+                snapshot,
+                preserve_tables,
+                preserve_routing_v2,
+            )?,
+            None => Vec::new(),
         };
 
         // 在临时数据库执行导入，确保失败不会污染主库
@@ -127,7 +139,7 @@ impl Database {
         Self::apply_schema_migrations_on_conn(&temp_conn)?;
         Self::validate_basic_state(&temp_conn)?;
         if let Some(local_snapshot) = local_snapshot.as_ref() {
-            Self::restore_tables(local_snapshot, &temp_conn, preserve_tables)?;
+            Self::restore_tables(local_snapshot, &temp_conn, &local_tables)?;
         }
 
         // 使用 Backup 将临时库原子写回主库
@@ -179,25 +191,95 @@ impl Database {
         ))
     }
 
+    /// 拒绝任何试图经旧 SQL 通道写入设备本地 routing v2 命名空间的导入。
+    ///
+    /// 这里故意按文本保守拒绝：SQL 导入不应出现该前缀，宁可拒绝带有该保留词的
+    /// 旧备份，也不能让注释、字符串或大小写技巧绕过本机控制面的隔离边界。
+    fn reject_routing_v2_namespace(sql: &str) -> Result<(), AppError> {
+        if sql
+            .as_bytes()
+            .windows(ROUTING_V2_TABLE_PREFIX.len())
+            .any(|window| window.eq_ignore_ascii_case(ROUTING_V2_TABLE_PREFIX.as_bytes()))
+        {
+            return Err(AppError::InvalidInput(
+                "导入的 SQL 包含设备本地 routing v2 命名空间，已拒绝覆盖。".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 收集同步或便携导入后应从当前设备恢复的本地表。
+    fn collect_local_tables_to_preserve(
+        source_conn: &Connection,
+        preserve_tables: &[&str],
+        preserve_routing_v2: bool,
+    ) -> Result<Vec<String>, AppError> {
+        let mut tables = Vec::new();
+        for table in preserve_tables {
+            if Self::table_exists(source_conn, table)? {
+                tables.push((*table).to_string());
+            }
+        }
+
+        if !preserve_routing_v2 {
+            return Ok(tables);
+        }
+
+        let mut stmt = source_conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .map_err(|e| AppError::Database(format!("读取本机表名失败: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| AppError::Database(format!("读取本机 routing v2 表失败: {e}")))?;
+
+        let mut routing_v2_tables = Vec::new();
+        for row in rows {
+            let table = row.map_err(|e| AppError::Database(e.to_string()))?;
+            if is_routing_v2_table(&table) {
+                routing_v2_tables.push(table);
+            }
+        }
+        routing_v2_tables.sort_by_key(|table| Self::routing_v2_restore_rank(table));
+        tables.extend(routing_v2_tables);
+        Ok(tables)
+    }
+
+    /// 当前无 Secret 目录的外键恢复顺序；未知将来表排在其后，要求其迁移自行
+    /// 保持与既有目录兼容，或在引入新外键时同步扩展此排序。
+    fn routing_v2_restore_rank(table: &str) -> u8 {
+        match table {
+            "routing_v2_store_state" => 0,
+            "routing_v2_sites" => 1,
+            "routing_v2_endpoints" | "routing_v2_accounts" => 2,
+            "routing_v2_model_deployments" => 3,
+            "routing_v2_migration_journal" => 4,
+            _ => 5,
+        }
+    }
+
     fn restore_tables(
         source_conn: &Connection,
         target_conn: &Connection,
-        tables: &[&str],
+        tables: &[String],
     ) -> Result<(), AppError> {
+        let mut existing_tables = Vec::new();
         for table in tables {
-            if !Self::table_exists(source_conn, table)? || !Self::table_exists(target_conn, table)?
-            {
-                continue;
+            if Self::table_exists(source_conn, table)? && Self::table_exists(target_conn, table)? {
+                existing_tables.push(table);
             }
+        }
 
+        for table in existing_tables.iter().rev() {
+            target_conn
+                .execute(&format!("DELETE FROM \"{table}\""), [])
+                .map_err(|e| AppError::Database(format!("清空表 {table} 失败: {e}")))?;
+        }
+
+        for table in existing_tables {
             let columns = Self::get_table_columns(source_conn, table)?;
             if columns.is_empty() {
                 continue;
             }
-
-            target_conn
-                .execute(&format!("DELETE FROM \"{table}\""), [])
-                .map_err(|e| AppError::Database(format!("清空表 {table} 失败: {e}")))?;
 
             let placeholders = (1..=columns.len())
                 .map(|idx| format!("?{idx}"))
@@ -418,10 +500,15 @@ impl Database {
         while let Some(row) = rows.next().map_err(|e| AppError::Database(e.to_string()))? {
             let obj_type: String = row.get(0).map_err(|e| AppError::Database(e.to_string()))?;
             let name: String = row.get(1).map_err(|e| AppError::Database(e.to_string()))?;
+            let table_name: String = row.get(2).map_err(|e| AppError::Database(e.to_string()))?;
             let sql: String = row.get(3).map_err(|e| AppError::Database(e.to_string()))?;
 
             // 跳过 SQLite 内部对象（如 sqlite_sequence）
             if name.starts_with("sqlite_") {
+                continue;
+            }
+
+            if is_routing_v2_table(&name) || is_routing_v2_table(&table_name) {
                 continue;
             }
 
@@ -435,7 +522,7 @@ impl Database {
 
         // 导出数据
         for table in tables {
-            if skip_tables.iter().any(|t| *t == table) {
+            if is_routing_v2_table(&table) || skip_tables.iter().any(|t| *t == table) {
                 continue;
             }
             let columns = Self::get_table_columns(conn, &table)?;
@@ -711,6 +798,52 @@ mod tests {
     }
 
     #[test]
+    fn portable_sql_export_excludes_routing_v2_schema_and_rows() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO routing_v2_sites (site_id, display_name) VALUES ('local-site', 'Local Site')",
+                [],
+            )?;
+            conn.execute(
+                "CREATE INDEX idx_local_routing_site_name ON routing_v2_sites(display_name)",
+                [],
+            )?;
+        }
+
+        let sql = db.export_sql_string()?;
+        assert!(
+            !sql.to_ascii_lowercase().contains("routing_v2_"),
+            "便携 SQL 导出不得包含 routing v2 的 DDL、索引或行数据"
+        );
+        assert!(
+            !sql.contains("idx_local_routing_site_name"),
+            "依附 routing v2 表的索引也不得进入导出"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sql_import_rejects_routing_v2_namespace() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let sql = format!(
+            "{BRANDED_SQL_EXPORT_HEADER}\nCREATE TABLE routing_v2_remote_injection (id INTEGER);"
+        );
+
+        let error = db
+            .import_sql_string(&sql)
+            .expect_err("旧 SQL 导入不得写入设备本地 routing v2 命名空间");
+        assert!(error.to_string().contains("routing v2"));
+        let conn = crate::database::lock_conn!(db.conn);
+        assert!(
+            !Database::table_exists(&conn, "routing_v2_remote_injection")?,
+            "拒绝前必须保持主数据库未被导入污染"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn sql_export_import_accepts_legacy_header() -> Result<(), AppError> {
         let source_db = Database::memory()?;
         {
@@ -826,6 +959,71 @@ mod tests {
             "local stream check logs should be preserved"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn sync_import_preserves_local_routing_v2_catalog() -> Result<(), AppError> {
+        let remote_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(remote_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('remote-provider', 'claude', 'Remote Provider', '{}', '{}')",
+                [],
+            )?;
+        }
+        let remote_sql = remote_db.export_sql_string_for_sync()?;
+        assert!(
+            !remote_sql.to_ascii_lowercase().contains("routing_v2_"),
+            "WebDAV SQL 不得携带 routing v2 命名空间"
+        );
+
+        let local_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            conn.execute_batch(
+                "INSERT INTO routing_v2_sites (site_id, display_name)
+                 VALUES ('local-site', 'Local Site');
+                 INSERT INTO routing_v2_endpoints (
+                     endpoint_id, site_id, display_base_url, canonical_origin, base_path, protocol_family
+                 ) VALUES (
+                     'local-endpoint', 'local-site', 'https://local.example/v1',
+                     'https://local.example', '/v1', 'anthropic'
+                 );
+                 INSERT INTO routing_v2_model_deployments (
+                     deployment_id, site_id, endpoint_id, upstream_model_id, adapter_contract_revision
+                 ) VALUES ('local-deployment', 'local-site', 'local-endpoint', 'local-model', 1);",
+            )?;
+        }
+
+        local_db.import_sql_string_for_sync(&remote_sql)?;
+
+        let local_catalog_counts: (i64, i64, i64) = {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            let site_count = conn.query_row(
+                "SELECT COUNT(*) FROM routing_v2_sites WHERE site_id = 'local-site'",
+                [],
+                |row| row.get(0),
+            )?;
+            let endpoint_count = conn.query_row(
+                "SELECT COUNT(*) FROM routing_v2_endpoints WHERE endpoint_id = 'local-endpoint'",
+                [],
+                |row| row.get(0),
+            )?;
+            let deployment_count = conn.query_row(
+                "SELECT COUNT(*) FROM routing_v2_model_deployments
+                 WHERE deployment_id = 'local-deployment'",
+                [],
+                |row| row.get(0),
+            )?;
+            (site_count, endpoint_count, deployment_count)
+        };
+        assert_eq!(
+            local_catalog_counts,
+            (1, 1, 1),
+            "同步导入必须按外键顺序恢复完整的本机 routing v2 目录"
+        );
         Ok(())
     }
 

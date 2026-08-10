@@ -337,6 +337,8 @@ impl Database {
             [],
         );
 
+        Self::create_routing_v2_catalog_tables(conn)?;
+
         Ok(())
     }
 
@@ -400,6 +402,11 @@ impl Database {
                         log::info!("迁移数据库从 v6 到 v7（Provider 批量测速缓存）");
                         Self::migrate_v6_to_v7(conn)?;
                         Self::set_user_version(conn, 7)?;
+                    }
+                    7 => {
+                        log::info!("迁移数据库从 v7 到 v8（routing v2 本机目录）");
+                        Self::migrate_v7_to_v8(conn)?;
+                        Self::set_user_version(conn, 8)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1057,6 +1064,151 @@ impl Database {
     fn migrate_v6_to_v7(conn: &Connection) -> Result<(), AppError> {
         Self::create_provider_latency_results_table(conn)?;
         log::info!("v6 -> v7 迁移完成：已添加 provider_latency_results 表");
+        Ok(())
+    }
+
+    /// v7 -> v8 迁移：添加 routing v2 的无 Secret 本机目录。
+    ///
+    /// 此迁移只创建规范化元数据表与单例状态，绝不读取旧 Provider JSON、
+    /// 凭据或执行配置；旧数据的受控导入会在独立切片中实现。
+    fn migrate_v7_to_v8(conn: &Connection) -> Result<(), AppError> {
+        Self::create_routing_v2_catalog_tables(conn)?;
+        log::info!("v7 -> v8 迁移完成：已添加 routing v2 本机目录");
+        Ok(())
+    }
+
+    /// 创建 routing v2 的无 Secret 本机目录。
+    ///
+    /// 该目录仅承载尚未激活的 Site、Endpoint、Account 与 Deployment 元数据。
+    /// 它不包含 Credential、Binding、Grant、Quota 或任何可执行配置。
+    fn create_routing_v2_catalog_tables(conn: &Connection) -> Result<(), AppError> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS routing_v2_store_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                migration_epoch INTEGER NOT NULL CHECK (migration_epoch >= 1),
+                minimum_reader_version INTEGER NOT NULL CHECK (minimum_reader_version >= 8),
+                rollback_generation INTEGER NOT NULL CHECK (rollback_generation >= 0),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建 routing_v2_store_state 表失败: {e}")))?;
+
+        conn.execute(
+            "INSERT OR IGNORE INTO routing_v2_store_state (
+                id, migration_epoch, minimum_reader_version, rollback_generation
+            ) VALUES (1, 1, 8, 0)",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("初始化 routing_v2_store_state 失败: {e}")))?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS routing_v2_migration_journal (
+                journal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                migration_epoch INTEGER NOT NULL CHECK (migration_epoch >= 1),
+                source_app_type TEXT NOT NULL,
+                source_provider_id TEXT NOT NULL,
+                source_endpoint_id INTEGER NOT NULL DEFAULT -1,
+                source_index INTEGER NOT NULL DEFAULT -1,
+                target_kind TEXT NOT NULL,
+                target_id TEXT,
+                state TEXT NOT NULL,
+                failure_code TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (
+                    migration_epoch,
+                    source_app_type,
+                    source_provider_id,
+                    source_endpoint_id,
+                    source_index,
+                    target_kind
+                )
+            )",
+            [],
+        )
+        .map_err(|e| {
+            AppError::Database(format!("创建 routing_v2_migration_journal 表失败: {e}"))
+        })?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS routing_v2_sites (
+                site_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                trust_tier TEXT NOT NULL DEFAULT 'unclassified',
+                lifecycle TEXT NOT NULL DEFAULT 'draft',
+                revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建 routing_v2_sites 表失败: {e}")))?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS routing_v2_endpoints (
+                endpoint_id TEXT PRIMARY KEY,
+                site_id TEXT NOT NULL,
+                display_base_url TEXT NOT NULL,
+                canonical_origin TEXT NOT NULL,
+                base_path TEXT NOT NULL,
+                origin_revision INTEGER NOT NULL DEFAULT 1 CHECK (origin_revision >= 1),
+                protocol_family TEXT NOT NULL,
+                lifecycle TEXT NOT NULL DEFAULT 'draft',
+                verification_state TEXT NOT NULL DEFAULT 'unverified',
+                revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (site_id) REFERENCES routing_v2_sites(site_id) ON DELETE RESTRICT,
+                UNIQUE (endpoint_id, site_id),
+                UNIQUE (site_id, canonical_origin, base_path, protocol_family)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建 routing_v2_endpoints 表失败: {e}")))?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS routing_v2_accounts (
+                account_id TEXT PRIMARY KEY,
+                site_id TEXT NOT NULL,
+                local_label TEXT NOT NULL,
+                identity_kind TEXT NOT NULL DEFAULT 'unconfirmed',
+                quota_topology TEXT NOT NULL DEFAULT 'unknown',
+                lifecycle TEXT NOT NULL DEFAULT 'draft',
+                revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (site_id) REFERENCES routing_v2_sites(site_id) ON DELETE RESTRICT
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建 routing_v2_accounts 表失败: {e}")))?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS routing_v2_model_deployments (
+                deployment_id TEXT PRIMARY KEY,
+                site_id TEXT NOT NULL,
+                endpoint_id TEXT NOT NULL,
+                upstream_model_id TEXT NOT NULL,
+                adapter_contract_revision INTEGER NOT NULL CHECK (adapter_contract_revision >= 1),
+                capability_state TEXT NOT NULL DEFAULT 'unconfirmed',
+                lifecycle TEXT NOT NULL DEFAULT 'draft',
+                revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (site_id) REFERENCES routing_v2_sites(site_id) ON DELETE RESTRICT,
+                FOREIGN KEY (endpoint_id, site_id)
+                    REFERENCES routing_v2_endpoints(endpoint_id, site_id)
+                    ON DELETE RESTRICT,
+                UNIQUE (endpoint_id, upstream_model_id, adapter_contract_revision)
+            )",
+            [],
+        )
+        .map_err(|e| {
+            AppError::Database(format!("创建 routing_v2_model_deployments 表失败: {e}"))
+        })?;
+
         Ok(())
     }
 
