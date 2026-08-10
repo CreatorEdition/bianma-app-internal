@@ -13,9 +13,10 @@ pub const SESSION_AFFINITY_ALIAS_BYTES: usize = 16;
 
 /// 由宿主 HMAC 化后的固定长度会话亲和别名。
 ///
-/// 本类型没有 `Debug` 或 `Display` 实现，也不提供还原或读取字节的公开接口。它只能
-/// 表达宿主已完成 HMAC 的别名，routing-core 不接收或保存原始会话内容。
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+/// 本类型没有 `Debug`、`Display` 或 `Hash` 实现，也不提供还原或读取字节的公开接口。
+/// 不实现 `Hash` 可避免任意外部 `Hasher` 接收其内部字节。它只能表达宿主已完成 HMAC
+/// 的别名，routing-core 不接收或保存原始会话内容。
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct SessionAffinityAlias([u8; SESSION_AFFINITY_ALIAS_BYTES]);
 
 impl SessionAffinityAlias {

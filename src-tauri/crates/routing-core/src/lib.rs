@@ -2062,11 +2062,13 @@ mod tests {
         assert_eq!(absent.selector_revision().get(), 9);
         assert_eq!(absent.selector_affinity_salt().get(), [9; 16]);
 
+        let alias = SessionAffinityAlias::from_host_hmac([7; 16]);
+        let alias_copy = alias;
+        let alias_second_copy = alias;
+        assert!(alias_copy == alias_second_copy);
+
         let stable = compiled
-            .selection_request(
-                resolved,
-                SelectionSession::Stable(SessionAffinityAlias::from_host_hmac([7; 16])),
-            )
+            .selection_request(resolved, SelectionSession::Stable(alias))
             .expect("同代目标可创建稳定会话选择请求");
         assert!(stable.has_stable_session());
         assert!(matches!(stable.session(), SelectionSession::Stable(_)));
