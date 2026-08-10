@@ -858,11 +858,9 @@ mod tests {
         failure: FailureClass,
         retry_after_ms: Option<u64>,
     ) -> AttemptOutcome {
-        attempt::AttemptTracker::test_only(1).into_outcome_for_test(
-            failure,
-            retry_after_ms,
-            Some(attempt::TrustedPreExecutionRejection::registered()),
-        )
+        let mut tracker = attempt::AttemptTracker::test_only(1);
+        let receipt = tracker.test_only_rejection();
+        tracker.into_outcome_for_test(failure, retry_after_ms, Some(receipt))
     }
 
     fn downstream_committed(failure: FailureClass) -> AttemptOutcome {
@@ -1653,6 +1651,26 @@ mod tests {
             cooldown_tracker.rate_limit_reporter(second_resolved),
             Err(attempt::RateLimitReporterError::TargetMismatch)
         ));
+        assert!(matches!(
+            cooldown_tracker.replay_reporter(second_resolved),
+            Err(attempt::ReplayReporterError::TargetMismatch)
+        ));
+        let replay_reporter = cooldown_tracker
+            .replay_reporter(first_resolved)
+            .expect("同一快照与 Target 可签发回放上报器");
+        assert!(matches!(
+            cooldown_tracker.replay_reporter(first_resolved),
+            Err(attempt::ReplayReporterError::AlreadyReported)
+        ));
+        let _receipt = replay_reporter
+            .pre_execution_rejected(
+                attempt::VerifiedPreExecutionContract::test_only_registered(
+                    first_resolved.target().site(),
+                    0x1001,
+                )
+                .expect("已登记测试合同"),
+            )
+            .expect("同站合同可签发收据");
         let observation = cooldown_tracker
             .rate_limit_reporter(first_resolved)
             .expect("同 Target 可签发上报器")
@@ -1775,6 +1793,26 @@ mod tests {
             written_tracker.rate_limit_reporter(repeated_resolved),
             Err(attempt::RateLimitReporterError::AlreadyReported)
         ));
+        assert!(matches!(
+            written_tracker.replay_reporter(mismatched_resolved),
+            Err(attempt::ReplayReporterError::TargetMismatch)
+        ));
+        let replay_reporter = written_tracker
+            .replay_reporter(written_resolved)
+            .expect("当前目标可签发回放上报器");
+        assert!(matches!(
+            written_tracker.replay_reporter(repeated_resolved),
+            Err(attempt::ReplayReporterError::AlreadyReported)
+        ));
+        let receipt = replay_reporter
+            .pre_execution_rejected(
+                attempt::VerifiedPreExecutionContract::test_only_registered(
+                    written_resolved.target().site(),
+                    0x1001,
+                )
+                .expect("已登记测试合同"),
+            )
+            .expect("同站合同可签发收据");
         written_registry.record_rate_limit(observation, HealthTick::new(1));
         let written_current =
             written_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
@@ -1784,7 +1822,7 @@ mod tests {
         assert!(matches!(
             written_coordinator
                 .complete(
-                    written_tracker.into_completion(FailureClass::RateLimited, None, None),
+                    written_tracker.into_completion(FailureClass::RateLimited, None, Some(receipt)),
                     &written_current
                 )
                 .expect("写后结果可完成"),
@@ -1795,6 +1833,10 @@ mod tests {
         let safe_initial = safe_registry.eligibility_for(compiled.routing(), HealthTick::new(1));
         let safe_plan = RoutePlanner::plan(&request, compiled.routing(), &safe_initial, 0)
             .expect("初始计划有效");
+        let safe_first_resolved = compiled
+            .resolve_plan_target(&safe_plan, 0)
+            .expect("计划同代")
+            .expect("首个目标存在");
         let safe_resolved = compiled
             .resolve_plan_target(&safe_plan, 1)
             .expect("计划同代")
@@ -1819,11 +1861,27 @@ mod tests {
         let safe_first = safe_coordinator
             .start(&safe_initial)
             .expect("初始目标可签发");
-        let completion = attempt::AttemptTracker::from_permit(safe_first).into_completion(
-            FailureClass::RateLimited,
-            Some(200),
-            Some(attempt::TrustedPreExecutionRejection::registered()),
-        );
+        let mut safe_tracker = attempt::AttemptTracker::from_permit(safe_first);
+        let receipt = safe_tracker
+            .replay_reporter(safe_first_resolved)
+            .expect("当前目标可签发回放上报器")
+            .pre_execution_rejected(
+                attempt::VerifiedPreExecutionContract::test_only_registered(
+                    safe_first_resolved.target().site(),
+                    0x1001,
+                )
+                .expect("已登记测试合同"),
+            )
+            .expect("同站合同可签发收据");
+        let completion =
+            safe_tracker.into_completion(FailureClass::RateLimited, Some(200), Some(receipt));
+        let metadata = completion
+            .outcome()
+            .pre_execution_contract_metadata()
+            .expect("受信收据摘要必须保留");
+        assert_eq!(metadata.adapter_version, 1);
+        assert_eq!(metadata.contract_revision, 1);
+        assert_eq!(metadata.evidence_kind, 1);
         let CoordinatorStep::Next {
             permit: next,
             delay_ms,
@@ -1865,12 +1923,10 @@ mod tests {
         let exhausted_first = exhausted_coordinator
             .start(&exhausted_initial)
             .expect("初始目标可签发");
-        let exhausted_completion = attempt::AttemptTracker::from_permit(exhausted_first)
-            .into_completion(
-                FailureClass::RateLimited,
-                Some(200),
-                Some(attempt::TrustedPreExecutionRejection::registered()),
-            );
+        let mut exhausted_tracker = attempt::AttemptTracker::from_permit(exhausted_first);
+        let receipt = exhausted_tracker.test_only_rejection();
+        let exhausted_completion =
+            exhausted_tracker.into_completion(FailureClass::RateLimited, Some(200), Some(receipt));
         assert!(matches!(
             exhausted_coordinator
                 .complete(exhausted_completion, &exhausted_current)
@@ -1932,6 +1988,7 @@ mod tests {
 
         let mut bytes_written = attempt::AttemptTracker::test_only(1);
         bytes_written.request_write_started().expect("允许记录写入");
+        let receipt = bytes_written.test_only_rejection();
         assert_eq!(
             gate.decide(
                 &plan,
@@ -1939,7 +1996,7 @@ mod tests {
                 &bytes_written.into_outcome_for_test(
                     FailureClass::RateLimited,
                     Some(1_000),
-                    Some(attempt::TrustedPreExecutionRejection::registered()),
+                    Some(receipt),
                 )
             ),
             RetryDecision::Stop(RetryStopReason::ReplayNotProven)
@@ -1955,6 +2012,7 @@ mod tests {
         semantic_event
             .first_semantic_event_observed()
             .expect("允许记录首个语义事件");
+        let receipt = semantic_event.test_only_rejection();
         assert_eq!(
             gate.decide(
                 &plan,
@@ -1962,7 +2020,7 @@ mod tests {
                 &semantic_event.into_outcome_for_test(
                     FailureClass::RateLimited,
                     Some(1_000),
-                    Some(attempt::TrustedPreExecutionRejection::registered()),
+                    Some(receipt),
                 )
             ),
             RetryDecision::Stop(RetryStopReason::ReplayNotProven)
@@ -2131,10 +2189,19 @@ mod tests {
         let foreign = other
             .start(&other_eligibility)
             .expect("允许签发另一请求的首次尝试");
-        let mismatched = not_sent_for(foreign, FailureClass::Connect);
-        let _current = coordinator
+        let current = coordinator
             .start(&eligibility)
             .expect("允许签发当前请求的首次尝试");
+        let mut current_tracker = attempt::AttemptTracker::from_permit(current);
+        let receipt = current_tracker.test_only_rejection();
+        let foreign_tracker = attempt::AttemptTracker::from_permit(foreign);
+        let mismatched =
+            foreign_tracker.into_completion(FailureClass::Connect, None, Some(receipt));
+        assert_eq!(mismatched.outcome().delivery(), DeliveryState::Unknown);
+        assert!(mismatched
+            .outcome()
+            .pre_execution_contract_metadata()
+            .is_none());
 
         assert!(matches!(
             coordinator.complete(mismatched, &eligibility),

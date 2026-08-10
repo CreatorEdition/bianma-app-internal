@@ -90,6 +90,13 @@ impl<'snapshot, 'candidates> AttemptPermit<'snapshot, 'candidates> {
         self.id
     }
 
+    /// 返回本次 Attempt 绑定的内部 Coordinator 标识。
+    ///
+    /// 此方法仅供 Attempt 收据校验使用，不对 crate 外暴露构造或伪造路径。
+    pub(crate) const fn coordinator_id(&self) -> CoordinatorId {
+        self.coordinator
+    }
+
     pub(crate) fn belongs_to(&self, coordinator: CoordinatorId) -> bool {
         self.coordinator == coordinator
     }

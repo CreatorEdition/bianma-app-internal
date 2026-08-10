@@ -7,8 +7,9 @@
 use super::{
     coordinator::{AttemptId, AttemptPermit, CoordinatorId},
     health::{HealthTick, RateLimitScope},
-    FailureClass, ResolvedRouteTarget, RouteTarget,
+    FailureClass, ResolvedRouteTarget, RouteTarget, RoutingSnapshot, SiteId,
 };
+use core::fmt;
 
 /// 尝试绑定的限流上报器创建失败原因。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,11 +53,6 @@ impl AdapterRateLimitReporter {
             deadline,
         }
     }
-
-    #[cfg(test)]
-    fn test_only(target: RouteTarget) -> Self {
-        Self { target }
-    }
 }
 
 /// 仅能由 [`AdapterRateLimitReporter`] 消费式签发的限流冷却观测。
@@ -75,13 +71,89 @@ impl TrustedRateLimitObservation {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_rate_limit_observation(
+/// 回放上报器或收据被拒绝的原因。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReplayReporterError {
+    /// Attempt 许可与同代已解析目标不属于同一个 RoutingSnapshot 或 RouteTarget。
+    TargetMismatch,
+    /// 当前 Attempt 已经签发过回放上报器。
+    AlreadyReported,
+    /// 已验证 adapter 合同的 Site 与当前 Target 不一致。
+    ContractSiteMismatch,
+}
+
+/// 不可伪造回放材料共同绑定的 Attempt 身份。
+struct AttemptBinding<'snapshot, 'candidates> {
+    coordinator: CoordinatorId,
+    attempt: AttemptId,
     target: RouteTarget,
-    scope: RateLimitScope,
-    deadline: HealthTick,
-) -> TrustedRateLimitObservation {
-    AdapterRateLimitReporter::test_only(target).report(scope, deadline)
+    snapshot: &'snapshot RoutingSnapshot<'candidates>,
+}
+
+impl<'snapshot, 'candidates> AttemptBinding<'snapshot, 'candidates> {
+    fn matches(&self, permit: &AttemptPermit<'snapshot, 'candidates>) -> bool {
+        self.coordinator == permit.coordinator_id()
+            && self.attempt == permit.attempt_id()
+            && self.target.id() == permit.target()
+            && core::ptr::eq(self.snapshot, permit.snapshot())
+    }
+}
+
+/// 仅由受控 adapter 合同验证器生成的执行前拒绝合同。
+///
+/// 它持有站点、稳定错误码、adapter 版本、合同修订版与证据种类；没有公开或
+/// crate-private 的自由构造入口。真实 verifier 尚未接入，因此正常构建没有构造路径。
+pub(crate) struct VerifiedPreExecutionContract {
+    site_id: SiteId,
+    stable_error_code: u16,
+    metadata: PreExecutionContractMetadata,
+}
+
+/// 只能由当前 Attempt 签发且只能消费一次的 adapter 回放上报器。
+pub(crate) struct AdapterReplayReporter<'snapshot, 'candidates> {
+    binding: AttemptBinding<'snapshot, 'candidates>,
+}
+
+impl<'snapshot, 'candidates> AdapterReplayReporter<'snapshot, 'candidates> {
+    fn for_attempt(
+        permit: &AttemptPermit<'snapshot, 'candidates>,
+        resolved: ResolvedRouteTarget<'_, 'candidates>,
+    ) -> Result<Self, ReplayReporterError> {
+        let target = resolved.target();
+        if permit.target() != target.id() || !resolved.matches_snapshot(permit.snapshot()) {
+            return Err(ReplayReporterError::TargetMismatch);
+        }
+        Ok(Self {
+            binding: AttemptBinding {
+                coordinator: permit.coordinator_id(),
+                attempt: permit.attempt_id(),
+                target,
+                snapshot: permit.snapshot(),
+            },
+        })
+    }
+
+    /// 消费上报器，并仅在合同 Site 与当前 Target 一致时签发受信回放收据。
+    pub(crate) fn pre_execution_rejected(
+        self,
+        contract: VerifiedPreExecutionContract,
+    ) -> Result<TrustedPreExecutionRejection<'snapshot, 'candidates>, ReplayReporterError> {
+        if self.binding.target.site() != contract.site_id || contract.stable_error_code == 0 {
+            return Err(ReplayReporterError::ContractSiteMismatch);
+        }
+        Ok(TrustedPreExecutionRejection {
+            binding: self.binding,
+            metadata: contract.metadata,
+        })
+    }
+}
+
+/// 供 crate 内未来审计读取的已验证 adapter 合同摘要，不实现 Debug。
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct PreExecutionContractMetadata {
+    pub(crate) adapter_version: u16,
+    pub(crate) contract_revision: u8,
+    pub(crate) evidence_kind: u8,
 }
 
 /// 发送尝试的单调阶段。
@@ -148,17 +220,22 @@ pub(crate) enum AttemptTransitionError {
     InvalidPhase,
 }
 
-/// 只能由已登记的 crate 内适配器签发的执行前拒绝证明。
+/// 只能由 [`AdapterReplayReporter`] 消费式签发的一次受信执行前拒绝收据。
 ///
-/// 未来接入生产适配器时，签发点必须绑定到静态 adapter 合同和经验证的上游
-/// 拒绝语义；不得依据 HTTP 429、Retry-After 或错误文本直接签发。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TrustedPreExecutionRejection(());
+/// 收据不实现 `Clone`、`Copy` 或 `Debug`，并同时绑定 Coordinator、Attempt、完整
+/// Target 与 RoutingSnapshot 实例。任何绑定不完整或不匹配都会在完成时 fail closed。
+pub(crate) struct TrustedPreExecutionRejection<'snapshot, 'candidates> {
+    binding: AttemptBinding<'snapshot, 'candidates>,
+    metadata: PreExecutionContractMetadata,
+}
 
-impl TrustedPreExecutionRejection {
-    /// 为 crate 内已经验证的适配器合同创建证明。
-    pub(crate) const fn registered() -> Self {
-        Self(())
+impl<'snapshot, 'candidates> TrustedPreExecutionRejection<'snapshot, 'candidates> {
+    fn matches(&self, permit: &AttemptPermit<'snapshot, 'candidates>) -> bool {
+        self.binding.matches(permit)
+    }
+
+    const fn metadata(&self) -> PreExecutionContractMetadata {
+        self.metadata
     }
 }
 
@@ -174,6 +251,7 @@ pub(crate) struct AttemptTracker<'snapshot, 'candidates> {
     write: UpstreamWriteState,
     downstream: DownstreamCommitState,
     rate_limit_reporter_issued: bool,
+    replay_reporter_issued: bool,
 }
 
 impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
@@ -187,6 +265,7 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
             write: UpstreamWriteState::NoBytesProven,
             downstream: DownstreamCommitState::NotCommitted,
             rate_limit_reporter_issued: false,
+            replay_reporter_issued: false,
         }
     }
 
@@ -218,6 +297,22 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
         }
         let reporter = AdapterRateLimitReporter::for_attempt(&self.permit, resolved)?;
         self.rate_limit_reporter_issued = true;
+        Ok(reporter)
+    }
+
+    /// 为当前 Attempt 与同代已解析 Target 签发一次回放上报器。
+    ///
+    /// 只有 Permit、Target 与 RoutingSnapshot 实例均一致时才消耗签发机会；限流
+    /// 上报器与该能力链彼此独立，不能相互转换。
+    pub(crate) fn replay_reporter(
+        &mut self,
+        resolved: ResolvedRouteTarget<'_, 'candidates>,
+    ) -> Result<AdapterReplayReporter<'snapshot, 'candidates>, ReplayReporterError> {
+        if self.replay_reporter_issued {
+            return Err(ReplayReporterError::AlreadyReported);
+        }
+        let reporter = AdapterReplayReporter::for_attempt(&self.permit, resolved)?;
+        self.replay_reporter_issued = true;
         Ok(reporter)
     }
 
@@ -278,7 +373,7 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
         self,
         failure: FailureClass,
         retry_after_ms: Option<u64>,
-        trusted_rejection: Option<TrustedPreExecutionRejection>,
+        trusted_rejection: Option<TrustedPreExecutionRejection<'snapshot, 'candidates>>,
     ) -> AttemptCompletion<'snapshot, 'candidates> {
         let outcome = self.build_outcome(failure, retry_after_ms, trusted_rejection);
         AttemptCompletion {
@@ -291,8 +386,12 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
         &self,
         failure: FailureClass,
         retry_after_ms: Option<u64>,
-        trusted_rejection: Option<TrustedPreExecutionRejection>,
+        trusted_rejection: Option<TrustedPreExecutionRejection<'snapshot, 'candidates>>,
     ) -> AttemptOutcome {
+        let receipt_provided = trusted_rejection.is_some();
+        let contract_metadata = trusted_rejection
+            .filter(|receipt| receipt.matches(&self.permit))
+            .map(|receipt| receipt.metadata());
         let semantic_event_seen = matches!(
             self.phase,
             SendPhase::FirstSemanticEventObserved | SendPhase::DownstreamCommitted
@@ -304,8 +403,10 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
             (DeliveryState::Sent, ChargeState::Unknown)
         } else if self.write == UpstreamWriteState::Unknown {
             (DeliveryState::Unknown, ChargeState::Unknown)
-        } else if trusted_rejection.is_some() {
+        } else if contract_metadata.is_some() {
             (DeliveryState::PreExecutionRejected, ChargeState::NotCharged)
+        } else if receipt_provided {
+            (DeliveryState::Unknown, ChargeState::Unknown)
         } else {
             (DeliveryState::NotSent, ChargeState::NotCharged)
         };
@@ -317,22 +418,8 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
             write: self.write,
             downstream: self.downstream,
             charge,
+            contract_metadata,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn test_only(id: u8) -> AttemptTracker<'static, 'static> {
-        AttemptTracker::from_permit(AttemptPermit::test_only(id))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn into_outcome_for_test(
-        self,
-        failure: FailureClass,
-        retry_after_ms: Option<u64>,
-        trusted_rejection: Option<TrustedPreExecutionRejection>,
-    ) -> AttemptOutcome {
-        self.build_outcome(failure, retry_after_ms, trusted_rejection)
     }
 }
 
@@ -360,7 +447,6 @@ impl AttemptCompletion<'_, '_> {
 ///
 /// 此类型的字段与构造路径均不对外开放。`RetryGate` 可以读取它并决定下一条路径，
 /// 但调用方不能自行制造 `NotSent` 或 `PreExecutionRejected`。
-#[derive(Debug)]
 pub struct AttemptOutcome {
     failure: FailureClass,
     delivery: DeliveryState,
@@ -369,6 +455,22 @@ pub struct AttemptOutcome {
     write: UpstreamWriteState,
     downstream: DownstreamCommitState,
     charge: ChargeState,
+    contract_metadata: Option<PreExecutionContractMetadata>,
+}
+
+impl fmt::Debug for AttemptOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttemptOutcome")
+            .field("failure", &self.failure)
+            .field("delivery", &self.delivery)
+            .field("retry_after_ms", &self.retry_after_ms)
+            .field("phase", &self.phase)
+            .field("write", &self.write)
+            .field("downstream", &self.downstream)
+            .field("charge", &self.charge)
+            .finish()
+    }
 }
 
 impl AttemptOutcome {
@@ -409,16 +511,24 @@ impl AttemptOutcome {
     pub(crate) const fn retry_after_ms(&self) -> Option<u64> {
         self.retry_after_ms
     }
+
+    /// 返回仅供 crate 内审计使用的受信 adapter 合同摘要。
+    pub(crate) const fn pre_execution_contract_metadata(
+        &self,
+    ) -> Option<PreExecutionContractMetadata> {
+        self.contract_metadata
+    }
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
     #[test]
     fn runtime_source_stays_small_and_fixed_size() {
         let runtime = include_str!("attempt.rs")
-            .split("#[cfg(test)]")
+            .split("\n#[cfg(test)]\n#[allow(clippy::items_after_test_module)]\nmod tests")
             .next()
             .expect("存在运行时代码");
         let code_lines = runtime
@@ -429,7 +539,7 @@ mod tests {
             })
             .count();
         assert!(
-            code_lines <= 200,
+            code_lines <= 380,
             "Attempt 合同运行时代码过大: {code_lines} 行"
         );
         assert!(core::mem::size_of::<AttemptOutcome>() <= 32);
@@ -496,12 +606,143 @@ mod tests {
         tracker
             .first_semantic_event_observed()
             .expect("允许观察语义事件");
-        let outcome = tracker.into_outcome_for_test(
-            FailureClass::RateLimited,
-            Some(1_000),
-            Some(TrustedPreExecutionRejection::registered()),
-        );
+        let receipt = tracker.test_only_rejection();
+        let outcome =
+            tracker.into_outcome_for_test(FailureClass::RateLimited, Some(1_000), Some(receipt));
         assert_eq!(outcome.delivery(), DeliveryState::Sent);
         assert_eq!(outcome.charge_state(), ChargeState::Unknown);
+    }
+
+    #[test]
+    fn closed_contract_rejects_unknown_error_code_and_site_mismatch() {
+        let site_one = SiteId::new(1).expect("测试站点 ID 非零");
+        let site_two = SiteId::new(2).expect("测试站点 ID 非零");
+        assert!(VerifiedPreExecutionContract::test_only_registered(site_one, 0xdead).is_none());
+
+        let mut tracker = AttemptTracker::test_only(1);
+        let reporter = tracker
+            .test_only_replay_reporter()
+            .expect("测试 Attempt 可签发上报器");
+        let foreign_site_contract =
+            VerifiedPreExecutionContract::test_only_registered(site_two, 0x1001)
+                .expect("第二站点合同已登记");
+        assert!(matches!(
+            reporter.pre_execution_rejected(foreign_site_contract),
+            Err(ReplayReporterError::ContractSiteMismatch)
+        ));
+    }
+
+    #[test]
+    fn receipt_from_another_attempt_fails_closed_without_contract_metadata() {
+        let mut issuing_tracker = AttemptTracker::test_only(1);
+        let receipt = issuing_tracker.test_only_rejection();
+        let outcome = AttemptTracker::test_only(2).into_outcome_for_test(
+            FailureClass::RateLimited,
+            Some(1_000),
+            Some(receipt),
+        );
+
+        assert_eq!(outcome.delivery(), DeliveryState::Unknown);
+        assert_eq!(outcome.charge_state(), ChargeState::Unknown);
+        assert!(outcome.pre_execution_contract_metadata().is_none());
+        assert!(!format!("{outcome:?}").contains("contract_metadata"));
+    }
+
+    #[test]
+    fn downstream_commit_overrides_a_matching_receipt() {
+        let mut tracker = AttemptTracker::test_only(1);
+        let receipt = tracker.test_only_rejection();
+        tracker.downstream_committed().expect("允许下游提交");
+        let outcome = tracker.into_outcome_for_test(FailureClass::Server, None, Some(receipt));
+
+        assert_eq!(outcome.delivery(), DeliveryState::Sent);
+        assert_eq!(outcome.charge_state(), ChargeState::Unknown);
+    }
+}
+
+#[cfg(test)]
+impl VerifiedPreExecutionContract {
+    pub(crate) fn test_only_registered(site_id: SiteId, stable_error_code: u16) -> Option<Self> {
+        const TEST_STABLE_ERROR_CODE: u16 = 0x1001;
+        (stable_error_code == TEST_STABLE_ERROR_CODE).then_some(Self {
+            site_id,
+            stable_error_code,
+            metadata: PreExecutionContractMetadata {
+                adapter_version: 1,
+                contract_revision: 1,
+                evidence_kind: 1,
+            },
+        })
+    }
+}
+
+#[cfg(test)]
+impl AdapterRateLimitReporter {
+    fn test_only(target: RouteTarget) -> Self {
+        Self { target }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_rate_limit_observation(
+    target: RouteTarget,
+    scope: RateLimitScope,
+    deadline: HealthTick,
+) -> TrustedRateLimitObservation {
+    AdapterRateLimitReporter::test_only(target).report(scope, deadline)
+}
+
+#[cfg(test)]
+impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
+    pub(crate) fn test_only(id: u8) -> AttemptTracker<'static, 'static> {
+        AttemptTracker::from_permit(AttemptPermit::test_only(id))
+    }
+
+    pub(crate) fn test_only_replay_reporter(
+        &mut self,
+    ) -> Result<AdapterReplayReporter<'snapshot, 'candidates>, ReplayReporterError> {
+        if self.replay_reporter_issued {
+            return Err(ReplayReporterError::AlreadyReported);
+        }
+        let target = *self
+            .permit
+            .snapshot()
+            .resolve(self.permit.target())
+            .expect("测试许可目标存在于快照");
+        self.replay_reporter_issued = true;
+        Ok(AdapterReplayReporter {
+            binding: AttemptBinding {
+                coordinator: self.permit.coordinator_id(),
+                attempt: self.permit.attempt_id(),
+                target,
+                snapshot: self.permit.snapshot(),
+            },
+        })
+    }
+
+    pub(crate) fn test_only_rejection(
+        &mut self,
+    ) -> TrustedPreExecutionRejection<'snapshot, 'candidates> {
+        let site_id = self
+            .permit
+            .snapshot()
+            .resolve(self.permit.target())
+            .expect("测试许可目标存在于快照")
+            .site();
+        let contract = VerifiedPreExecutionContract::test_only_registered(site_id, 0x1001)
+            .expect("测试合同已登记");
+        self.test_only_replay_reporter()
+            .expect("测试 Attempt 只签发一次回放上报器")
+            .pre_execution_rejected(contract)
+            .expect("测试合同与目标站点一致")
+    }
+
+    pub(crate) fn into_outcome_for_test(
+        self,
+        failure: FailureClass,
+        retry_after_ms: Option<u64>,
+        trusted_rejection: Option<TrustedPreExecutionRejection<'static, 'static>>,
+    ) -> AttemptOutcome {
+        self.build_outcome(failure, retry_after_ms, trusted_rejection)
     }
 }
