@@ -84,9 +84,12 @@ impl CapacitySlot {
         false
     }
 
-    fn release(&self) {
-        let previous = self.active.fetch_sub(1, Ordering::Release);
-        debug_assert!(previous > 0, "Lease 释放前必须持有容量");
+    fn release(&self) -> bool {
+        self.active
+            .fetch_update(Ordering::Release, Ordering::Acquire, |active| {
+                active.checked_sub(1)
+            })
+            .is_ok()
     }
 
     #[cfg(test)]
@@ -129,10 +132,13 @@ impl Drop for SelectedLease<'_> {
             .rev()
             .flatten()
         {
-            slot.release();
+            let _released = slot.release();
+            debug_assert!(_released, "Lease 释放前必须持有额度组容量");
         }
-        self.credential.release();
-        self.account.release();
+        let _credential_released = self.credential.release();
+        debug_assert!(_credential_released, "Lease 释放前必须持有凭据容量");
+        let _account_released = self.account.release();
+        debug_assert!(_account_released, "Lease 释放前必须持有账户容量");
     }
 }
 
@@ -386,7 +392,8 @@ impl<'snapshot, 'config> SelectionLeaseRegistry<'snapshot, 'config> {
             return Err(LeaseAcquireError::CapacityUnavailable);
         }
         if !credential.try_acquire() {
-            account.release();
+            let _account_released = account.release();
+            debug_assert!(_account_released, "已取得账户容量必须能够回滚");
             return Err(LeaseAcquireError::CapacityUnavailable);
         }
 
@@ -470,10 +477,13 @@ fn rollback(
     quota_groups: &[Option<&CapacitySlot>],
 ) {
     for slot in quota_groups.iter().rev().flatten() {
-        slot.release();
+        let _released = slot.release();
+        debug_assert!(_released, "已取得额度组容量必须能够回滚");
     }
-    credential.release();
-    account.release();
+    let _credential_released = credential.release();
+    debug_assert!(_credential_released, "已取得凭据容量必须能够回滚");
+    let _account_released = account.release();
+    debug_assert!(_account_released, "已取得账户容量必须能够回滚");
 }
 
 #[cfg(test)]
@@ -1125,7 +1135,15 @@ mod tests {
 
         assert_eq!(winner_count, 1);
         assert_eq!(slot.inflight(), 1);
-        slot.release();
+        assert!(slot.release());
+        assert_eq!(slot.inflight(), 0);
+    }
+
+    #[test]
+    fn zero_capacity_release_never_wraps_counter() {
+        let slot = CapacitySlot::new(1, 1);
+
+        assert!(!slot.release());
         assert_eq!(slot.inflight(), 0);
     }
 
