@@ -1,6 +1,6 @@
 //! 单次 Attempt 的线性协调器。
 //!
-//! Coordinator 消费不可变 [`RoutePlan`](super::RoutePlan)，只签发一个活跃许可；一次
+//! Coordinator 消费不可变 [`RoutePlan`]，只签发一个活跃许可；一次
 //! 完成要么原子地签发下一个计划位置，要么永久终止。它不执行网络 I/O、等待或健康更新。
 
 use core::fmt;
