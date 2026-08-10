@@ -46,7 +46,6 @@ impl SelectionSession {
     pub(crate) const fn is_stable(self) -> bool {
         matches!(self, Self::Stable(_))
     }
-
 }
 
 /// 经同一编译快照校验的账户选择请求。
@@ -168,9 +167,14 @@ impl<'snapshot, 'config> AccountSelectionEligibility<'snapshot, 'config> {
             if !mask_includes(unit_mask, unit_index) {
                 continue;
             }
-            let has_allowed_member = selector.members().iter().enumerate().any(|(member_index, member)| {
-                mask_includes(member_mask, member_index) && member.unit() == unit.id()
-            });
+            let has_allowed_member =
+                selector
+                    .members()
+                    .iter()
+                    .enumerate()
+                    .any(|(member_index, member)| {
+                        mask_includes(member_mask, member_index) && member.unit() == unit.id()
+                    });
             if !has_allowed_member {
                 return Err(AccountSelectionEligibilityError::AllowedUnitWithoutMember);
             }

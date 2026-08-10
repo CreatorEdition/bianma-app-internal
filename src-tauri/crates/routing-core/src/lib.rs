@@ -31,8 +31,7 @@ pub use account_selector::{
     AccountSelectorCatalog, AccountSelectorCatalogError, AccountSelectorDefinition,
     AccountSelectorError, AccountSelectorMember, CredentialSelectionPolicy, QuotaSelectionUnit,
     QuotaTopologySource, SelectorAffinitySalt, SelectorRevision, MAX_ACCOUNT_SELECTORS,
-    MAX_ACCOUNT_SELECTOR_MEMBERS,
-    MAX_QUOTA_GROUPS_PER_UNIT, MAX_QUOTA_SELECTION_UNITS,
+    MAX_ACCOUNT_SELECTOR_MEMBERS, MAX_QUOTA_GROUPS_PER_UNIT, MAX_QUOTA_SELECTION_UNITS,
 };
 pub use attempt::{
     AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState, SendPhase,
@@ -43,10 +42,8 @@ use coordinator::{AttemptCoordinator, AttemptCoordinatorBuildError};
 pub use health::*;
 pub use ingress::*;
 pub use model_deployment::*;
-pub use selection_input::{
-    SelectionSession, SessionAffinityAlias, SESSION_AFFINITY_ALIAS_BYTES,
-};
 pub(crate) use selection_input::AccountSelectionRequest;
+pub use selection_input::{SelectionSession, SessionAffinityAlias, SESSION_AFFINITY_ALIAS_BYTES};
 
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -684,9 +681,7 @@ mod tests {
         AttemptCompleteError, AttemptCoordinatorBuildError, AttemptPermit, AttemptStartError,
         CoordinatorStep,
     };
-    use super::selection_input::{
-        AccountSelectionEligibility, AccountSelectionEligibilityError,
-    };
+    use super::selection_input::{AccountSelectionEligibility, AccountSelectionEligibilityError};
     use super::*;
 
     fn id(value: u64) -> RouteTargetId {
@@ -1647,10 +1642,7 @@ mod tests {
         )];
         let deployments = [deployment_definition(1, 1, 1)];
         let accounts = [account_definition(1, 1), account_definition(2, 1)];
-        let credentials = [
-            credential_definition(1, 1),
-            credential_definition(2, 2),
-        ];
+        let credentials = [credential_definition(1, 1), credential_definition(2, 2)];
         let compiled = CompiledRoutingSnapshot::compile(
             version(1),
             &route_candidates,

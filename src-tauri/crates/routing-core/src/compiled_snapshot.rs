@@ -9,8 +9,7 @@ use super::{
     AccountSelectionRequest, AccountSelectorCatalog, AccountSelectorCatalogError,
     AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError, ModelDeploymentCatalog,
     ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan,
-    RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy, SelectionSession,
-    SnapshotVersion,
+    RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy, SelectionSession, SnapshotVersion,
 };
 use core::fmt;
 
