@@ -8,8 +8,10 @@ use super::{
     AccountCatalog, AccountCatalogError, AccountCredentialDefinitions, AccountSelectionCandidates,
     AccountSelectionRequest, AccountSelectorCatalog, AccountSelectorCatalogError,
     AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError, ModelDeploymentCatalog,
-    ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan,
-    RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy, SelectionSession, SnapshotVersion,
+    ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError,
+    QuotaGroupRuntimeDefinitions, RouteCandidate, RoutePlan, RouteStageId, RouteTarget,
+    RoutingSnapshot, RoutingStrategy, SelectionRuntimeLayout, SelectionRuntimeLayoutError,
+    SelectionSession, SnapshotVersion, MAX_TRACKED_QUOTA_GROUPS,
 };
 use core::fmt;
 
@@ -290,5 +292,59 @@ impl<'a> CompiledRoutingSnapshot<'a> {
             return Err(PlanError::StaleSnapshot);
         }
         Ok(AccountSelectionCandidates::new(resolved))
+    }
+
+    /// 验证全局额度组定义，并创建绑定当前 RoutingSnapshot 实例的只读静态布局。
+    ///
+    /// 仅扫描全部可达 RouteCandidate 所引用的 Selector、Unit 与 QuotaGroup。相同 Group
+    /// 即使跨多个 Selector 出现，也只占用一个固定槽；超过 256、缺失定义或输入中存在
+    /// 未被可达候选使用的定义均拒绝激活。该工厂不创建 Registry、Lease 或在途计数。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn selection_runtime_layout<'snapshot>(
+        &'snapshot self,
+        definitions: &QuotaGroupRuntimeDefinitions<'a>,
+    ) -> Result<SelectionRuntimeLayout<'snapshot, 'a>, SelectionRuntimeLayoutError> {
+        let mut reachable = [None; MAX_TRACKED_QUOTA_GROUPS];
+        let mut reachable_len = 0usize;
+
+        for candidate in self.routing.candidates() {
+            let selector = self
+                .selectors
+                .get(candidate.target().account_selector())
+                .ok_or(SelectionRuntimeLayoutError::UnknownReachableSelector)?;
+            for unit in selector.units() {
+                for group in unit.quota_groups() {
+                    if reachable[..reachable_len]
+                        .iter()
+                        .flatten()
+                        .any(|previous| *previous == *group)
+                    {
+                        continue;
+                    }
+                    if reachable_len == MAX_TRACKED_QUOTA_GROUPS {
+                        return Err(SelectionRuntimeLayoutError::TooManyReachableGroups);
+                    }
+                    reachable[reachable_len] = Some(*group);
+                    reachable_len += 1;
+                }
+            }
+        }
+
+        for group in reachable[..reachable_len].iter().flatten() {
+            if definitions.get(*group).is_none() {
+                return Err(SelectionRuntimeLayoutError::MissingReachableGroupDefinition);
+            }
+        }
+        for definition in definitions.as_slice() {
+            let is_reachable = reachable[..reachable_len]
+                .iter()
+                .flatten()
+                .any(|group| *group == definition.id());
+            if !is_reachable {
+                return Err(SelectionRuntimeLayoutError::UnusedDefinition);
+            }
+        }
+
+        Ok(SelectionRuntimeLayout::new(&self.routing, *definitions))
     }
 }

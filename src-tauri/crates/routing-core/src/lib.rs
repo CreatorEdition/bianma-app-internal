@@ -24,6 +24,7 @@ mod health;
 mod ingress;
 mod model_deployment;
 mod selection_input;
+mod selection_runtime_layout;
 
 pub use account_credential::*;
 pub(crate) use account_selector::AccountSelectionCandidates;
@@ -44,6 +45,11 @@ pub use ingress::*;
 pub use model_deployment::*;
 pub(crate) use selection_input::AccountSelectionRequest;
 pub use selection_input::{SelectionSession, SessionAffinityAlias, SESSION_AFFINITY_ALIAS_BYTES};
+pub(crate) use selection_runtime_layout::SelectionRuntimeLayout;
+pub use selection_runtime_layout::{
+    QuotaGroupRuntimeDefinition, QuotaGroupRuntimeDefinitions, QuotaGroupRuntimeDefinitionsError,
+    SelectionRuntimeLayoutError, MAX_TRACKED_QUOTA_GROUPS,
+};
 
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -366,6 +372,15 @@ impl<'a> RoutingSnapshot<'a> {
     /// 返回最大尝试数。
     pub const fn max_attempts(&self) -> u8 {
         self.max_attempts
+    }
+
+    /// 返回已通过快照形状验证的全部候选，仅供 crate 内编译期合同扫描。
+    ///
+    /// 请求热路径不能使用此入口建立动态额度状态；全局额度组布局只允许在快照激活前
+    /// 扫描这些候选。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn candidates(&self) -> &'a [RouteCandidate] {
+        self.candidates
     }
 
     fn resolve(&self, target_id: RouteTargetId) -> Option<&RouteTarget> {
@@ -746,6 +761,13 @@ mod tests {
         )
     }
 
+    fn runtime_definition(group_value: u64, max_inflight: u16) -> QuotaGroupRuntimeDefinition {
+        QuotaGroupRuntimeDefinition::new(
+            QuotaGroupId::new(group_value).expect("测试额度组 ID 非零"),
+            core::num::NonZeroU16::new(max_inflight).expect("测试在途上限非零"),
+        )
+    }
+
     fn selector_definition<'a>(
         selector_value: u64,
         units: &'a [QuotaSelectionUnit<'a>],
@@ -995,6 +1017,321 @@ mod tests {
         assert_eq!(
             RoutingSnapshot::new(version(1), &two_stages, RoutingStrategy::Priority, 1).err(),
             Some(PlanError::InsufficientMaxAttemptsForStages)
+        );
+    }
+
+    #[test]
+    fn global_quota_runtime_definition_input_rejects_invalid_shape() {
+        assert_eq!(
+            QuotaGroupRuntimeDefinitions::new(&[]),
+            Err(QuotaGroupRuntimeDefinitionsError::Empty)
+        );
+
+        let duplicate = [runtime_definition(1, 1), runtime_definition(1, 2)];
+        assert_eq!(
+            QuotaGroupRuntimeDefinitions::new(&duplicate),
+            Err(QuotaGroupRuntimeDefinitionsError::DuplicateDefinition)
+        );
+
+        let too_many: [QuotaGroupRuntimeDefinition; MAX_TRACKED_QUOTA_GROUPS + 1] =
+            core::array::from_fn(|index| runtime_definition((index + 1) as u64, 1));
+        assert_eq!(
+            QuotaGroupRuntimeDefinitions::new(&too_many),
+            Err(QuotaGroupRuntimeDefinitionsError::TooMany)
+        );
+
+        let single = [runtime_definition(1, 3)];
+        let definitions = QuotaGroupRuntimeDefinitions::new(&single).expect("单一定义有效");
+        assert_eq!(definitions.len(), 1);
+        assert!(!definitions.is_empty());
+        assert_eq!(definitions.as_slice(), &single);
+    }
+
+    #[test]
+    fn global_quota_runtime_layout_deduplicates_shared_reachable_group() {
+        let group = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let first_unit = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &group,
+        )];
+        let second_unit = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(2).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &group,
+        )];
+        let first_members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let second_members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(2).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors = [
+            selector_definition(1, &first_unit, &first_members),
+            selector_definition(2, &second_unit, &second_members),
+        ];
+        let candidates = [
+            RouteCandidate::ready(stage(1), target_with_binding(1, 1, 1, 1, 1), 0),
+            RouteCandidate::ready(stage(2), target_with_binding(2, 1, 2, 1, 2), 0),
+        ];
+        let deployments = [
+            deployment_definition(1, 1, 1),
+            deployment_definition(2, 1, 1),
+        ];
+        let accounts = [account_definition(1, 1)];
+        let credentials = [credential_definition(1, 1)];
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates,
+            RoutingStrategy::Priority,
+            2,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("共享额度组的编译快照有效");
+        let runtime = [runtime_definition(1, 5)];
+        let definitions = QuotaGroupRuntimeDefinitions::new(&runtime).expect("共享额度组定义有效");
+        let layout = compiled
+            .selection_runtime_layout(&definitions)
+            .expect("跨 Selector 共享的 Group 只占一个布局项");
+
+        assert_eq!(layout.max_inflight(group[0]), core::num::NonZeroU16::new(5));
+        assert_eq!(
+            layout.max_inflight(QuotaGroupId::new(2).expect("测试 ID 非零")),
+            None
+        );
+        assert!(core::mem::size_of::<QuotaGroupRuntimeDefinitions<'_>>() <= 16);
+        assert!(core::mem::size_of::<SelectionRuntimeLayout<'_, '_>>() <= 32);
+    }
+
+    #[test]
+    fn global_quota_runtime_layout_rejects_missing_and_unused_definitions() {
+        let reachable_group = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let unreachable_group = [QuotaGroupId::new(2).expect("测试额度组 ID 非零")];
+        let reachable_unit = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &reachable_group,
+        )];
+        let unreachable_unit = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(2).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &unreachable_group,
+        )];
+        let reachable_members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let unreachable_members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(2).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors = [
+            selector_definition(1, &reachable_unit, &reachable_members),
+            selector_definition(2, &unreachable_unit, &unreachable_members),
+        ];
+        let candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 1, 1, 1, 1),
+            0,
+        )];
+        let deployments = [deployment_definition(1, 1, 1)];
+        let accounts = [account_definition(1, 1)];
+        let credentials = [credential_definition(1, 1)];
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates,
+            RoutingStrategy::Priority,
+            1,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("包含不可达 Selector 的编译快照有效");
+
+        let missing = [runtime_definition(2, 1)];
+        let missing = QuotaGroupRuntimeDefinitions::new(&missing).expect("输入形状有效");
+        assert!(matches!(
+            compiled.selection_runtime_layout(&missing),
+            Err(SelectionRuntimeLayoutError::MissingReachableGroupDefinition)
+        ));
+
+        let unused = [runtime_definition(1, 1), runtime_definition(2, 1)];
+        let unused = QuotaGroupRuntimeDefinitions::new(&unused).expect("输入形状有效");
+        assert!(matches!(
+            compiled.selection_runtime_layout(&unused),
+            Err(SelectionRuntimeLayoutError::UnusedDefinition)
+        ));
+    }
+
+    #[test]
+    fn global_quota_runtime_layout_rejects_257_unique_reachable_groups() {
+        let groups: [QuotaGroupId; MAX_TRACKED_QUOTA_GROUPS + 1] = core::array::from_fn(|index| {
+            QuotaGroupId::new((index + 1) as u64).expect("测试额度组 ID 非零")
+        });
+        let units: [QuotaSelectionUnit<'_>; MAX_QUOTA_SELECTION_UNITS] =
+            core::array::from_fn(|index| {
+                let group_start = index * MAX_QUOTA_GROUPS_PER_UNIT;
+                QuotaSelectionUnit::new(
+                    QuotaSelectionUnitId::new((index + 1) as u64).expect("测试额度单元 ID 非零"),
+                    core::num::NonZeroU16::new(1).expect("测试权重非零"),
+                    &groups[group_start..group_start + MAX_QUOTA_GROUPS_PER_UNIT],
+                )
+            });
+        let members: [AccountSelectorMember; MAX_ACCOUNT_SELECTOR_MEMBERS] =
+            core::array::from_fn(|index| {
+                AccountSelectorMember::new(
+                    AccountId::new(1).expect("测试账户 ID 非零"),
+                    CredentialId::new((index + 1) as u64).expect("测试凭据 ID 非零"),
+                    QuotaSelectionUnitId::new((index + 1) as u64).expect("测试额度单元 ID 非零"),
+                    0,
+                )
+            });
+        let first_selector = AccountSelectorDefinition::new(
+            AccountSelectorId::new(1).expect("账户选择合同 ID 非零"),
+            SelectorRevision::new(1).expect("账户选择合同修订非零"),
+            SelectorAffinitySalt::new([1; 16]),
+            CredentialSelectionPolicy::PriorityFailover,
+            QuotaTopologySource::UserConfirmed,
+            &units,
+            &members,
+        )
+        .expect("256 个额度组的 Selector 合同有效");
+        let last_group = [groups[MAX_TRACKED_QUOTA_GROUPS]];
+        let last_unit = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &last_group,
+        )];
+        let last_members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let last_selector = selector_definition(2, &last_unit, &last_members);
+        let selectors = [first_selector, last_selector];
+        let candidates = [
+            RouteCandidate::ready(stage(1), target_with_binding(1, 1, 1, 1, 1), 0),
+            RouteCandidate::ready(stage(2), target_with_binding(2, 1, 2, 1, 2), 0),
+        ];
+        let deployments = [
+            deployment_definition(1, 1, 1),
+            deployment_definition(2, 1, 1),
+        ];
+        let accounts = [account_definition(1, 1)];
+        let credentials: [CredentialDefinition; MAX_ACCOUNT_SELECTOR_MEMBERS] =
+            core::array::from_fn(|index| credential_definition((index + 1) as u64, 1));
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates,
+            RoutingStrategy::Priority,
+            2,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("257 个可达额度组之前的快照编译有效");
+        let runtime: [QuotaGroupRuntimeDefinition; MAX_TRACKED_QUOTA_GROUPS] =
+            core::array::from_fn(|index| {
+                QuotaGroupRuntimeDefinition::new(
+                    groups[index],
+                    core::num::NonZeroU16::new(1).expect("测试在途上限非零"),
+                )
+            });
+        let definitions =
+            QuotaGroupRuntimeDefinitions::new(&runtime).expect("256 个静态定义输入有效");
+
+        assert!(matches!(
+            compiled.selection_runtime_layout(&definitions),
+            Err(SelectionRuntimeLayoutError::TooManyReachableGroups)
+        ));
+    }
+
+    #[test]
+    fn global_quota_runtime_layout_rejects_same_version_foreign_resolved_target() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let units = [QuotaSelectionUnit::new(
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+            0,
+        )];
+        let selectors = [selector_definition(1, &units, &members)];
+        let candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 1, 1, 1, 1),
+            0,
+        )];
+        let deployments = [deployment_definition(1, 1, 1)];
+        let accounts = [account_definition(1, 1)];
+        let credentials = [credential_definition(1, 1)];
+        let first = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates,
+            RoutingStrategy::Priority,
+            1,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("第一个编译快照有效");
+        let second = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates,
+            RoutingStrategy::Priority,
+            1,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("第二个同版本快照有效");
+        let runtime = [runtime_definition(1, 2)];
+        let definitions = QuotaGroupRuntimeDefinitions::new(&runtime).expect("静态定义输入有效");
+        let first_layout = first
+            .selection_runtime_layout(&definitions)
+            .expect("第一个布局有效");
+        let second_layout = second
+            .selection_runtime_layout(&definitions)
+            .expect("第二个布局有效");
+        let first_eligibility = eligibility(first.routing());
+        let first_plan = RoutePlanner::plan(
+            &routed(first.routing().version()),
+            first.routing(),
+            &first_eligibility,
+            0,
+        )
+        .expect("第一个快照可规划");
+        let first_resolved = first
+            .resolve_plan_target(&first_plan, 0)
+            .expect("计划绑定第一个快照")
+            .expect("首个解析目标存在");
+
+        assert_eq!(
+            first_layout
+                .max_inflight_for(first_resolved, groups[0])
+                .expect("同快照目标可查询"),
+            core::num::NonZeroU16::new(2)
+        );
+        assert_eq!(
+            second_layout.max_inflight_for(first_resolved, groups[0]),
+            Err(PlanError::StaleSnapshot)
         );
     }
 
