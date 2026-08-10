@@ -1,8 +1,8 @@
-//! routing v2 的系统凭据库能力 PoC。
+//! routing v2 的系统凭据库适配边界。
 //!
-//! 此模块只验证操作系统凭据库能否承载未来 Vault 的根材料；它不读取旧 Provider
-//! 配置，不写 SQLite，不暴露 Tauri 命令，也不解析、迁移或发送任何用户 Secret。
-//! 真正的 Vault、SecretResolver 和迁移 Saga 必须在本 PoC 通过独立审计后另行实现。
+//! 此模块保留不写入的能力 PoC，并提供既有设备 root key 的只读加载器；它不读取旧
+//! Provider 配置，不写 SQLite，不暴露 Tauri 命令，也不解析、迁移或发送任何用户
+//! Secret。真正的加密 Vault、SecretResolver 和迁移 Saga 仍须在独立安全切片中实现。
 
 mod root_key_loader;
 
