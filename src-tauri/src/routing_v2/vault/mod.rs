@@ -4,12 +4,16 @@
 //! keyring、不持久化材料或密文，也不接入 SQLite、Saga、IPC、Proxy、HTTP 或网络。
 //! `SealedPayload` 不是后续 S2 磁盘 envelope 协议。
 
+mod envelope_v1;
+
 use aes_gcm_siv::{
     aead::{rand_core::RngCore, Aead, KeyInit, OsRng, Payload},
     Aes256GcmSiv, Nonce,
 };
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
+
+pub(crate) use envelope_v1::{PersistentVaultContext, PersistentVaultEnvelopeV1};
 
 const ROOT_KEY_LENGTH: usize = 32;
 const NONCE_LENGTH: usize = 12;
@@ -34,6 +38,8 @@ pub(crate) enum VaultCryptoError {
     SealFailed,
     #[error("vault_open_failed")]
     OpenFailed,
+    #[error("vault_envelope_malformed")]
+    EnvelopeMalformed,
 }
 
 /// 短生命周期的 256-bit 根密钥句柄。
@@ -105,6 +111,32 @@ impl RootKeyHandle {
         let plaintext = Zeroizing::new(plaintext);
 
         Ok(consume(plaintext.as_slice()))
+    }
+
+    /// 以受控设备本地上下文密封可持久化 envelope 的内存表示。
+    ///
+    /// 此入口只建立协议合同，不会执行文件、SQLite、keyring 或备份 I/O；root key 缺失、
+    /// 不可用或未来无法认证的密文均必须由调用方失败关闭。
+    pub(crate) fn seal_persistent(
+        &self,
+        context: &PersistentVaultContext,
+        plaintext: &[u8],
+    ) -> Result<PersistentVaultEnvelopeV1, VaultCryptoError> {
+        let mut nonce_source = OsCsprngNonceSource;
+        envelope_v1::seal_with_nonce_source(self, context, plaintext, &mut nonce_source)
+    }
+
+    /// 认证打开设备本地持久化 envelope，并只将明文交给受控闭包消费。
+    ///
+    /// 预期 record UUID 必须与 envelope 内已认证 header 相同；本入口不返回裸明文，
+    /// 也不表示真实 Vault、备份或跨设备恢复已被接线。
+    pub(crate) fn open_persistent<T>(
+        &self,
+        context: &PersistentVaultContext,
+        envelope: &PersistentVaultEnvelopeV1,
+        consume: impl FnOnce(&[u8]) -> T,
+    ) -> Result<T, VaultCryptoError> {
+        envelope_v1::open(self, context, envelope, consume)
     }
 
     /// 只保留在模块内，以便单测证明 nonce 由内部 source 生成。
