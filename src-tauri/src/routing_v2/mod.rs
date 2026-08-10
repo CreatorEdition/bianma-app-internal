@@ -5,4 +5,5 @@
 
 mod migration_saga;
 pub(crate) mod routing_store;
+mod vault;
 pub(crate) mod vault_adapter;

@@ -49,4 +49,10 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 cargo test --manifest-path src-tauri/Cargo.toml --locked -p bianma-app routing_v2::vault_adapter::tests::native_keyring_round_trip_writes_no_persistent_test_credential --lib -- --ignored
 ```
 
+`routing_v2::vault` 是与 capability PoC 分离的纯内存加密基础：宿主 crate 显式锁定 `aes-gcm-siv 0.11.1`、`aes 0.8.4` 的 `zeroize` feature 与 `zeroize 1.8.2`，只验证既有 32-byte root key 的短生命周期 AEAD 使用。它不执行 keyring I/O、不自动创建或覆盖 root key、不持久化密文，也不接入 SQLite、迁移 Saga、Proxy、Tauri IPC 或任何 Provider Secret；密文格式不是后续持久化 Vault 协议。
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml --locked -p bianma-app routing_v2::vault::tests --lib
+```
+
 `routing-core` 当前仍是未接入生产转发链的纯 Rust 领域切片：仅基于内存快照做闭集入站分类、有界路由计划与保守重试决策，不读取数据库/文件、不启动后台线程、不执行网络请求，也不承载 ContextPipeline；本地 compact 可被分类为本地 handler，但压缩、记忆和图的实现不会进入模型 RoutePlan 或该核心。
