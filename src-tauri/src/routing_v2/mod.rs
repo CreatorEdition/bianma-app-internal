@@ -4,3 +4,4 @@
 //! 发送链路，且 routing-core 始终保持为独立的纯 Rust crate。
 
 pub(crate) mod routing_store;
+pub(crate) mod vault_adapter;

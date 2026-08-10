@@ -8,6 +8,7 @@
 
 ## 当前状态
 
+- ✅ 已完成（2026-08-10）：完成 routing v2 的系统凭据库 capability PoC。固定 `keyring 3.6.3` 的按平台后端；`check_platform_capability` 只验证 Entry 句柄构造及封闭错误收敛，Windows 受控 ignored canary 已实际验证随机值写入、读取与删除。PoC 不写 SQLite、不读旧 Provider JSON、不经 Tauri IPC、不接入 Proxy 或真实发送；Vault 定向测试 4/4、受控原生 canary 1/1、数据库回归 34/34、fmt、编译与 diff 检查通过，独立 Terra 复审 ACCEPT。Linux/macOS、打包产物、真实 Vault、Credential/Binding/Grant schema 与 Secret Saga 均留在后续独立切片。
 - ✅ 已完成（2026-08-10）：完成 Phase 2 的 `LegacyProviderCatalogReadPort` 独立切片。它只从旧 SQLite 固定投影 `providers(id, app_type, name, website_url)` 与 `provider_endpoints(id, provider_id, app_type, url)`，兼容旧 schema 缺少 `website_url`；不读取旧 Provider DTO/Service、配置 JSON 或 Vault，不写迁移，不接 Proxy 或真实发送。无 userinfo/query/fragment 的 HTTP(S) URL 才进入无 Secret 目录，不安全 URL 仅以封闭 failure code 隔离；重复 Provider/Endpoint 复合来源 fail closed。目录定向 8/8、数据库定向 34/34、fmt、编译与 diff 检查通过，独立 Terra 安全/架构复审 ACCEPT。
 - ✅ 已完成（2026-08-10）：完成 Phase 2 首个 additive 目录切片。Schema v7→v8 仅新增本机无 Secret 的 `routing_v2_store_state`、migration journal、Site、Endpoint、Account、ModelDeployment；每个旧 Provider 的实际导入仍留给后续窄读取端口，当前不读取 `settings_config` / `meta`，不创建 Credential、Binding、Grant、Vault、Quota 或执行路径。完整 `routing_v2_*` 命名空间已从便携 SQL、WebDAV SQL、自动同步触发与旧 SQL 导入统一隔离；普通与同步导入恢复当前设备的 v2 行。新增迁移幂等、跨 Site 外键、Endpoint 去重、导出/导入隔离与 Site→Endpoint→Deployment 恢复回归；数据库定向 34/34、fmt 与 diff 检查通过，独立 Terra 复审 ACCEPT。
 - ⚠️ 待处理（既有基线，未在本切片修改）：`cargo test -p bianma-app --lib` 的 706 项中有 3 项 OpenClaw 配置/会话测试失败（临时路径、备份断言、JSON fixture 转义）；本切片相关数据库 34 项均通过。
