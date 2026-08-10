@@ -24,6 +24,7 @@
 //! ```
 
 pub(crate) mod backup;
+mod backup_scope;
 mod dao;
 mod migration;
 mod schema;

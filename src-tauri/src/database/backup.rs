@@ -2,7 +2,10 @@
 //!
 //! 提供 SQL 导出/导入和二进制快照备份功能。
 
-use super::{is_routing_v2_table, lock_conn, Database, ROUTING_V2_TABLE_PREFIX};
+use super::{
+    backup_scope::{local_only_relation, local_only_relations},
+    is_routing_v2_table, lock_conn, Database, ROUTING_V2_TABLE_PREFIX,
+};
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
 use chrono::{Local, Utc};
@@ -11,10 +14,13 @@ use rusqlite::types::ValueRef;
 use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tempfile::NamedTempFile;
 
 const LEGACY_SQL_EXPORT_HEADER: &str = "-- CC Switch SQLite 导出";
 const BRANDED_SQL_EXPORT_HEADER: &str = "-- bianma.ai SQLite 导出";
+const SNAPSHOT_COPY_MAX_ATTEMPTS: usize = 3;
+const SNAPSHOT_COPY_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 /// Tables whose data rows are skipped when exporting for WebDAV sync.
 const SYNC_SKIP_TABLES: &[&str] = &[
@@ -49,12 +55,14 @@ impl Database {
     /// `routing_v2_*` 属于设备本地控制面，不会进入任何 SQL 导出。
     pub fn export_sql_string(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
+        Self::validate_local_only_registry(&snapshot)?;
         Self::dump_sql(&snapshot, &[])
     }
 
     /// Export SQL for sync (WebDAV), skipping local-only tables' data
     pub fn export_sql_string_for_sync(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
+        Self::validate_local_only_registry(&snapshot)?;
         Self::dump_sql(&snapshot, SYNC_SKIP_TABLES)
     }
 
@@ -214,6 +222,8 @@ impl Database {
         preserve_tables: &[&str],
         preserve_routing_v2: bool,
     ) -> Result<Vec<String>, AppError> {
+        Self::validate_local_only_registry(source_conn)?;
+
         let mut tables = Vec::new();
         for table in preserve_tables {
             if Self::table_exists(source_conn, table)? {
@@ -236,25 +246,151 @@ impl Database {
         for row in rows {
             let table = row.map_err(|e| AppError::Database(e.to_string()))?;
             if is_routing_v2_table(&table) {
-                routing_v2_tables.push(table);
+                let relation = local_only_relation(&table)
+                    .ok_or_else(|| Self::unregistered_local_only_table_error())?;
+                routing_v2_tables.push((relation.restore_rank, table));
             }
         }
-        routing_v2_tables.sort_by_key(|table| Self::routing_v2_restore_rank(table));
-        tables.extend(routing_v2_tables);
+        routing_v2_tables.sort_by_key(|(restore_rank, table)| (*restore_rank, table.clone()));
+        tables.extend(routing_v2_tables.into_iter().map(|(_, table)| table));
         Ok(tables)
     }
 
-    /// 当前无 Secret 目录的外键恢复顺序；未知将来表排在其后，要求其迁移自行
-    /// 保持与既有目录兼容，或在引入新外键时同步扩展此排序。
-    fn routing_v2_restore_rank(table: &str) -> u8 {
-        match table {
-            "routing_v2_store_state" => 0,
-            "routing_v2_sites" => 1,
-            "routing_v2_endpoints" | "routing_v2_accounts" => 2,
-            "routing_v2_model_deployments" => 3,
-            "routing_v2_migration_journal" => 4,
-            _ => 5,
+    /// 校验当前数据库没有未登记的 routing v2 表。
+    ///
+    /// 新增设备本地表时，必须先在静态 registry 中声明其恢复顺序；不能依赖名称
+    /// 前缀的静默兜底，否则跨设备恢复的外键与隔离边界无法证明。
+    fn validate_local_only_registry(conn: &Connection) -> Result<(), AppError> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                 ORDER BY name",
+            )
+            .map_err(|error| AppError::Database(format!("读取本机表名失败: {error}")))?;
+        let tables = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| AppError::Database(format!("读取本机表名失败: {error}")))?;
+
+        for table in tables {
+            let table = table.map_err(|error| AppError::Database(error.to_string()))?;
+            if is_routing_v2_table(&table) && local_only_relation(&table).is_none() {
+                return Err(Self::unregistered_local_only_table_error());
+            }
         }
+        Ok(())
+    }
+
+    fn unregistered_local_only_table_error() -> AppError {
+        AppError::localized(
+            "backup.local_only_table_unregistered",
+            "发现未登记的设备本地 routing v2 表，已拒绝备份或恢复。",
+            "An unregistered device-local routing v2 table was found; backup or restore was rejected.",
+        )
+    }
+
+    /// 从临时快照剥离所有已登记的设备本地表及其关联对象。
+    ///
+    /// 该操作只作用于内存恢复副本或待落盘的备份副本，绝不直接修改当前设备的主库。
+    fn strip_local_only_relations(conn: &Connection) -> Result<(), AppError> {
+        Self::validate_local_only_registry(conn)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master
+                 WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+                 ORDER BY type, name",
+            )
+            .map_err(|error| AppError::Database(format!("读取本机对象失败: {error}")))?;
+        let objects = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|error| AppError::Database(format!("读取本机对象失败: {error}")))?;
+
+        let mut dependent_objects = Vec::new();
+        for object in objects {
+            let (object_type, name, table_name, sql) =
+                object.map_err(|error| AppError::Database(error.to_string()))?;
+            if object_type != "table"
+                && Self::object_uses_local_only_namespace(&name, &table_name, &sql)
+            {
+                let drop_order = match object_type.as_str() {
+                    "view" => 0,
+                    "trigger" => 1,
+                    "index" => 2,
+                    _ => continue,
+                };
+                dependent_objects.push((drop_order, object_type, name));
+            }
+        }
+
+        dependent_objects.sort_by_key(|(drop_order, _, name)| (*drop_order, name.clone()));
+        for (_, object_type, name) in dependent_objects {
+            let quoted_name = Self::quote_sqlite_identifier(&name);
+            conn.execute_batch(&format!("DROP {object_type} IF EXISTS {quoted_name};"))
+                .map_err(|error| AppError::Database(format!("剥离设备本地对象失败: {error}")))?;
+        }
+
+        let mut relations = local_only_relations().to_vec();
+        relations.sort_by_key(|relation| relation.restore_rank);
+        for relation in relations.into_iter().rev() {
+            let quoted_table = Self::quote_sqlite_identifier(relation.table);
+            conn.execute_batch(&format!("DROP TABLE IF EXISTS {quoted_table};"))
+                .map_err(|error| AppError::Database(format!("剥离设备本地表失败: {error}")))?;
+        }
+
+        Self::ensure_local_only_namespace_stripped(conn)
+    }
+
+    fn ensure_local_only_namespace_stripped(conn: &Connection) -> Result<(), AppError> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT name, tbl_name, sql FROM sqlite_master
+                 WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+                 ORDER BY name",
+            )
+            .map_err(|error| AppError::Database(format!("读取本机对象失败: {error}")))?;
+        let objects = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|error| AppError::Database(format!("读取本机对象失败: {error}")))?;
+
+        for object in objects {
+            let (name, table_name, sql) =
+                object.map_err(|error| AppError::Database(error.to_string()))?;
+            if Self::object_uses_local_only_namespace(&name, &table_name, &sql) {
+                return Err(AppError::localized(
+                    "backup.local_only_namespace_not_stripped",
+                    "设备本地 routing v2 命名空间未能从备份副本完全剥离。",
+                    "The device-local routing v2 namespace could not be fully removed from the backup copy.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn object_uses_local_only_namespace(name: &str, table_name: &str, sql: &str) -> bool {
+        is_routing_v2_table(name)
+            || is_routing_v2_table(table_name)
+            || sql
+                .as_bytes()
+                .windows(ROUTING_V2_TABLE_PREFIX.len())
+                .any(|window| window.eq_ignore_ascii_case(ROUTING_V2_TABLE_PREFIX.as_bytes()))
+    }
+
+    fn quote_sqlite_identifier(identifier: &str) -> String {
+        format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 
     fn restore_tables(
@@ -386,6 +522,8 @@ impl Database {
             return Ok(None);
         }
 
+        let snapshot = self.snapshot_for_portable_backup()?;
+
         let backup_dir = db_path
             .parent()
             .ok_or_else(|| AppError::Config("无效的数据库路径".to_string()))?
@@ -403,19 +541,46 @@ impl Database {
             counter += 1;
         }
 
-        {
-            let conn = lock_conn!(self.conn);
-            let mut dest_conn =
-                Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
-            let backup = Backup::new(&conn, &mut dest_conn)
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            backup
-                .step(-1)
-                .map_err(|e| AppError::Database(e.to_string()))?;
-        }
+        let mut dest_conn =
+            Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
+        Self::copy_snapshot(&snapshot, &mut dest_conn)?;
 
         Self::cleanup_db_backups(&backup_dir)?;
         Ok(Some(backup_path))
+    }
+
+    /// 将来源快照完整复制到目标连接；调用方负责先完成本机表的隔离或恢复准备。
+    fn copy_snapshot(
+        source_conn: &Connection,
+        target_conn: &mut Connection,
+    ) -> Result<(), AppError> {
+        let backup = Backup::new(source_conn, target_conn)
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        for attempt in 0..SNAPSHOT_COPY_MAX_ATTEMPTS {
+            match backup
+                .step(-1)
+                .map_err(|error| AppError::Database(error.to_string()))?
+            {
+                rusqlite::backup::StepResult::Done => return Ok(()),
+                _ if attempt + 1 < SNAPSHOT_COPY_MAX_ATTEMPTS => {
+                    // 只在低频备份/恢复路径做有界等待，避免 Busy/Locked 被误判为成功。
+                    std::thread::sleep(SNAPSHOT_COPY_RETRY_DELAY);
+                }
+                _ => {
+                    return Err(AppError::Database(
+                        "数据库快照复制未能在限定重试次数内完成".to_string(),
+                    ));
+                }
+            }
+        }
+        unreachable!("有界快照复制循环必须在成功或失败时返回")
+    }
+
+    /// 创建可写入二进制备份的临时快照，并剥离设备本地表。
+    fn snapshot_for_portable_backup(&self) -> Result<Connection, AppError> {
+        let snapshot = self.snapshot_to_memory()?;
+        Self::strip_local_only_relations(&snapshot)?;
+        Ok(snapshot)
     }
 
     /// 清理旧的数据库备份，保留最新的 N 个
@@ -470,6 +635,8 @@ impl Database {
 
     /// 导出数据库为 SQL 文本
     fn dump_sql(conn: &Connection, skip_tables: &[&str]) -> Result<String, AppError> {
+        Self::validate_local_only_registry(conn)?;
+
         let mut output = String::new();
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let user_version: i64 = conn
@@ -508,7 +675,7 @@ impl Database {
                 continue;
             }
 
-            if is_routing_v2_table(&name) || is_routing_v2_table(&table_name) {
+            if Self::object_uses_local_only_namespace(&name, &table_name, &sql) {
                 continue;
             }
 
@@ -522,7 +689,7 @@ impl Database {
 
         // 导出数据
         for table in tables {
-            if is_routing_v2_table(&table) || skip_tables.iter().any(|t| *t == table) {
+            if local_only_relation(&table).is_some() || skip_tables.iter().any(|t| *t == table) {
                 continue;
             }
             let columns = Self::get_table_columns(conn, &table)?;
@@ -666,26 +833,40 @@ impl Database {
             .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
             .unwrap_or_default();
 
-        // Step 2: Open the backup file and restore it to the main database
+        // Step 2: 在临时库中恢复外部快照，并回填当前设备的本机表。
         let source_conn =
             Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
-
-        {
-            let mut main_conn = lock_conn!(self.conn);
-            let backup = Backup::new(&source_conn, &mut main_conn)
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            backup
-                .step(-1)
-                .map_err(|e| AppError::Database(e.to_string()))?;
-        }
-
-        // Step 3: Run schema migrations (backup may be from an older version)
-        self.create_tables()?;
-        self.apply_schema_migrations()?;
-        self.ensure_model_pricing_seeded()?;
+        self.restore_from_connection_preserving_local_only(&source_conn)?;
 
         log::info!("Database restored from backup: {filename}, safety backup: {safety_id}");
         Ok(safety_id)
+    }
+
+    /// 将外部快照替换为当前数据库，同时严格保留当前设备的本机表。
+    ///
+    /// 外部 `.db` 可能来自另一设备或历史版本，因此它只能贡献可移植数据；任何
+    /// 已登记的 `routing_v2_*` 表均会在临时库剥离，并按登记顺序从当前设备快照
+    /// 回填。准备失败时主库保持不变。
+    fn restore_from_connection_preserving_local_only(
+        &self,
+        source_conn: &Connection,
+    ) -> Result<(), AppError> {
+        Self::validate_local_only_registry(source_conn)?;
+
+        let local_snapshot = self.snapshot_to_memory()?;
+        let local_tables = Self::collect_local_tables_to_preserve(&local_snapshot, &[], true)?;
+
+        let mut prepared_restore =
+            Connection::open_in_memory().map_err(|error| AppError::Database(error.to_string()))?;
+        Self::copy_snapshot(source_conn, &mut prepared_restore)?;
+        Self::strip_local_only_relations(&prepared_restore)?;
+        Self::create_tables_on_conn(&prepared_restore)?;
+        Self::apply_schema_migrations_on_conn(&prepared_restore)?;
+        Self::restore_tables(&local_snapshot, &prepared_restore, &local_tables)?;
+        Self::ensure_model_pricing_seeded_on_conn(&prepared_restore)?;
+
+        let mut main_conn = lock_conn!(self.conn);
+        Self::copy_snapshot(&prepared_restore, &mut main_conn)
     }
 
     /// Rename a backup file. Returns the new filename.
@@ -783,6 +964,53 @@ mod tests {
     use crate::error::AppError;
     use crate::settings::{update_settings, AppSettings};
     use serial_test::serial;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    struct TestHomeGuard {
+        previous: Option<OsString>,
+        previous_home: Option<OsString>,
+        test_home: PathBuf,
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+            match self.previous_home.take() {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.test_home);
+        }
+    }
+
+    /// 为会触发安全备份的测试隔离应用目录，避免触碰用户真实备份并消除全局环境竞争。
+    fn isolated_test_home(name: &str) -> TestHomeGuard {
+        let previous = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let previous_home = std::env::var_os("HOME");
+        let test_home =
+            std::env::temp_dir().join(format!("bianma-backup-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&test_home);
+        std::fs::create_dir_all(&test_home).expect("创建隔离测试目录");
+        std::env::set_var("CC_SWITCH_TEST_HOME", &test_home);
+        // Windows 下存在旧 HOME 路径回退；同步覆盖它才能阻止测试触碰真实用户备份。
+        std::env::set_var("HOME", &test_home);
+        TestHomeGuard {
+            previous,
+            previous_home,
+            test_home,
+        }
+    }
+
+    fn assert_localized_error_key(error: AppError, expected_key: &str) {
+        match error {
+            AppError::Localized { key, .. } => assert_eq!(key, expected_key),
+            other => panic!("预期本机隔离错误码 {expected_key}，实际为 {other}"),
+        }
+    }
 
     #[test]
     fn sql_export_uses_branded_header() -> Result<(), AppError> {
@@ -825,6 +1053,242 @@ mod tests {
     }
 
     #[test]
+    fn backup_registry_rejects_unregistered_routing_v2_table() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(db.conn);
+            conn.execute("CREATE TABLE routing_v2_unregistered (id TEXT)", [])?;
+        }
+
+        let error = db
+            .export_sql_string()
+            .expect_err("未登记的设备本地表不能被静默导出");
+        assert_localized_error_key(error, "backup.local_only_table_unregistered");
+        Ok(())
+    }
+
+    #[test]
+    fn binary_backup_snapshot_excludes_device_local_routing_v2_schema_and_rows(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('portable-provider', 'claude', 'Portable Provider', '{}', '{}')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO routing_v2_sites (site_id, display_name)
+                 VALUES ('local-site', 'Local Site')",
+                [],
+            )?;
+            conn.execute(
+                "CREATE INDEX idx_local_routing_site_name ON routing_v2_sites(display_name)",
+                [],
+            )?;
+        }
+
+        let snapshot = db.snapshot_for_portable_backup()?;
+        let mut binary_backup = rusqlite::Connection::open_in_memory()?;
+        Database::copy_snapshot(&snapshot, &mut binary_backup)?;
+
+        assert!(
+            !Database::table_exists(&binary_backup, "routing_v2_sites")?,
+            "二进制备份不得保留设备本地 routing v2 表"
+        );
+        let local_index_count: i64 = binary_backup.query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'index' AND name = 'idx_local_routing_site_name'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            local_index_count, 0,
+            "二进制备份不得保留依附设备本地表的索引"
+        );
+        let provider_count: i64 = binary_backup.query_row(
+            "SELECT COUNT(*) FROM providers WHERE id = 'portable-provider'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(provider_count, 1, "可移植数据必须保留在二进制备份中");
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn binary_backup_file_excludes_device_local_routing_v2_schema_and_rows() -> Result<(), AppError>
+    {
+        let _test_home = isolated_test_home("binary-backup-file");
+        let db = Database::init()?;
+        {
+            let conn = crate::database::lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('portable-provider', 'claude', 'Portable Provider', '{}', '{}')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO routing_v2_sites (site_id, display_name)
+                 VALUES ('local-site', 'Local Site')",
+                [],
+            )?;
+        }
+
+        let backup_path = db
+            .backup_database_file()?
+            .expect("文件数据库必须生成二进制备份");
+        let backup_conn = rusqlite::Connection::open(backup_path)?;
+        assert!(
+            !Database::table_exists(&backup_conn, "routing_v2_sites")?,
+            "二进制备份文件不得保留设备本地 routing v2 表"
+        );
+        let provider_count: i64 = backup_conn.query_row(
+            "SELECT COUNT(*) FROM providers WHERE id = 'portable-provider'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(provider_count, 1, "二进制备份文件必须保留可移植数据");
+        Ok(())
+    }
+
+    #[test]
+    fn binary_restore_preserves_current_device_routing_v2_rows() -> Result<(), AppError> {
+        let source_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(source_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('remote-provider', 'claude', 'Remote Provider', '{}', '{}')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO routing_v2_sites (site_id, display_name)
+                 VALUES ('remote-site', 'Remote Site')",
+                [],
+            )?;
+        }
+
+        let local_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            conn.execute_batch(
+                "INSERT INTO routing_v2_sites (site_id, display_name)
+                 VALUES ('local-site', 'Local Site');
+                 INSERT INTO routing_v2_endpoints (
+                     endpoint_id, site_id, display_base_url, canonical_origin, base_path, protocol_family
+                 ) VALUES (
+                     'local-endpoint', 'local-site', 'https://local.example/v1',
+                     'https://local.example', '/v1', 'anthropic'
+                 );
+                 INSERT INTO routing_v2_model_deployments (
+                     deployment_id, site_id, endpoint_id, upstream_model_id, adapter_contract_revision
+                 ) VALUES (
+                     'local-deployment', 'local-site', 'local-endpoint', 'local-model', 1
+                 );",
+            )?;
+        }
+
+        let source_conn = crate::database::lock_conn!(source_db.conn);
+        local_db.restore_from_connection_preserving_local_only(&source_conn)?;
+        drop(source_conn);
+
+        let conn = crate::database::lock_conn!(local_db.conn);
+        let remote_provider_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM providers WHERE id = 'remote-provider'",
+            [],
+            |row| row.get(0),
+        )?;
+        let local_site_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM routing_v2_sites WHERE site_id = 'local-site'",
+            [],
+            |row| row.get(0),
+        )?;
+        let remote_site_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM routing_v2_sites WHERE site_id = 'remote-site'",
+            [],
+            |row| row.get(0),
+        )?;
+        let local_endpoint_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM routing_v2_endpoints WHERE endpoint_id = 'local-endpoint'",
+            [],
+            |row| row.get(0),
+        )?;
+        let local_deployment_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM routing_v2_model_deployments
+             WHERE deployment_id = 'local-deployment'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(remote_provider_count, 1, "外部快照的可移植数据必须恢复");
+        assert_eq!(
+            local_site_count, 1,
+            "恢复必须保留当前设备的本机 routing v2 行"
+        );
+        assert_eq!(
+            remote_site_count, 0,
+            "恢复不得采纳外部快照的本机 routing v2 行"
+        );
+        assert_eq!(
+            local_endpoint_count, 1,
+            "恢复必须按外键顺序回填当前设备 Endpoint"
+        );
+        assert_eq!(
+            local_deployment_count, 1,
+            "恢复必须按外键顺序回填当前设备 ModelDeployment"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn binary_restore_rejects_unregistered_routing_v2_table_without_main_db_change(
+    ) -> Result<(), AppError> {
+        let source_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(source_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('remote-provider', 'claude', 'Remote Provider', '{}', '{}')",
+                [],
+            )?;
+            conn.execute("CREATE TABLE routing_v2_unregistered (id TEXT)", [])?;
+        }
+
+        let local_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('local-provider', 'claude', 'Local Provider', '{}', '{}')",
+                [],
+            )?;
+        }
+
+        let source_conn = crate::database::lock_conn!(source_db.conn);
+        let error = local_db
+            .restore_from_connection_preserving_local_only(&source_conn)
+            .expect_err("未登记的外部设备本地表必须拒绝恢复");
+        drop(source_conn);
+        assert_localized_error_key(error, "backup.local_only_table_unregistered");
+
+        let conn = crate::database::lock_conn!(local_db.conn);
+        let local_provider_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM providers WHERE id = 'local-provider'",
+            [],
+            |row| row.get(0),
+        )?;
+        let remote_provider_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM providers WHERE id = 'remote-provider'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(local_provider_count, 1, "拒绝恢复后主库必须保持原状");
+        assert_eq!(remote_provider_count, 0, "拒绝恢复后外部数据不得写入主库");
+        Ok(())
+    }
+
+    #[test]
     fn sql_import_rejects_routing_v2_namespace() -> Result<(), AppError> {
         let db = Database::memory()?;
         let sql = format!(
@@ -844,7 +1308,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn sql_export_import_accepts_legacy_header() -> Result<(), AppError> {
+        let _test_home = isolated_test_home("legacy-sql-import");
         let source_db = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(source_db.conn);
@@ -876,7 +1342,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn sync_import_preserves_local_only_tables() -> Result<(), AppError> {
+        let _test_home = isolated_test_home("sync-local-tables");
         let remote_db = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(remote_db.conn);
@@ -963,7 +1431,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn sync_import_preserves_local_routing_v2_catalog() -> Result<(), AppError> {
+        let _test_home = isolated_test_home("sync-routing-v2-catalog");
         let remote_db = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(remote_db.conn);
