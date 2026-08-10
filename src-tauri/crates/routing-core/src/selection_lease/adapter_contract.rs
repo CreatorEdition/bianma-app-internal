@@ -32,14 +32,20 @@ pub(super) enum AdapterRateLimitKind {
 
 /// 已登记 adapter 合同固定的冷却投影。
 ///
-/// 一个信号只允许投影到一个 Registry，避免半成功的隐式双写或 adapter 自由组合范围。复合
-/// scope 必须由后续原子 observation 切片显式建模。
+/// 普通信号只允许投影到一个 Registry，避免半成功的隐式双写或 adapter 自由组合范围。
+/// `ConservativeUnknown` 是唯一的封闭复合投影：它先原子记录当前 Credential 与全部共享
+/// QuotaGroup 的资源冷却，再记录短时 Site 冷却；两个截止时间都由未来宿主完成换算。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CooldownProjection {
     /// 更新 Target 的 Deployment / Site 健康冷却。
     Health(RateLimitScope),
     /// 更新当前实际 Lease 派生的资源冷却。
     Resource(ResourceCooldownScope),
+    /// 对未知额度归因作保守复合冷却。
+    ///
+    /// 资源截止时间通常应长于 Site 截止时间：前者在 Site 恢复后继续阻止同 Key 或共享额度
+    /// 组轮换，后者则短暂避免整站 429 风暴。此类型不接受资源 ID，也不改变当前 Attempt。
+    ConservativeUnknown,
 }
 
 /// 已由受审站点注册表验证的一次限流合同。
@@ -97,6 +103,8 @@ pub(super) enum HandoffRateLimitReporterError {
 /// 消费 handoff 限流上报器时的拒绝原因。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum HandoffRateLimitReportError {
+    /// 调用方使用了与固定合同投影不一致的报告入口。
+    ProjectionMismatch,
     /// 当前 handoff 已单独签发过资源冷却 reporter，不能再重复归因。
     ResourceReporter(ResourceCooldownReporterError),
     /// C3-A 资源冷却 Registry 保守拒绝该 observation。
@@ -162,7 +170,52 @@ impl<'handoff, 'registry, 'snapshot, 'config>
                     .record(observation, now)
                     .map_err(HandoffRateLimitReportError::ResourceRegistry)
             }
+            CooldownProjection::ConservativeUnknown => {
+                let _validated_target_reporter = health_reporter;
+                let _handoff = handoff;
+                Err(HandoffRateLimitReportError::ProjectionMismatch)
+            }
         }
+    }
+
+    /// 消费保守 Unknown 合同，并按固定顺序写入复合冷却。
+    ///
+    /// `resource_deadline` 与 `site_deadline` 是宿主已经换算完成的单调刻度。资源 Registry
+    /// 拒绝 observation 时不会写 Site，避免出现 Site-only 的半成功。成功时先冷却当前
+    /// Credential 与全部共享 QuotaGroup，再冷却当前 Target 所属 Site。
+    /// 此路径仅影响后续请求的 eligibility，不触碰 Replay、Completion 或 Coordinator。
+    pub(super) fn report_conservative_unknown(
+        self,
+        site_deadline: HealthTick,
+        resource_deadline: HealthTick,
+        now: HealthTick,
+        health: &mut HealthRegistry,
+        resources: &mut SelectionCooldownRegistry,
+    ) -> Result<(), HandoffRateLimitReportError> {
+        let Self {
+            health_reporter,
+            handoff,
+            projection,
+        } = self;
+        if projection != CooldownProjection::ConservativeUnknown {
+            return Err(HandoffRateLimitReportError::ProjectionMismatch);
+        }
+
+        let observation = handoff
+            .resource_cooldown_reporter()
+            .map_err(HandoffRateLimitReportError::ResourceReporter)?
+            .report(
+                ResourceCooldownScope::CurrentCredentialAndQuotaGroups,
+                resource_deadline,
+            );
+        resources
+            .record(observation, now)
+            .map_err(HandoffRateLimitReportError::ResourceRegistry)?;
+        health.record_rate_limit(
+            health_reporter.report(RateLimitScope::Site, site_deadline),
+            now,
+        );
+        Ok(())
     }
 }
 

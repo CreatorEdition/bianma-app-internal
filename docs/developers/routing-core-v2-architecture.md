@@ -777,7 +777,7 @@ RateLimitScope = Credential | QuotaGroup | Account | ModelDeployment | Site | Un
 RateLimitSignal = kind + scope + scope_ref? + bucket_dimension? + retry_at + reset_at_utc
 ```
 
-`scope_ref` 必须由受信 adapter 元数据映射到已知 Credential、QuotaGroup、Account、Deployment 或 Site，不能接受上游任意字符串作为本地实体 ID。未知 Scope 不能乐观解释成单 Key：当前请求先排除命中的 Credential，以及与它任一已知 QuotaGroup 重叠的其他 Credential；持久状态默认对命中的 Site 设置短时保守冷却，只有 adapter 明确给出更窄 scope 时才缩小到 Credential/QuotaGroup/Account/Deployment。这样宁可暂时走下一站点，也不遍历同站点的账户、Key 和模型形成 429 风暴。
+`scope_ref` 必须由受信 adapter 元数据映射到已知 Credential、QuotaGroup、Account、Deployment 或 Site，不能接受上游任意字符串作为本地实体 ID。未知 Scope 不能乐观解释成单 Key：对可安全进入下一次选择的请求，固定的 `ConservativeUnknown` 复合观察会先从当前 Lease 派生并冷却命中的 Credential 与它全部已知 QuotaGroup，再写入命中 Site 的短时保守冷却；两个截止时间必须是已归一化的单调刻度，且资源截止时间通常长于 Site 截止时间。资源写入被代际或形状校验拒绝时不得写 Site，禁止任意 adapter 自由组合双写。只有 adapter 明确给出更窄 scope 时才缩小到 Credential/QuotaGroup/Account/Deployment。这样宁可暂时走下一站点，也不遍历同站点的账户、Key 和模型形成 429 风暴。
 
 ```mermaid
 stateDiagram-v2
@@ -800,7 +800,7 @@ stateDiagram-v2
 默认算法：
 
 1. 解析 `Retry-After` 的秒数或 HTTP-date，并读取 adapter 明确支持、单位明确的额度 Header/JSON 字段。
-2. 先按 Scope 原子更新 Credential/QuotaGroup/Account/Deployment/Site 冷却；Unknown scope 按 Site 短时冷却处理，429 不增加 Endpoint 熔断失败计数。Site scope 命中后过滤该 Site 下所有 Endpoint、Deployment、Account 与 Credential。并发更新使用 `max(现有冷却, 新冷却)`。
+2. 先按 Scope 原子更新 Credential/QuotaGroup/Account/Deployment/Site 冷却；Unknown scope 使用封闭的复合观察，资源冷却成功后才记录短时 Site 冷却，429 不增加 Endpoint 熔断失败计数。Site scope 命中后过滤该 Site 下所有 Endpoint、Deployment、Account 与 Credential。并发更新使用 `max(现有冷却, 新冷却)`。
 3. 统一 ReplayGate 检查 upstream write、downstream commit、ReplayEvidence、Continuation、幂等合同、信任边界和预算。只有 `NotSent`、`PreExecutionRejected` 或经验证的 `IdempotencyGuaranteed` 才能创建附加 Attempt；仅有 429/503、`Retry-After` 或 `RateLimitSignal` 时立即停止当前请求。
 4. ReplayGate 通过后，Retry-After 很短、同 Credential 预算尚在且总 Deadline 允许时，等待后同 Credential 最多重试一次，以保持会话粘性。
 5. 否则选择同一 Target 中属于**不同可用 QuotaGroup** 的 Credential。多个 Key 共享账户额度时，不得无意义轮换轰炸站点。

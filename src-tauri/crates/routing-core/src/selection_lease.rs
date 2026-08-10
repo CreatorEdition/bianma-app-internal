@@ -8,9 +8,6 @@ use core::sync::atomic::{AtomicU16, Ordering};
 
 mod adapter_contract;
 
-use adapter_contract::{
-    HandoffRateLimitReporter, HandoffRateLimitReporterError, VerifiedRateLimitContract,
-};
 use super::{
     attempt::{
         AdapterRateLimitReporter, AdapterReplayReporter, AttemptCompletion,
@@ -23,6 +20,9 @@ use super::{
     CompiledRoutingSnapshot, CredentialSelectionPolicy, FailureClass, HealthTick,
     ResolvedRouteTarget, RouteTargetId, SnapshotVersion, MAX_QUOTA_GROUPS_PER_UNIT,
     MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
+};
+use adapter_contract::{
+    HandoffRateLimitReporter, HandoffRateLimitReporterError, VerifiedRateLimitContract,
 };
 
 /// Registry 激活被拒绝的原因。
@@ -162,6 +162,11 @@ pub(crate) enum ResourceCooldownScope {
     Account,
     /// 冷却当前实际选中 Unit 的全部 QuotaGroup。
     CurrentQuotaGroups,
+    /// 同时冷却当前实际选中的 Credential 与其 Unit 的全部 QuotaGroup。
+    ///
+    /// 该范围只服务于未知额度归因的保守复合观察：Credential 会阻止直接轮换到同一 Key，
+    /// QuotaGroup 会阻止轮换到共享额度的其他 Key。两种资源身份都只能从当前 Lease 派生。
+    CurrentCredentialAndQuotaGroups,
 }
 
 /// 只能由 [`ResourceCooldownReporter`] 消费式签发的一次资源冷却观测。
@@ -771,12 +776,12 @@ fn rollback(
 
 #[cfg(test)]
 mod tests {
+    use super::super::selection_cooldown::{
+        SelectionCooldownFilterError, SelectionCooldownRecordError, SelectionCooldownRegistry,
+    };
     use super::adapter_contract::{
         test_only_verified_rate_limit_contract, AdapterRateLimitKind, CooldownProjection,
         HandoffRateLimitReporterError, VerifiedRateLimitContract,
-    };
-    use super::super::selection_cooldown::{
-        SelectionCooldownFilterError, SelectionCooldownRecordError, SelectionCooldownRegistry,
     };
     use super::*;
     use crate::{
@@ -785,8 +790,8 @@ mod tests {
         CredentialRuntimeDefinition, DeliveryState, EndpointId, FailureClass, HealthRegistry,
         HealthTick, IngressClassifier, IngressRequest, ModelDeploymentDefinition,
         ModelDeploymentId, OperationId, QuotaGroupId, QuotaGroupRuntimeDefinition,
-        QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RetryPolicy, RouteCandidate,
-        RoutePlanner, RouteStageId, RouteTarget, RouteTargetId, RoutingStrategy, RateLimitScope,
+        QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RateLimitScope, RetryPolicy,
+        RouteCandidate, RoutePlanner, RouteStageId, RouteTarget, RouteTargetId, RoutingStrategy,
         SelectionRuntimeDefinitions, SelectionSession, SelectorAffinitySalt, SelectorRevision,
         SiteId, SnapshotVersion, VerifiedIngressDisposition,
     };
@@ -2090,7 +2095,8 @@ mod tests {
                 .member_mask(),
             0b111
         );
-        let unknown_eligibility = unknown_health.eligibility_for(compiled.routing(), HealthTick::new(1));
+        let unknown_eligibility =
+            unknown_health.eligibility_for(compiled.routing(), HealthTick::new(1));
         let unknown_future_plan = route_plan(compiled.routing(), &unknown_eligibility);
         assert_eq!(
             unknown_future_plan
@@ -2124,6 +2130,146 @@ mod tests {
                 .expect("当前 Attempt 完成可消费"),
             crate::coordinator::CoordinatorStep::Stop(crate::RetryStopReason::ReplayNotProven)
         ));
+
+        let mut composite_health = HealthRegistry::new();
+        let mut composite_resources = SelectionCooldownRegistry::new();
+        let composite_plan = route_plan(compiled.routing(), &route_eligibility);
+        let mut composite_coordinator = composite_plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let composite_selected = match lease_registry.start_priority(
+            composite_coordinator
+                .start(&route_eligibility)
+                .expect("复合 Unknown Permit 有效"),
+            base,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("复合 Unknown 路径应选择首个成员"),
+        };
+        let mut composite_handoff = composite_selected.into_transport_handoff();
+        composite_handoff
+            .adapter_rate_limit_reporter(
+                first_resolved,
+                registered_rate_limit_contract(
+                    SiteId::new(1).expect("测试 Site ID 非零"),
+                    CooldownProjection::ConservativeUnknown,
+                ),
+            )
+            .expect("复合 Unknown 合同可签发上报器")
+            .report_conservative_unknown(
+                HealthTick::new(5),
+                HealthTick::new(10),
+                HealthTick::new(1),
+                &mut composite_health,
+                &mut composite_resources,
+            )
+            .expect("复合 Unknown 合同可完整记录冷却");
+        let composite_site_cooled =
+            composite_health.eligibility_for(compiled.routing(), HealthTick::new(1));
+        assert_eq!(
+            route_plan(compiled.routing(), &composite_site_cooled)
+                .resolve(0)
+                .expect("站点冷却后的计划必须可解析")
+                .expect("另一个 Site 仍应可用")
+                .id(),
+            target_id(2)
+        );
+        let composite_site_recovered =
+            composite_health.eligibility_for(compiled.routing(), HealthTick::new(5));
+        assert_eq!(
+            route_plan(compiled.routing(), &composite_site_recovered)
+                .resolve(0)
+                .expect("Site 到期后的计划必须可解析")
+                .expect("原 Site 应恢复候选")
+                .id(),
+            target_id(1)
+        );
+        let composite_filtered = composite_resources
+            .filter(base, HealthTick::new(5))
+            .expect("资源冷却应在 Site 恢复后继续过滤共享额度组");
+        assert_eq!(composite_filtered.member_mask(), 0b100);
+        assert_eq!(composite_filtered.unit_mask(), 0b10);
+        assert_eq!(
+            composite_resources
+                .filter(base, HealthTick::new(10))
+                .expect("资源冷却精确到期后应恢复")
+                .member_mask(),
+            0b111
+        );
+        composite_handoff
+            .request_write_started()
+            .expect("复合 Unknown 当前请求可记录首字节写出");
+        let composite_completion =
+            composite_handoff.into_completion(FailureClass::RateLimited, Some(500), None);
+        assert_eq!(
+            composite_completion.outcome().delivery(),
+            DeliveryState::Sent
+        );
+        assert!(matches!(
+            composite_coordinator
+                .complete(composite_completion, &route_eligibility)
+                .expect("复合 Unknown 当前 Attempt 可完成"),
+            crate::coordinator::CoordinatorStep::Stop(crate::RetryStopReason::ReplayNotProven)
+        ));
+
+        let higher_compiled = compiled_with_version(
+            2,
+            &candidates,
+            &deployments,
+            &accounts,
+            &credentials,
+            &selectors,
+        );
+        let higher_route_eligibility =
+            HealthRegistry::new().eligibility_for(higher_compiled.routing(), HealthTick::new(0));
+        let higher_plan = route_plan(higher_compiled.routing(), &higher_route_eligibility);
+        let higher_base = selection_eligibility(&higher_compiled, &higher_plan, 0b11, 0b111);
+        let mut stale_resources = SelectionCooldownRegistry::new();
+        stale_resources
+            .filter(higher_base, HealthTick::new(1))
+            .expect("高代选择应激活资源 Registry");
+        let mut stale_health = HealthRegistry::new();
+        let stale_plan = route_plan(compiled.routing(), &route_eligibility);
+        let mut stale_coordinator = stale_plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let stale_selected = match lease_registry.start_priority(
+            stale_coordinator
+                .start(&route_eligibility)
+                .expect("迟到复合 Unknown Permit 有效"),
+            base,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("迟到复合 Unknown 路径应选择首个成员"),
+        };
+        stale_selected
+            .into_transport_handoff()
+            .adapter_rate_limit_reporter(
+                first_resolved,
+                registered_rate_limit_contract(
+                    SiteId::new(1).expect("测试 Site ID 非零"),
+                    CooldownProjection::ConservativeUnknown,
+                ),
+            )
+            .expect("迟到复合 Unknown 合同可签发上报器")
+            .report_conservative_unknown(
+                HealthTick::new(5),
+                HealthTick::new(10),
+                HealthTick::new(1),
+                &mut stale_health,
+                &mut stale_resources,
+            )
+            .expect_err("旧代资源 observation 必须在写 Site 前被拒绝");
+        let stale_site_eligibility =
+            stale_health.eligibility_for(compiled.routing(), HealthTick::new(1));
+        assert_eq!(
+            route_plan(compiled.routing(), &stale_site_eligibility)
+                .resolve(0)
+                .expect("拒绝后的计划必须可解析")
+                .expect("旧代拒绝不得留下 Site 冷却")
+                .id(),
+            target_id(1)
+        );
         let second_resolved = compiled
             .resolve_plan_target(&route_plan(compiled.routing(), &route_eligibility), 1)
             .expect("第二 Target 与快照一致")

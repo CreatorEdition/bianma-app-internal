@@ -179,7 +179,11 @@ impl SelectionCooldownRegistry {
             || credential == 0
             || usize::from(quota_group_len) > MAX_TRACKED_QUOTA_GROUPS.min(quota_groups.len())
             || quota_groups[..usize::from(quota_group_len)].contains(&0)
-            || (scope == ResourceCooldownScope::CurrentQuotaGroups && quota_group_len == 0)
+            || (matches!(
+                scope,
+                ResourceCooldownScope::CurrentQuotaGroups
+                    | ResourceCooldownScope::CurrentCredentialAndQuotaGroups
+            ) && quota_group_len == 0)
         {
             return Err(SelectionCooldownRecordError::InvalidQuotaGroups);
         }
@@ -195,6 +199,12 @@ impl SelectionCooldownRegistry {
                 self.record_entry(ResourceTable::Account, account, until, now);
             }
             ResourceCooldownScope::CurrentQuotaGroups => {
+                for id in &quota_groups[..usize::from(quota_group_len)] {
+                    self.record_entry(ResourceTable::QuotaGroup, *id, until, now);
+                }
+            }
+            ResourceCooldownScope::CurrentCredentialAndQuotaGroups => {
+                self.record_entry(ResourceTable::Credential, credential, until, now);
                 for id in &quota_groups[..usize::from(quota_group_len)] {
                     self.record_entry(ResourceTable::QuotaGroup, *id, until, now);
                 }
@@ -394,10 +404,13 @@ mod tests {
     #[test]
     fn newer_generation_clears_all_resource_tables_and_rejects_rollback() {
         let mut registry = SelectionCooldownRegistry::new();
-        assert!(registry.activate_generation(
-            SnapshotVersion::new(1).expect("测试首代版本非零")
-        ));
-        registry.record_entry(ResourceTable::Account, 1, HealthTick::new(20), HealthTick::new(1));
+        assert!(registry.activate_generation(SnapshotVersion::new(1).expect("测试首代版本非零")));
+        registry.record_entry(
+            ResourceTable::Account,
+            1,
+            HealthTick::new(20),
+            HealthTick::new(1),
+        );
         registry.record_entry(
             ResourceTable::Credential,
             2,
@@ -412,16 +425,12 @@ mod tests {
         );
         registry.overflow_until = HealthTick::new(20);
 
-        assert!(registry.activate_generation(
-            SnapshotVersion::new(2).expect("测试新代版本非零")
-        ));
+        assert!(registry.activate_generation(SnapshotVersion::new(2).expect("测试新代版本非零")));
         assert!(!registry.accounts.is_active(1, HealthTick::new(1)));
         assert!(!registry.credentials.is_active(2, HealthTick::new(1)));
         assert!(!registry.quota_groups.is_active(3, HealthTick::new(1)));
         assert_eq!(registry.overflow_until, HealthTick::new(0));
-        assert!(!registry.activate_generation(
-            SnapshotVersion::new(1).expect("测试旧代版本非零")
-        ));
+        assert!(!registry.activate_generation(SnapshotVersion::new(1).expect("测试旧代版本非零")));
     }
 
     #[test]
