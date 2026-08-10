@@ -55,4 +55,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked -p bianma-app routing_v
 cargo test --manifest-path src-tauri/Cargo.toml --locked -p bianma-app routing_v2::vault:: --lib
 ```
 
+`routing_v2::vault_adapter::load_existing_device_root_key_v1` 是与 capability PoC 分离的、crate-private 的只读 root key loader。它仅尝试从固定 v1 identity（`com.creatoredition.bianma.routing-v2.vault` / `device-root-key-v1`）读取已经存在的 32-byte 设备材料，并立即交给不透明的 `RootKeyHandle`；缺失、锁定、后端错误和长度异常都关闭失败。它绝不创建、写入、删除、轮换或恢复 root key，且尚未接入 SQLite、凭据迁移、Proxy、Tauri IPC 或任何执行路径。
+
 `routing-core` 当前仍是未接入生产转发链的纯 Rust 领域切片：仅基于内存快照做闭集入站分类、有界路由计划与保守重试决策，不读取数据库/文件、不启动后台线程、不执行网络请求，也不承载 ContextPipeline；本地 compact 可被分类为本地 handler，但压缩、记忆和图的实现不会进入模型 RoutePlan 或该核心。

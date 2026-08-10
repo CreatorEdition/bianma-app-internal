@@ -4,6 +4,9 @@
 //! 配置，不写 SQLite，不暴露 Tauri 命令，也不解析、迁移或发送任何用户 Secret。
 //! 真正的 Vault、SecretResolver 和迁移 Saga 必须在本 PoC 通过独立审计后另行实现。
 
+mod root_key_loader;
+
+use crate::routing_v2::vault::{RootKeyHandle, VaultCryptoError};
 use keyring::Entry;
 use thiserror::Error;
 
@@ -33,6 +36,15 @@ fn map_backend_result<T>(result: keyring::Result<T>) -> Result<T, VaultCapabilit
 /// 此函数不写入任何凭据，也不提供读取、写入或删除真实 Secret 的生产 API。
 pub(crate) fn check_platform_capability() -> Result<(), VaultCapabilityError> {
     map_backend_result(Entry::new(VAULT_CAPABILITY_POC_SERVICE, "capability-check")).map(|_| ())
+}
+
+/// 只读加载固定 v1 slot 的既有设备 root key。
+///
+/// S3 仅建立受控读取入口；在 Credential/Binding/Grant 与 Secret Saga 就绪前，正常
+/// 运行路径不得调用它。该 adapter 边界不提供写入、删除、创建、轮换或恢复能力，且
+/// 保持 crate-private，不能作为公开或 IPC API。
+pub(crate) fn load_existing_device_root_key_v1() -> Result<RootKeyHandle, VaultCryptoError> {
+    root_key_loader::load_existing_device_root_key_v1()
 }
 
 #[cfg(test)]
