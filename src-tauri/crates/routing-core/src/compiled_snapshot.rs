@@ -8,10 +8,10 @@ use super::{
     AccountCatalog, AccountCatalogError, AccountCredentialDefinitions, AccountSelectionCandidates,
     AccountSelectionRequest, AccountSelectorCatalog, AccountSelectorCatalogError,
     AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError, ModelDeploymentCatalog,
-    ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError,
-    QuotaGroupRuntimeDefinitions, RouteCandidate, RoutePlan, RouteStageId, RouteTarget,
-    RoutingSnapshot, RoutingStrategy, SelectionRuntimeLayout, SelectionRuntimeLayoutError,
-    SelectionSession, SnapshotVersion, MAX_TRACKED_QUOTA_GROUPS,
+    ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan,
+    RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy, SelectionRuntimeDefinitions,
+    SelectionRuntimeLayout, SelectionRuntimeLayoutError, SelectionSession, SnapshotVersion,
+    MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
 };
 use core::fmt;
 
@@ -116,9 +116,7 @@ pub struct CompiledRoutingSnapshot<'a> {
     routing: RoutingSnapshot<'a>,
     deployments: ModelDeploymentCatalog<'a>,
     selectors: AccountSelectorCatalog<'a>,
-    #[allow(dead_code)]
     accounts: AccountCatalog<'a>,
-    #[allow(dead_code)]
     credentials: CredentialCatalog<'a>,
 }
 
@@ -294,18 +292,23 @@ impl<'a> CompiledRoutingSnapshot<'a> {
         Ok(AccountSelectionCandidates::new(resolved))
     }
 
-    /// 验证全局额度组定义，并创建绑定当前 RoutingSnapshot 实例的只读静态布局。
+    /// 验证三类静态运行时定义，并创建绑定当前 RoutingSnapshot 实例的只读布局。
     ///
-    /// 仅扫描全部可达 RouteCandidate 所引用的 Selector、Unit 与 QuotaGroup。相同 Group
-    /// 即使跨多个 Selector 出现，也只占用一个固定槽；超过 256、缺失定义或输入中存在
-    /// 未被可达候选使用的定义均拒绝激活。该工厂不创建 Registry、Lease 或在途计数。
+    /// 仅扫描全部可达 `RouteCandidate → Selector → Unit/Member`。相同 Account、Credential
+    /// 或 Group 即使跨多个 Selector 出现，也只占用一个固定槽；任一资源超过边界、缺失
+    /// 定义或输入中存在未被可达候选使用的定义均拒绝激活。该工厂不创建 Registry、Lease
+    /// 或在途计数。
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn selection_runtime_layout<'snapshot>(
         &'snapshot self,
-        definitions: &QuotaGroupRuntimeDefinitions<'a>,
+        definitions: &SelectionRuntimeDefinitions<'a>,
     ) -> Result<SelectionRuntimeLayout<'snapshot, 'a>, SelectionRuntimeLayoutError> {
-        let mut reachable = [None; MAX_TRACKED_QUOTA_GROUPS];
-        let mut reachable_len = 0usize;
+        let mut reachable_groups = [None; MAX_TRACKED_QUOTA_GROUPS];
+        let mut reachable_group_len = 0usize;
+        let mut reachable_accounts = [None; MAX_TRACKED_ACCOUNTS];
+        let mut reachable_account_len = 0usize;
+        let mut reachable_credentials = [None; MAX_TRACKED_CREDENTIALS];
+        let mut reachable_credential_len = 0usize;
 
         for candidate in self.routing.candidates() {
             let selector = self
@@ -314,37 +317,98 @@ impl<'a> CompiledRoutingSnapshot<'a> {
                 .ok_or(SelectionRuntimeLayoutError::UnknownReachableSelector)?;
             for unit in selector.units() {
                 for group in unit.quota_groups() {
-                    if reachable[..reachable_len]
-                        .iter()
-                        .flatten()
-                        .any(|previous| *previous == *group)
-                    {
-                        continue;
-                    }
-                    if reachable_len == MAX_TRACKED_QUOTA_GROUPS {
+                    if !append_unique(&mut reachable_groups, &mut reachable_group_len, *group) {
                         return Err(SelectionRuntimeLayoutError::TooManyReachableGroups);
                     }
-                    reachable[reachable_len] = Some(*group);
-                    reachable_len += 1;
+                }
+            }
+            for member in selector.members() {
+                if self.accounts.get(member.account()).is_none() {
+                    return Err(SelectionRuntimeLayoutError::UnknownReachableAccount);
+                }
+                if self.credentials.get(member.credential()).is_none() {
+                    return Err(SelectionRuntimeLayoutError::UnknownReachableCredential);
+                }
+                if !append_unique(
+                    &mut reachable_accounts,
+                    &mut reachable_account_len,
+                    member.account(),
+                ) {
+                    return Err(SelectionRuntimeLayoutError::TooManyReachableAccounts);
+                }
+                if !append_unique(
+                    &mut reachable_credentials,
+                    &mut reachable_credential_len,
+                    member.credential(),
+                ) {
+                    return Err(SelectionRuntimeLayoutError::TooManyReachableCredentials);
                 }
             }
         }
 
-        for group in reachable[..reachable_len].iter().flatten() {
-            if definitions.get(*group).is_none() {
-                return Err(SelectionRuntimeLayoutError::MissingReachableGroupDefinition);
+        for group in reachable_groups[..reachable_group_len].iter().flatten() {
+            if definitions.quota_group(*group).is_none() {
+                return Err(SelectionRuntimeLayoutError::MissingReachableQuotaGroupDefinition);
             }
         }
-        for definition in definitions.as_slice() {
-            let is_reachable = reachable[..reachable_len]
+        for account in reachable_accounts[..reachable_account_len].iter().flatten() {
+            if definitions.account(*account).is_none() {
+                return Err(SelectionRuntimeLayoutError::MissingReachableAccountDefinition);
+            }
+        }
+        for credential in reachable_credentials[..reachable_credential_len]
+            .iter()
+            .flatten()
+        {
+            if definitions.credential(*credential).is_none() {
+                return Err(SelectionRuntimeLayoutError::MissingReachableCredentialDefinition);
+            }
+        }
+
+        for definition in definitions.quota_groups() {
+            let is_reachable = reachable_groups[..reachable_group_len]
                 .iter()
                 .flatten()
                 .any(|group| *group == definition.id());
             if !is_reachable {
-                return Err(SelectionRuntimeLayoutError::UnusedDefinition);
+                return Err(SelectionRuntimeLayoutError::UnusedQuotaGroupDefinition);
+            }
+        }
+        for definition in definitions.accounts() {
+            let is_reachable = reachable_accounts[..reachable_account_len]
+                .iter()
+                .flatten()
+                .any(|account| *account == definition.id());
+            if !is_reachable {
+                return Err(SelectionRuntimeLayoutError::UnusedAccountDefinition);
+            }
+        }
+        for definition in definitions.credentials() {
+            let is_reachable = reachable_credentials[..reachable_credential_len]
+                .iter()
+                .flatten()
+                .any(|credential| *credential == definition.id());
+            if !is_reachable {
+                return Err(SelectionRuntimeLayoutError::UnusedCredentialDefinition);
             }
         }
 
         Ok(SelectionRuntimeLayout::new(&self.routing, *definitions))
     }
+}
+
+fn append_unique<T: Copy + PartialEq>(slots: &mut [Option<T>], len: &mut usize, value: T) -> bool {
+    if slots[..*len]
+        .iter()
+        .flatten()
+        .any(|previous| *previous == value)
+    {
+        return true;
+    }
+    if *len == slots.len() {
+        return false;
+    }
+    slots[*len] = Some(value);
+    *len += 1;
+    true
 }
