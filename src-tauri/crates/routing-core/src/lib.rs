@@ -947,7 +947,7 @@ mod tests {
 
     fn success_for<'snapshot, 'candidates>(
         permit: AttemptPermit<'snapshot, 'candidates>,
-    ) -> coordinator::AttemptSuccessCompletion<'snapshot, 'candidates> {
+    ) -> attempt::AttemptSuccessCompletion {
         let mut tracker = attempt::AttemptTracker::from_permit(permit);
         tracker.request_write_started().expect("允许记录写入");
         tracker
@@ -955,18 +955,11 @@ mod tests {
             .expect("允许记录响应头");
         tracker.downstream_committed().expect("允许记录下游提交");
         tracker
-            .upstream_response_completed()
-            .expect("允许记录完整响应");
-        tracker
             .into_response_completed()
             .expect("完整响应且已提交可转为成功 typestate")
-            .into_success_completion()
     }
 
-    fn consumes_success_completion<'snapshot, 'candidates>(
-        _: coordinator::AttemptSuccessCompletion<'snapshot, 'candidates>,
-    ) {
-    }
+    fn consumes_success_completion(_: attempt::AttemptSuccessCompletion) {}
 
     fn plan_for_coordinator<'snapshot, 'candidates>(
         snapshot: &'snapshot RoutingSnapshot<'candidates>,
@@ -3271,12 +3264,23 @@ mod tests {
 
         let mut tracker = attempt::AttemptTracker::test_only(1);
         tracker.request_write_started().expect("允许记录写入");
+        tracker.downstream_committed().expect("允许记录下游提交");
+        let tracker = tracker
+            .into_response_completed()
+            .expect_err("未观察上游响应不能转为成功");
+        assert_eq!(
+            tracker
+                .into_completion(FailureClass::Server, None, None)
+                .outcome()
+                .delivery(),
+            DeliveryState::Sent
+        );
+
+        let mut tracker = attempt::AttemptTracker::test_only(1);
+        tracker.request_write_started().expect("允许记录写入");
         tracker
             .upstream_response_observed()
             .expect("允许记录响应头");
-        tracker
-            .upstream_response_completed()
-            .expect("允许记录完整响应");
         let tracker = tracker
             .into_response_completed()
             .expect_err("未提交下游不能转为成功");
@@ -3293,14 +3297,10 @@ mod tests {
         tracker
             .upstream_response_observed()
             .expect("允许记录响应头");
-        tracker
-            .upstream_response_completed()
-            .expect("允许记录完整响应");
         tracker.downstream_committed().expect("允许记录下游提交");
         let completion = tracker
             .into_response_completed()
-            .expect("完整响应、已写入且下游提交可转为成功 typestate")
-            .into_success_completion();
+            .expect("完整响应、已写入且下游提交可转为成功 typestate");
         consumes_success_completion(completion);
     }
 

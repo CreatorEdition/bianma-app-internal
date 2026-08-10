@@ -229,16 +229,6 @@ pub(crate) struct TrustedPreExecutionRejection<'snapshot, 'candidates> {
     metadata: PreExecutionContractMetadata,
 }
 
-impl<'snapshot, 'candidates> TrustedPreExecutionRejection<'snapshot, 'candidates> {
-    fn matches(&self, permit: &AttemptPermit<'snapshot, 'candidates>) -> bool {
-        self.binding.matches(permit)
-    }
-
-    const fn metadata(&self) -> PreExecutionContractMetadata {
-        self.metadata
-    }
-}
-
 /// 固定大小、只前进的单次发送记录器。
 ///
 /// 本类型及其变更方法不对外导出，避免调用方把任意 HTTP 状态伪装为“未发送”或
@@ -246,12 +236,11 @@ impl<'snapshot, 'candidates> TrustedPreExecutionRejection<'snapshot, 'candidates
 /// 最终结果通过消费本记录器生成。
 #[derive(Debug)]
 pub(crate) struct AttemptTracker<'snapshot, 'candidates> {
-    pub(super) permit: AttemptPermit<'snapshot, 'candidates>,
+    permit: AttemptPermit<'snapshot, 'candidates>,
     phase: SendPhase,
-    pub(super) write: UpstreamWriteState,
-    pub(super) downstream: DownstreamCommitState,
-    // None=未观察；Some(false)=已观察但未终结；Some(true)=已完整终结。
-    pub(super) upstream_response_state: Option<bool>,
+    write: UpstreamWriteState,
+    downstream: DownstreamCommitState,
+    upstream_response_observed: bool,
     rate_limit_reporter_issued: bool,
     replay_reporter_issued: bool,
 }
@@ -266,25 +255,10 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
             phase: SendPhase::Pending,
             write: UpstreamWriteState::NoBytesProven,
             downstream: DownstreamCommitState::NotCommitted,
-            upstream_response_state: None,
+            upstream_response_observed: false,
             rate_limit_reporter_issued: false,
             replay_reporter_issued: false,
         }
-    }
-
-    /// 返回当前发送阶段。
-    pub(crate) const fn phase(&self) -> SendPhase {
-        self.phase
-    }
-
-    /// 返回当前上游写入状态。
-    pub(crate) const fn write_state(&self) -> UpstreamWriteState {
-        self.write
-    }
-
-    /// 返回当前下游提交状态。
-    pub(crate) const fn downstream_state(&self) -> DownstreamCommitState {
-        self.downstream
     }
 
     /// 为当前 Attempt 与已解析 Target 签发一次受信限流上报器。
@@ -346,7 +320,7 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
             return Err(AttemptTransitionError::InvalidPhase);
         }
         self.phase = SendPhase::UpstreamResponseObserved;
-        self.upstream_response_state = Some(false);
+        self.upstream_response_observed = true;
         Ok(())
     }
 
@@ -386,6 +360,23 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
         }
     }
 
+    /// 在上游响应已经由执行器完整终结后，消费已提交的 Tracker 生成密封成功对象。
+    ///
+    /// 此调用本身是未来 Transport 的“完整响应”显式证明点；它不会从 Header、SSE 或下游
+    /// 提交自动推断成功。失败时原样返还 Tracker，调用方仍可如实完成失败或取消路径。
+    pub(crate) fn into_response_completed(self) -> Result<AttemptSuccessCompletion, Self> {
+        if !self.upstream_response_observed
+            || self.write != UpstreamWriteState::BytesWritten
+            || self.downstream != DownstreamCommitState::Committed
+        {
+            return Err(self);
+        }
+        Ok(AttemptSuccessCompletion {
+            coordinator: self.permit.coordinator_id(),
+            attempt: self.permit.attempt_id(),
+        })
+    }
+
     fn build_outcome(
         &self,
         failure: FailureClass,
@@ -394,8 +385,8 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
     ) -> AttemptOutcome {
         let receipt_provided = trusted_rejection.is_some();
         let contract_metadata = trusted_rejection
-            .filter(|receipt| receipt.matches(&self.permit))
-            .map(|receipt| receipt.metadata());
+            .filter(|receipt| receipt.binding.matches(&self.permit))
+            .map(|receipt| receipt.metadata);
         let semantic_event_seen = matches!(
             self.phase,
             SendPhase::FirstSemanticEventObserved | SendPhase::DownstreamCommitted
@@ -424,6 +415,22 @@ impl<'snapshot, 'candidates> AttemptTracker<'snapshot, 'candidates> {
             charge,
             contract_metadata,
         }
+    }
+}
+
+/// 仅由完整响应 Tracker 消费式签发的密封成功完成对象。
+///
+/// 它不持有 Permit，字段和构造路径也不向 crate 其他模块开放；Coordinator 只能校验它是否
+/// 属于当前活跃 Attempt，不能从裸 Permit 伪造它。
+#[derive(Debug)]
+pub(crate) struct AttemptSuccessCompletion {
+    coordinator: CoordinatorId,
+    attempt: AttemptId,
+}
+
+impl AttemptSuccessCompletion {
+    pub(crate) fn matches(&self, coordinator: CoordinatorId, attempt: AttemptId) -> bool {
+        self.coordinator == coordinator && self.attempt == attempt
     }
 }
 
@@ -566,8 +573,8 @@ mod tests {
             .first_semantic_event_observed()
             .expect("允许观察语义事件");
         tracker.downstream_committed().expect("允许下游提交");
-        assert_eq!(tracker.phase(), SendPhase::DownstreamCommitted);
-        assert_eq!(tracker.downstream_state(), DownstreamCommitState::Committed);
+        assert_eq!(tracker.phase, SendPhase::DownstreamCommitted);
+        assert_eq!(tracker.downstream, DownstreamCommitState::Committed);
         assert_eq!(
             tracker.request_write_started(),
             Err(AttemptTransitionError::InvalidPhase)
@@ -578,8 +585,8 @@ mod tests {
     fn downstream_commit_can_close_any_in_flight_attempt() {
         let mut tracker = AttemptTracker::test_only(1);
         tracker.downstream_committed().expect("允许先提交下游响应");
-        assert_eq!(tracker.phase(), SendPhase::DownstreamCommitted);
-        assert_eq!(tracker.downstream_state(), DownstreamCommitState::Committed);
+        assert_eq!(tracker.phase, SendPhase::DownstreamCommitted);
+        assert_eq!(tracker.downstream, DownstreamCommitState::Committed);
         assert_eq!(
             tracker.downstream_committed(),
             Err(AttemptTransitionError::InvalidPhase)
@@ -590,7 +597,7 @@ mod tests {
     fn write_state_never_returns_to_a_safe_value() {
         let mut tracker = AttemptTracker::test_only(1);
         tracker.write_state_unknown().expect("允许标记未知");
-        assert_eq!(tracker.write_state(), UpstreamWriteState::Unknown);
+        assert_eq!(tracker.write, UpstreamWriteState::Unknown);
         assert_eq!(
             tracker.request_write_started(),
             Err(AttemptTransitionError::InvalidPhase)
