@@ -3,7 +3,7 @@
 //! 这里只验证 v8 `routing_v2_store_state` 的非敏感元数据，绝不读取旧 Provider、
 //! 配置 JSON、Secret 或任何其他 routing v2 表。它不在请求热路径中运行。
 
-use super::SCHEMA_VERSION;
+use super::{ROUTING_V2_MINIMUM_READER_VERSION, SCHEMA_VERSION};
 use rusqlite::Connection;
 use thiserror::Error;
 
@@ -44,7 +44,7 @@ pub(crate) fn acquire(conn: &Connection) -> Result<RoutingV2StoreAccess, StoreGa
     let state = read_single_state(conn)?;
     if state.id != 1
         || state.migration_epoch < 1
-        || state.minimum_reader_version < 1
+        || state.minimum_reader_version < ROUTING_V2_MINIMUM_READER_VERSION
         || state.rollback_generation < 0
     {
         return Err(StoreGateError::StateInvalid);
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn gate_accepts_valid_state_without_any_legacy_provider_table() {
         let conn = state_only_connection();
-        insert_state(&conn, 1, 1, 1, 0);
+        insert_state(&conn, 1, 1, ROUTING_V2_MINIMUM_READER_VERSION, 0);
 
         assert!(acquire(&conn).is_ok());
         let provider_tables: i64 = conn
@@ -197,6 +197,14 @@ mod tests {
             acquire(&conn),
             Err(StoreGateError::ReaderIncompatible)
         ));
+    }
+
+    #[test]
+    fn gate_rejects_reader_version_older_than_v8_store_contract() {
+        let conn = state_only_connection();
+        insert_state(&conn, 1, 1, ROUTING_V2_MINIMUM_READER_VERSION - 1, 0);
+
+        assert!(matches!(acquire(&conn), Err(StoreGateError::StateInvalid)));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //!
 //! 负责数据库表结构的创建和版本迁移。
 
-use super::{lock_conn, Database, SCHEMA_VERSION};
+use super::{lock_conn, Database, ROUTING_V2_MINIMUM_READER_VERSION, SCHEMA_VERSION};
 use crate::error::AppError;
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -1083,24 +1083,24 @@ impl Database {
     /// 该目录仅承载尚未激活的 Site、Endpoint、Account 与 Deployment 元数据。
     /// 它不包含 Credential、Binding、Grant、Quota 或任何可执行配置。
     fn create_routing_v2_catalog_tables(conn: &Connection) -> Result<(), AppError> {
-        conn.execute(
+        let state_table_sql = format!(
             "CREATE TABLE IF NOT EXISTS routing_v2_store_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 migration_epoch INTEGER NOT NULL CHECK (migration_epoch >= 1),
-                minimum_reader_version INTEGER NOT NULL CHECK (minimum_reader_version >= 8),
+                minimum_reader_version INTEGER NOT NULL CHECK (minimum_reader_version >= {ROUTING_V2_MINIMUM_READER_VERSION}),
                 rollback_generation INTEGER NOT NULL CHECK (rollback_generation >= 0),
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(format!("创建 routing_v2_store_state 表失败: {e}")))?;
+            )"
+        );
+        conn.execute(&state_table_sql, [])
+            .map_err(|e| AppError::Database(format!("创建 routing_v2_store_state 表失败: {e}")))?;
 
         conn.execute(
             "INSERT OR IGNORE INTO routing_v2_store_state (
                 id, migration_epoch, minimum_reader_version, rollback_generation
-            ) VALUES (1, 1, 8, 0)",
-            [],
+            ) VALUES (1, 1, ?1, 0)",
+            [ROUTING_V2_MINIMUM_READER_VERSION],
         )
         .map_err(|e| AppError::Database(format!("初始化 routing_v2_store_state 失败: {e}")))?;
 

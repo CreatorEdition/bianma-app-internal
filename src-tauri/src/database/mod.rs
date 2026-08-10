@@ -48,6 +48,12 @@ use std::sync::Mutex;
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
 pub(crate) const SCHEMA_VERSION: i32 = 8;
 
+/// routing v2 目录允许声明的最低 reader 版本。
+///
+/// 此值在 Store State 的 DDL、初始化值与访问栅栏间共享；目录发生不兼容变化时
+/// 必须随迁移明确提升，不能由 Gate 静默放宽。
+pub(crate) const ROUTING_V2_MINIMUM_READER_VERSION: i64 = 8;
+
 /// routing v2 的设备本地 SQLite 命名空间。
 ///
 /// 该命名空间在现有 SQL/WebDAV 同步与自动同步触发器中一律隔离，避免未来
