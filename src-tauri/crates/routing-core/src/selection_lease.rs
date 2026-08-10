@@ -15,9 +15,9 @@ use super::{
     coordinator::AttemptPermit,
     selection_input::AccountSelectionEligibility,
     selection_runtime_layout::{SelectionRuntimeBinding, SelectionRuntimeLayout},
-    CompiledRoutingSnapshot, CredentialSelectionPolicy, FailureClass, ResolvedRouteTarget,
-    MAX_QUOTA_GROUPS_PER_UNIT, MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS,
-    MAX_TRACKED_QUOTA_GROUPS,
+    CompiledRoutingSnapshot, CredentialSelectionPolicy, FailureClass, HealthTick,
+    ResolvedRouteTarget, RouteTargetId, SnapshotVersion, MAX_QUOTA_GROUPS_PER_UNIT,
+    MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
 };
 
 /// Registry 激活被拒绝的原因。
@@ -145,6 +145,110 @@ impl Drop for SelectedLease<'_> {
     }
 }
 
+/// 资源级冷却应归属的最小范围。
+///
+/// 本切片只允许精确的 Credential、Account 或当前实际持有的 QuotaGroup 集合。未知范围
+/// 不能被缩窄为资源冷却；未来 adapter 必须把它交给既有 Site/Unknown HealthRegistry 链。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResourceCooldownScope {
+    /// 仅冷却当前实际选中的 Credential。
+    Credential,
+    /// 冷却当前实际选中的 Account。
+    Account,
+    /// 冷却当前实际选中 Unit 的全部 QuotaGroup。
+    CurrentQuotaGroups,
+}
+
+/// 只能由 [`ResourceCooldownReporter`] 消费式签发的一次资源冷却观测。
+///
+/// 它绑定当前实际 Lease 的 Target、Account、Credential 与 QuotaGroup 集合，不提供裸
+/// 资源 ID 构造入口，也不包含 HTTP、重放、Secret 或当前 Attempt 的交付结论。
+#[must_use = "资源冷却观测必须交给 SelectionCooldownRegistry 记录，或显式丢弃"]
+pub(crate) struct TrustedSelectionCooldownObservation {
+    generation: SnapshotVersion,
+    target: RouteTargetId,
+    account: u64,
+    credential: u64,
+    quota_groups: [u64; MAX_QUOTA_GROUPS_PER_UNIT],
+    quota_group_len: u8,
+    scope: ResourceCooldownScope,
+    deadline: HealthTick,
+}
+
+impl TrustedSelectionCooldownObservation {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        SnapshotVersion,
+        RouteTargetId,
+        u64,
+        u64,
+        [u64; MAX_QUOTA_GROUPS_PER_UNIT],
+        u8,
+        ResourceCooldownScope,
+        HealthTick,
+    ) {
+        (
+            self.generation,
+            self.target,
+            self.account,
+            self.credential,
+            self.quota_groups,
+            self.quota_group_len,
+            self.scope,
+            self.deadline,
+        )
+    }
+}
+
+/// 为当前实际 Lease 签发一次资源冷却观测的线性上报器。
+///
+/// 上报器借用 handoff 内的 Lease；在它被消费或离开作用域前，调用方不能终结该 handoff。
+/// 它不接收 Target、Account、Credential 或 QuotaGroup ID，因而不能把某个请求的冷却归因
+/// 到另一个资源。
+#[must_use = "资源冷却上报器必须消费为 observation，或显式丢弃"]
+pub(crate) struct ResourceCooldownReporter<'handoff, 'registry> {
+    generation: SnapshotVersion,
+    target: RouteTargetId,
+    lease: &'handoff SelectedLease<'registry>,
+}
+
+impl ResourceCooldownReporter<'_, '_> {
+    /// 消费上报器并生成一次资源级冷却观测。
+    pub(crate) fn report(
+        self,
+        scope: ResourceCooldownScope,
+        deadline: HealthTick,
+    ) -> TrustedSelectionCooldownObservation {
+        let mut quota_groups = [0u64; MAX_QUOTA_GROUPS_PER_UNIT];
+        let quota_group_len = self.lease.quota_group_len;
+        for (index, slot) in self.lease.quota_groups[..usize::from(quota_group_len)]
+            .iter()
+            .flatten()
+            .enumerate()
+        {
+            quota_groups[index] = slot.id;
+        }
+        TrustedSelectionCooldownObservation {
+            generation: self.generation,
+            target: self.target,
+            account: self.lease.account.id,
+            credential: self.lease.credential.id,
+            quota_groups,
+            quota_group_len,
+            scope,
+            deadline,
+        }
+    }
+}
+
+/// 资源冷却上报器不能签发的原因。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResourceCooldownReporterError {
+    /// 当前 handoff 已签发过资源冷却上报器。
+    AlreadyReported,
+}
+
 /// 由 Registry 成功发放的、唯一可进入发送阶段的选择结果。
 ///
 /// 它同时线性持有 Lease 和 Tracker。失败、取消与成功出口都会释放 Lease；直接 Drop 只
@@ -153,6 +257,8 @@ impl Drop for SelectedLease<'_> {
 pub(crate) struct SelectedAttempt<'registry, 'snapshot, 'config> {
     lease: SelectedLease<'registry>,
     tracker: AttemptTracker<'snapshot, 'config>,
+    generation: SnapshotVersion,
+    target: RouteTargetId,
 }
 
 /// Transport 交接后本地维护的终结安全见证。
@@ -179,7 +285,10 @@ enum TransportTerminalSafety {
 pub(crate) struct TransportHandoffAttempt<'registry, 'snapshot, 'config> {
     lease: SelectedLease<'registry>,
     tracker: AttemptTracker<'snapshot, 'config>,
+    generation: SnapshotVersion,
+    target: RouteTargetId,
     terminal_safety: TransportTerminalSafety,
+    resource_cooldown_reporter_issued: bool,
 }
 
 /// 消费 Transport 交接尝试后的成功转换结果。
@@ -203,11 +312,19 @@ impl<'registry, 'snapshot, 'config> SelectedAttempt<'registry, 'snapshot, 'confi
     pub(crate) fn into_transport_handoff(
         self,
     ) -> TransportHandoffAttempt<'registry, 'snapshot, 'config> {
-        let Self { lease, tracker } = self;
+        let Self {
+            lease,
+            tracker,
+            generation,
+            target,
+        } = self;
         TransportHandoffAttempt {
             lease,
             tracker,
+            generation,
+            target,
             terminal_safety: TransportTerminalSafety::NoBytesProven,
+            resource_cooldown_reporter_issued: false,
         }
     }
 }
@@ -260,6 +377,25 @@ impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot
         self.tracker.replay_reporter(resolved)
     }
 
+    /// 为当前实际持有的三资源 Lease 签发一次冷却上报器。
+    ///
+    /// 上报器不接收任何裸资源 ID，只能从 handoff 已持有的 Account、Credential 与当前 Unit
+    /// 全部 QuotaGroup 派生 observation。它与现有 Target 限流上报器、执行前拒绝收据和
+    /// 当前 Attempt 的 ReplayGate 完全独立。
+    pub(crate) fn resource_cooldown_reporter<'handoff>(
+        &'handoff mut self,
+    ) -> Result<ResourceCooldownReporter<'handoff, 'registry>, ResourceCooldownReporterError> {
+        if self.resource_cooldown_reporter_issued {
+            return Err(ResourceCooldownReporterError::AlreadyReported);
+        }
+        self.resource_cooldown_reporter_issued = true;
+        Ok(ResourceCooldownReporter {
+            generation: self.generation,
+            target: self.target,
+            lease: &self.lease,
+        })
+    }
+
     /// 释放 Lease 并生成失败完成对象。
     ///
     /// 默认先保守封口未证明的写出状态，令交接后的裸 429、超时、连接错误和服务端错误都
@@ -295,7 +431,10 @@ impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot
         let Self {
             lease,
             tracker,
+            generation,
+            target,
             terminal_safety,
+            resource_cooldown_reporter_issued,
         } = self;
         match tracker.into_response_completed() {
             Ok(completion) => {
@@ -305,7 +444,10 @@ impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot
             Err(tracker) => TransportHandoffSuccess::Incomplete(Self {
                 lease,
                 tracker,
+                generation,
+                target,
                 terminal_safety,
+                resource_cooldown_reporter_issued,
             }),
         }
     }
@@ -479,9 +621,13 @@ impl<'snapshot, 'config> SelectionLeaseRegistry<'snapshot, 'config> {
                 }
                 match self.acquire(binding) {
                     Ok(lease) => {
+                        let generation = permit.snapshot().version();
+                        let target = permit.target();
                         return PrioritySelectionStart::Selected(SelectedAttempt {
                             lease,
                             tracker: AttemptTracker::from_permit(permit),
+                            generation,
+                            target,
                         });
                     }
                     Err(LeaseAcquireError::CapacityUnavailable) => continue,
@@ -604,6 +750,9 @@ fn rollback(
 
 #[cfg(test)]
 mod tests {
+    use super::super::selection_cooldown::{
+        SelectionCooldownFilterError, SelectionCooldownRecordError, SelectionCooldownRegistry,
+    };
     use super::*;
     use crate::{
         AccountCredentialDefinitions, AccountDefinition, AccountRuntimeDefinition,
@@ -725,8 +874,19 @@ mod tests {
         credentials: &'a [CredentialDefinition],
         selectors: &'a [AccountSelectorDefinition<'a>],
     ) -> CompiledRoutingSnapshot<'a> {
+        compiled_with_version(1, candidates, deployments, accounts, credentials, selectors)
+    }
+
+    fn compiled_with_version<'a>(
+        version: u64,
+        candidates: &'a [RouteCandidate],
+        deployments: &'a [ModelDeploymentDefinition],
+        accounts: &'a [AccountDefinition],
+        credentials: &'a [CredentialDefinition],
+        selectors: &'a [AccountSelectorDefinition<'a>],
+    ) -> CompiledRoutingSnapshot<'a> {
         CompiledRoutingSnapshot::compile(
-            SnapshotVersion::new(1).expect("测试快照版本非零"),
+            SnapshotVersion::new(version).expect("测试快照版本非零"),
             candidates,
             RoutingStrategy::Priority,
             candidates.len() as u8,
@@ -1586,6 +1746,442 @@ mod tests {
             panic!("受信执行前拒绝必须签发计划内下一 Permit");
         };
         assert_eq!(permit.target(), target_id(2));
+    }
+
+    #[test]
+    fn resource_cooldown_observations_only_filter_future_eligibility() {
+        let shared_groups = [group_id(1)];
+        let independent_groups = [group_id(2)];
+        let first_units = [
+            QuotaSelectionUnit::new(
+                unit_id(1),
+                core::num::NonZeroU16::new(1).expect("测试权重非零"),
+                &shared_groups,
+            ),
+            QuotaSelectionUnit::new(
+                unit_id(2),
+                core::num::NonZeroU16::new(1).expect("测试权重非零"),
+                &independent_groups,
+            ),
+        ];
+        let second_units = [QuotaSelectionUnit::new(
+            unit_id(3),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &shared_groups,
+        )];
+        let first_members = [
+            crate::AccountSelectorMember::new(account_id(1), credential_id(1), unit_id(1), 0),
+            crate::AccountSelectorMember::new(account_id(1), credential_id(2), unit_id(1), 0),
+            crate::AccountSelectorMember::new(account_id(2), credential_id(3), unit_id(2), 1),
+        ];
+        let second_members = [crate::AccountSelectorMember::new(
+            account_id(3),
+            credential_id(4),
+            unit_id(3),
+            0,
+        )];
+        let selectors = [
+            selector(
+                1,
+                CredentialSelectionPolicy::PriorityFailover,
+                QuotaTopologySource::UserConfirmed,
+                &first_units,
+                &first_members,
+            ),
+            selector(
+                2,
+                CredentialSelectionPolicy::PriorityFailover,
+                QuotaTopologySource::ConservativeDefault,
+                &second_units,
+                &second_members,
+            ),
+        ];
+        let candidates = [candidate(1, 1, 1), candidate(2, 2, 2)];
+        let deployments = [deployment(1), deployment(2)];
+        let accounts = [account(1, 1), account(2, 1), account(3, 2)];
+        let credentials = [
+            credential(1, 1),
+            credential(2, 1),
+            credential(3, 2),
+            credential(4, 3),
+        ];
+        let compiled_next_snapshot = compiled(
+            &candidates,
+            &deployments,
+            &accounts,
+            &credentials,
+            &selectors,
+        );
+        let compiled = compiled(
+            &candidates,
+            &deployments,
+            &accounts,
+            &credentials,
+            &selectors,
+        );
+        let group_runtime = [group_runtime(1, 1), group_runtime(2, 1)];
+        let account_runtime = [
+            account_runtime(1, 1),
+            account_runtime(2, 1),
+            account_runtime(3, 1),
+        ];
+        let credential_runtime = [
+            credential_runtime(1, 1),
+            credential_runtime(2, 1),
+            credential_runtime(3, 1),
+            credential_runtime(4, 1),
+        ];
+        let definitions =
+            SelectionRuntimeDefinitions::new(&group_runtime, &account_runtime, &credential_runtime)
+                .expect("测试定义有效");
+        let lease_registry = registry(&compiled, &definitions);
+        let next_route_eligibility = route_eligibility(compiled_next_snapshot.routing());
+        let route_eligibility = route_eligibility(compiled.routing());
+        let plan = route_plan(compiled.routing(), &route_eligibility);
+        let base = selection_eligibility(&compiled, &plan, 0b11, 0b111);
+
+        let mut credential_cooldowns = SelectionCooldownRegistry::new();
+        let mut credential_coordinator = plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let credential_selected = match lease_registry.start_priority(
+            credential_coordinator
+                .start(&route_eligibility)
+                .expect("凭据冷却 Permit 有效"),
+            base,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("凭据冷却路径应选择首个成员"),
+        };
+        let mut credential_handoff = credential_selected.into_transport_handoff();
+        let credential_observation = credential_handoff
+            .resource_cooldown_reporter()
+            .expect("实际 handoff 可签发资源冷却上报器")
+            .report(ResourceCooldownScope::Credential, HealthTick::new(10));
+        assert!(matches!(
+            credential_handoff.resource_cooldown_reporter(),
+            Err(ResourceCooldownReporterError::AlreadyReported)
+        ));
+        credential_cooldowns
+            .record(credential_observation, HealthTick::new(1))
+            .expect("受信凭据观测可记录");
+        let credential_filtered = credential_cooldowns
+            .filter(base, HealthTick::new(1))
+            .expect("凭据冷却过滤有效");
+        assert_eq!(credential_filtered.member_mask(), 0b110);
+        assert_eq!(credential_filtered.unit_mask(), 0b11);
+        let pre_disabled = selection_eligibility(
+            &compiled,
+            &route_plan(compiled.routing(), &route_eligibility),
+            0b10,
+            0b100,
+        );
+        assert_eq!(
+            credential_cooldowns
+                .filter(pre_disabled, HealthTick::new(1))
+                .expect("冷却过滤不得重新启用已有禁用位")
+                .member_mask(),
+            0b100
+        );
+        let next_plan = route_plan(compiled_next_snapshot.routing(), &next_route_eligibility);
+        let next_base = selection_eligibility(&compiled_next_snapshot, &next_plan, 0b11, 0b111);
+        assert_eq!(
+            credential_cooldowns
+                .filter(next_base, HealthTick::new(1))
+                .expect("稳定凭据 ID 可跨快照过滤")
+                .member_mask(),
+            0b110
+        );
+        assert_eq!(
+            credential_cooldowns
+                .filter(base, HealthTick::new(10))
+                .expect("精确到期可解除凭据冷却")
+                .member_mask(),
+            0b111
+        );
+        assert_eq!(
+            credential_cooldowns
+                .filter(base, HealthTick::new(5))
+                .expect("时间回拨不能恢复已过期冷却")
+                .member_mask(),
+            0b111
+        );
+        let _credential_completion = credential_handoff.into_cancelled_completion();
+
+        let mut account_cooldowns = SelectionCooldownRegistry::new();
+        let account_plan = route_plan(compiled.routing(), &route_eligibility);
+        let mut account_coordinator = account_plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let account_selected = match lease_registry.start_priority(
+            account_coordinator
+                .start(&route_eligibility)
+                .expect("账户冷却 Permit 有效"),
+            base,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("账户冷却路径应选择首个成员"),
+        };
+        let account_observation = account_selected
+            .into_transport_handoff()
+            .resource_cooldown_reporter()
+            .expect("实际 handoff 可签发账户上报器")
+            .report(ResourceCooldownScope::Account, HealthTick::new(10));
+        account_cooldowns
+            .record(account_observation, HealthTick::new(1))
+            .expect("受信账户观测可记录");
+        let account_filtered = account_cooldowns
+            .filter(base, HealthTick::new(1))
+            .expect("账户冷却过滤有效");
+        assert_eq!(account_filtered.member_mask(), 0b100);
+        assert_eq!(account_filtered.unit_mask(), 0b10);
+
+        let mut quota_cooldowns = SelectionCooldownRegistry::new();
+        let quota_plan = route_plan(compiled.routing(), &route_eligibility);
+        let mut quota_coordinator = quota_plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let quota_selected = match lease_registry.start_priority(
+            quota_coordinator
+                .start(&route_eligibility)
+                .expect("额度组冷却 Permit 有效"),
+            base,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("额度组冷却路径应选择首个成员"),
+        };
+        let quota_observation = quota_selected
+            .into_transport_handoff()
+            .resource_cooldown_reporter()
+            .expect("实际 handoff 可签发额度组上报器")
+            .report(
+                ResourceCooldownScope::CurrentQuotaGroups,
+                HealthTick::new(10),
+            );
+        quota_cooldowns
+            .record(quota_observation, HealthTick::new(1))
+            .expect("受信额度组观测可记录");
+        let quota_filtered = quota_cooldowns
+            .filter(base, HealthTick::new(1))
+            .expect("额度组冷却过滤有效");
+        assert_eq!(quota_filtered.member_mask(), 0b100);
+        assert_eq!(quota_filtered.unit_mask(), 0b10);
+        let second_resolved = compiled
+            .resolve_plan_target(&route_plan(compiled.routing(), &route_eligibility), 1)
+            .expect("第二 Target 与快照一致")
+            .expect("第二 Target 存在");
+        let second_request = compiled
+            .selection_request(second_resolved, SelectionSession::Absent)
+            .expect("第二 Target 的选择请求有效");
+        let second_base = AccountSelectionEligibility::new(second_request, 0b1, 0b1)
+            .expect("第二 Target 基础 eligibility 有效");
+        let second_filtered = quota_cooldowns
+            .filter(second_base, HealthTick::new(1))
+            .expect("共享额度组跨 Selector 过滤有效");
+        assert_eq!(second_filtered.member_mask(), 0);
+        assert_eq!(second_filtered.unit_mask(), 0);
+
+        let zero_base = selection_eligibility(
+            &compiled,
+            &route_plan(compiled.routing(), &route_eligibility),
+            0b1,
+            0b11,
+        );
+        let zero_filtered = quota_cooldowns
+            .filter(zero_base, HealthTick::new(1))
+            .expect("全部成员被额度组冷却后仍是合法空 eligibility");
+        assert_eq!(zero_filtered.member_mask(), 0);
+        assert_eq!(zero_filtered.unit_mask(), 0);
+        let zero_plan = route_plan(compiled.routing(), &route_eligibility);
+        let mut zero_coordinator = zero_plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let zero_rejected = match lease_registry.start_priority(
+            zero_coordinator
+                .start(&route_eligibility)
+                .expect("空 eligibility Permit 有效"),
+            zero_filtered,
+        ) {
+            PrioritySelectionStart::Rejected(rejected) => rejected,
+            _ => panic!("合法空 eligibility 必须走本地零发送拒绝"),
+        };
+        let crate::coordinator::CoordinatorStep::Next { permit, delay_ms } = zero_coordinator
+            .complete_local_rejection(zero_rejected, &route_eligibility)
+            .expect("本地拒绝可直接推进")
+        else {
+            panic!("本地拒绝必须推进到 B");
+        };
+        assert_eq!(permit.target(), target_id(2));
+        assert_eq!(delay_ms, 0);
+
+        let safety_plan = route_plan(compiled.routing(), &route_eligibility);
+        let mut safety_coordinator = safety_plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let safety_selected = match lease_registry.start_priority(
+            safety_coordinator
+                .start(&route_eligibility)
+                .expect("交付安全 Permit 有效"),
+            base,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("交付安全路径应选择首个成员"),
+        };
+        let mut safety_handoff = safety_selected.into_transport_handoff();
+        let safety_observation = safety_handoff
+            .resource_cooldown_reporter()
+            .expect("交付安全 handoff 可签发上报器")
+            .report(ResourceCooldownScope::Credential, HealthTick::new(10));
+        let mut safety_cooldowns = SelectionCooldownRegistry::new();
+        safety_cooldowns
+            .record(safety_observation, HealthTick::new(1))
+            .expect("冷却记录不应改变当前 Attempt");
+        safety_handoff
+            .request_write_started()
+            .expect("可记录已写出首字节");
+        let safety_completion =
+            safety_handoff.into_completion(FailureClass::RateLimited, Some(500), None);
+        assert_eq!(safety_completion.outcome().delivery(), DeliveryState::Sent);
+        assert!(matches!(
+            safety_coordinator
+                .complete(safety_completion, &route_eligibility)
+                .expect("当前 Attempt 完成可消费"),
+            crate::coordinator::CoordinatorStep::Stop(crate::RetryStopReason::ReplayNotProven)
+        ));
+    }
+
+    #[test]
+    fn newer_snapshot_generation_drops_rebound_identity_and_rejects_late_old_observation() {
+        let groups = [group_id(1)];
+        let units = [QuotaSelectionUnit::new(
+            unit_id(1),
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [crate::AccountSelectorMember::new(
+            account_id(1),
+            credential_id(1),
+            unit_id(1),
+            0,
+        )];
+        let selectors = [selector(
+            1,
+            CredentialSelectionPolicy::PriorityFailover,
+            QuotaTopologySource::ConservativeDefault,
+            &units,
+            &members,
+        )];
+        let candidates = [candidate(1, 1, 1)];
+        let deployments = [deployment(1)];
+        let accounts = [account(1, 1)];
+        let credentials = [credential(1, 1)];
+        let compiled = compiled_with_version(
+            1,
+            &candidates,
+            &deployments,
+            &accounts,
+            &credentials,
+            &selectors,
+        );
+        let group_runtime = [group_runtime(1, 1)];
+        let account_runtime = [account_runtime(1, 1)];
+        let credential_runtime = [credential_runtime(1, 1)];
+        let definitions =
+            SelectionRuntimeDefinitions::new(&group_runtime, &account_runtime, &credential_runtime)
+                .expect("测试定义有效");
+        let lease_registry = registry(&compiled, &definitions);
+        let first_route_eligibility = route_eligibility(compiled.routing());
+        let first_plan = route_plan(compiled.routing(), &first_route_eligibility);
+        let first_eligibility = selection_eligibility(&compiled, &first_plan, 1, 1);
+
+        let mut first_coordinator = first_plan
+            .into_attempt_coordinator(RetryPolicy::new(1, 0).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let first_observation = match lease_registry.start_priority(
+            first_coordinator
+                .start(&first_route_eligibility)
+                .expect("首代 Permit 有效"),
+            first_eligibility,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected
+                .into_transport_handoff()
+                .resource_cooldown_reporter()
+                .expect("首代 handoff 可签发上报器")
+                .report(ResourceCooldownScope::Credential, HealthTick::new(50)),
+            _ => panic!("首代必须选择唯一成员"),
+        };
+        let mut cooldowns = SelectionCooldownRegistry::new();
+        cooldowns
+            .record(first_observation, HealthTick::new(1))
+            .expect("首代受信观测可记录");
+        assert_eq!(
+            cooldowns
+                .filter(first_eligibility, HealthTick::new(1))
+                .expect("首代冷却过滤有效")
+                .member_mask(),
+            0
+        );
+
+        let late_plan = route_plan(compiled.routing(), &first_route_eligibility);
+        let mut late_coordinator = late_plan
+            .into_attempt_coordinator(RetryPolicy::new(1, 0).expect("测试策略有效"))
+            .expect("迟到观测 Coordinator 有效");
+        let late_observation = match lease_registry.start_priority(
+            late_coordinator
+                .start(&first_route_eligibility)
+                .expect("迟到观测 Permit 有效"),
+            first_eligibility,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected
+                .into_transport_handoff()
+                .resource_cooldown_reporter()
+                .expect("迟到观测 handoff 可签发上报器")
+                .report(ResourceCooldownScope::Credential, HealthTick::new(60)),
+            _ => panic!("迟到观测仍应能从首代实际 Lease 派生"),
+        };
+
+        let rebound_target = RouteTarget::new(
+            target_id(1),
+            SiteId::new(2).expect("重绑定站点 ID 非零"),
+            ModelDeploymentId::new(2).expect("重绑定部署 ID 非零"),
+            EndpointId::new(2).expect("重绑定端点 ID 非零"),
+            selector_id(1),
+        );
+        let rebound_candidates = [RouteCandidate::ready(
+            RouteStageId::new(1).expect("重绑定阶段 ID 非零"),
+            rebound_target,
+            0,
+        )];
+        let rebound_deployments = [deployment(2)];
+        let rebound_accounts = [account(1, 2)];
+        let rebound_credentials = [credential(1, 1)];
+        let rebound = compiled_with_version(
+            2,
+            &rebound_candidates,
+            &rebound_deployments,
+            &rebound_accounts,
+            &rebound_credentials,
+            &selectors,
+        );
+        let rebound_route_eligibility = route_eligibility(rebound.routing());
+        let rebound_plan = route_plan(rebound.routing(), &rebound_route_eligibility);
+        let rebound_eligibility = selection_eligibility(&rebound, &rebound_plan, 1, 1);
+
+        assert_eq!(
+            cooldowns
+                .filter(rebound_eligibility, HealthTick::new(1))
+                .expect("更高配置代必须清空旧绑定冷却")
+                .member_mask(),
+            1
+        );
+        assert_eq!(
+            cooldowns.record(late_observation, HealthTick::new(1)),
+            Err(SelectionCooldownRecordError::StaleGeneration)
+        );
+        assert!(matches!(
+            cooldowns.filter(first_eligibility, HealthTick::new(1)),
+            Err(SelectionCooldownFilterError::StaleGeneration)
+        ));
     }
 
     #[test]

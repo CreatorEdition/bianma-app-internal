@@ -114,6 +114,8 @@ pub(crate) enum AccountSelectionEligibilityError {
     MemberUnitNotAllowed,
     /// 已允许 Unit 没有任何同 Unit 的已允许 Member。
     AllowedUnitWithoutMember,
+    /// 受控过滤器试图重新启用原始资格未允许的 Member。
+    MemberMaskWouldAddBit,
 }
 
 /// 绑定一个选择请求的动态账户/凭据资格位图。
@@ -201,6 +203,37 @@ impl<'snapshot, 'config> AccountSelectionEligibility<'snapshot, 'config> {
     /// 返回按 Selector 声明顺序编码的允许 Member 位图。
     pub(crate) const fn member_mask(self) -> u16 {
         self.member_mask
+    }
+
+    /// 仅清除已有允许 Member，并从剩余 Member 重新推导 Unit 掩码。
+    ///
+    /// 此入口不能增加任何 Member 位；它最终仍复用 [`Self::new`] 完整校验 Unit/Member
+    /// 关系，因此 Account、Credential 或额度冷却过滤器不能用位运算制造无效资格。
+    pub(crate) fn with_member_mask_subset(
+        self,
+        member_mask: u16,
+    ) -> Result<Self, AccountSelectionEligibilityError> {
+        if member_mask & !self.member_mask != 0 {
+            return Err(AccountSelectionEligibilityError::MemberMaskWouldAddBit);
+        }
+
+        let selector = self.request.resolved().selector();
+        let mut unit_mask = 0u16;
+        for (member_index, member) in selector.members().iter().enumerate() {
+            if !mask_includes(member_mask, member_index) {
+                continue;
+            }
+            let Some(unit_index) = selector
+                .units()
+                .iter()
+                .position(|unit| unit.id() == member.unit())
+            else {
+                return Err(AccountSelectionEligibilityError::UnknownMemberUnit);
+            };
+            unit_mask |= 1u16 << unit_index;
+        }
+
+        Self::new(self.request, unit_mask, member_mask)
     }
 
     /// 返回某个已知 Unit 声明位是否获准；未知下标返回 `None`。

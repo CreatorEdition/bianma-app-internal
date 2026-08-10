@@ -23,6 +23,8 @@ mod coordinator;
 mod health;
 mod ingress;
 mod model_deployment;
+#[cfg_attr(not(test), allow(dead_code))]
+mod selection_cooldown;
 mod selection_input;
 #[cfg_attr(not(test), allow(dead_code))]
 mod selection_lease;
@@ -76,6 +78,10 @@ macro_rules! id_type {
 
 id_type!(
     /// 路由快照版本。
+    ///
+    /// 宿主必须在静态路由或资源身份语义变化时单调递增此值；尤其不得以同一版本把一个
+    /// Account、Credential 或 QuotaGroup 标识重新绑定为不同实际资源。资源冷却等跨请求
+    /// 状态以该版本作为无快照指针的配置代边界。
     SnapshotVersion
 );
 id_type!(

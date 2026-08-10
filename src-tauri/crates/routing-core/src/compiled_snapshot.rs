@@ -123,6 +123,10 @@ pub struct CompiledRoutingSnapshot<'a> {
 
 impl<'a> CompiledRoutingSnapshot<'a> {
     /// 编译候选、模型部署、账户选择合同与静态身份目录，并拒绝任何悬空或不一致引用。
+    ///
+    /// `version` 是不可变配置代：宿主必须在任一静态路由或资源身份语义变更时递增它，
+    /// 特别是禁止在同一版本内将既有 Account、Credential 或 QuotaGroup ID 重绑定到另一
+    /// 实际资源。这样独立的资源冷却 Registry 才能在版本切换时安全丢弃旧状态。
     pub fn compile(
         version: SnapshotVersion,
         candidates: &'a [RouteCandidate],
