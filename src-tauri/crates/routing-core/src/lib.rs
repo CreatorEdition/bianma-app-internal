@@ -1708,6 +1708,77 @@ mod tests {
     }
 
     #[test]
+    fn selection_input_accepts_full_capacity_masks() {
+        let groups: [QuotaGroupId; MAX_QUOTA_SELECTION_UNITS] = core::array::from_fn(|index| {
+            QuotaGroupId::new((index + 1) as u64).expect("测试额度组 ID 非零")
+        });
+        let units: [QuotaSelectionUnit<'_>; MAX_QUOTA_SELECTION_UNITS] =
+            core::array::from_fn(|index| {
+                QuotaSelectionUnit::new(
+                    QuotaSelectionUnitId::new((index + 1) as u64).expect("测试额度单元 ID 非零"),
+                    core::num::NonZeroU16::new(1).expect("测试权重非零"),
+                    &groups[index..=index],
+                )
+            });
+        let members: [AccountSelectorMember; MAX_ACCOUNT_SELECTOR_MEMBERS] =
+            core::array::from_fn(|index| {
+                let id = (index + 1) as u64;
+                AccountSelectorMember::new(
+                    AccountId::new(id).expect("测试账户 ID 非零"),
+                    CredentialId::new(id).expect("测试凭据 ID 非零"),
+                    units[index].id(),
+                    0,
+                )
+            });
+        let selectors = [AccountSelectorDefinition::new(
+            AccountSelectorId::new(1).expect("账户选择合同 ID 非零"),
+            SelectorRevision::new(1).expect("账户选择合同修订非零"),
+            SelectorAffinitySalt::new([1; 16]),
+            CredentialSelectionPolicy::PriorityFailover,
+            QuotaTopologySource::UserConfirmed,
+            &units,
+            &members,
+        )
+        .expect("满容量独立额度单元的静态选择合同有效")];
+        let route_candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 1, 1, 1, 1),
+            0,
+        )];
+        let deployments = [deployment_definition(1, 1, 1)];
+        let accounts: [AccountDefinition; MAX_ACCOUNT_SELECTOR_MEMBERS] =
+            core::array::from_fn(|index| account_definition((index + 1) as u64, 1));
+        let credentials: [CredentialDefinition; MAX_ACCOUNT_SELECTOR_MEMBERS] =
+            core::array::from_fn(|index| {
+                credential_definition((index + 1) as u64, (index + 1) as u64)
+            });
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &route_candidates,
+            RoutingStrategy::Priority,
+            1,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("满容量同代账户目录有效");
+        let route_plan = plan(compiled.routing(), 0).expect("存在计划目标");
+        let resolved = compiled
+            .resolve_plan_target(&route_plan, 0)
+            .expect("计划与快照一致")
+            .expect("首个尝试存在");
+        let request = compiled
+            .selection_request(resolved, SelectionSession::Absent)
+            .expect("同代目标可创建选择请求");
+
+        let eligibility = AccountSelectionEligibility::new(request, u16::MAX, u16::MAX)
+            .expect("16 个 Unit 与 Member 的满位资格掩码有效");
+
+        assert_eq!(eligibility.unit_allowed_at(15), Some(true));
+        assert_eq!(eligibility.member_allowed_at(15), Some(true));
+    }
+
+    #[test]
     fn account_selection_candidates_reject_same_version_foreign_snapshot() {
         let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
         let unit_id = QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零");
