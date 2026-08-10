@@ -4,8 +4,8 @@ use routing_core::{
     CredentialId, CredentialSelectionPolicy, EndpointId, HealthRegistry, HealthTick,
     IngressClassifier, IngressRequest, ModelDeploymentDefinition, ModelDeploymentId, OperationId,
     QuotaGroupId, QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RouteCandidate,
-    RoutePlanner, RouteStageId, RouteTarget, RoutingStrategy, SiteId, SnapshotVersion,
-    VerifiedIngressDisposition,
+    RoutePlanner, RouteStageId, RouteTarget, RoutingStrategy, SelectorAffinitySalt,
+    SelectorRevision, SiteId, SnapshotVersion, VerifiedIngressDisposition,
 };
 use std::hint::black_box;
 use std::num::NonZeroU16;
@@ -53,6 +53,8 @@ fn main() {
     )];
     let selectors = [AccountSelectorDefinition::new(
         AccountSelectorId::new(1).expect("基准选择合同 ID 非零"),
+        SelectorRevision::new(1).expect("基准选择合同修订非零"),
+        SelectorAffinitySalt::new([1; 16]),
         CredentialSelectionPolicy::PriorityFailover,
         QuotaTopologySource::ConservativeDefault,
         &units,

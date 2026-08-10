@@ -6,10 +6,11 @@
 
 use super::{
     AccountCatalog, AccountCatalogError, AccountCredentialDefinitions, AccountSelectionCandidates,
-    AccountSelectorCatalog, AccountSelectorCatalogError, AccountSelectorDefinition,
-    CredentialCatalog, CredentialCatalogError, ModelDeploymentCatalog, ModelDeploymentCatalogError,
-    ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan, RouteStageId, RouteTarget,
-    RoutingSnapshot, RoutingStrategy, SnapshotVersion,
+    AccountSelectionRequest, AccountSelectorCatalog, AccountSelectorCatalogError,
+    AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError, ModelDeploymentCatalog,
+    ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan,
+    RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy, SelectionSession,
+    SnapshotVersion,
 };
 use core::fmt;
 
@@ -258,6 +259,23 @@ impl<'a> CompiledRoutingSnapshot<'a> {
             deployment,
             selector,
         }))
+    }
+
+    /// 从同一 RoutingSnapshot 实例解析出的目标创建账户选择请求。
+    ///
+    /// SnapshotVersion 和 TargetId 相同不足以证明模型部署、账户目录或 Selector 定义一致；
+    /// 因此来自其他实例的解析目标一律按陈旧快照拒绝。该工厂只建立输入绑定，不选择
+    /// Account/Credential，也不验证动态额度、健康或 Lease。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn selection_request<'snapshot>(
+        &'snapshot self,
+        resolved: ResolvedRouteTarget<'snapshot, 'a>,
+        session: SelectionSession,
+    ) -> Result<AccountSelectionRequest<'snapshot, 'a>, PlanError> {
+        if !resolved.matches_snapshot(&self.routing) {
+            return Err(PlanError::StaleSnapshot);
+        }
+        Ok(AccountSelectionRequest::new(resolved, session))
     }
 
     /// 从同一 RoutingSnapshot 实例解析出的目标取得只读账户选择候选视图。

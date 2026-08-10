@@ -2,7 +2,7 @@
 //!
 //! 本模块只验证不可变 Selector 定义，不选择账户、不维护健康或 Lease，也不解析 Secret。
 
-use core::num::NonZeroU16;
+use core::num::{NonZeroU16, NonZeroU64};
 
 use super::{
     AccountId, AccountSelectorId, CredentialId, QuotaGroupId, QuotaSelectionUnitId,
@@ -20,6 +20,47 @@ pub const MAX_ACCOUNT_SELECTORS: usize = MAX_ROUTE_TARGETS;
 
 /// 单个独立额度单元允许关联的最大额度组数。
 pub const MAX_QUOTA_GROUPS_PER_UNIT: usize = MAX_ROUTE_TARGETS;
+
+/// 账户选择合同的不可变修订号。
+///
+/// 动态资格和未来 Lease 必须同时绑定 Selector ID 与本修订号，不能将旧配置的运行时
+/// 状态误用于内容已变化的新配置。
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SelectorRevision(NonZeroU64);
+
+impl SelectorRevision {
+    /// 从非零修订值构造修订号。
+    pub const fn new(value: u64) -> Option<Self> {
+        match NonZeroU64::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    /// 返回稳定修订值。
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// 由宿主配置生成的选择亲和盐。
+///
+/// 本值不是 Secret；它只用于让未来宿主侧会话亲和散列在 Selector 修订之间显式隔离。
+/// routing-core 不生成、轮换或持久化该值。
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SelectorAffinitySalt([u8; 16]);
+
+impl SelectorAffinitySalt {
+    /// 从固定长度的配置盐构造亲和盐。
+    pub const fn new(value: [u8; 16]) -> Self {
+        Self(value)
+    }
+
+    /// 返回固定长度亲和盐的副本。
+    pub const fn get(self) -> [u8; 16] {
+        self.0
+    }
+}
 
 /// 同一 Selector 内账户/凭据的静态选择策略。
 ///
@@ -156,6 +197,8 @@ pub enum AccountSelectorError {
     UnknownUnit,
     /// 同一凭据在一个 Selector 内重复出现。
     DuplicateCredential,
+    /// 同一独立额度单元混用了多个优先层。
+    MixedPriorityTierInUnit,
     /// 已定义的独立额度单元没有任何成员。
     UnusedUnit,
     /// 未知额度拓扑被不安全地拆分为多个独立单元。
@@ -169,6 +212,8 @@ pub enum AccountSelectorError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccountSelectorDefinition<'a> {
     id: AccountSelectorId,
+    revision: SelectorRevision,
+    affinity_salt: SelectorAffinitySalt,
     policy: CredentialSelectionPolicy,
     topology_source: QuotaTopologySource,
     units: &'a [QuotaSelectionUnit<'a>],
@@ -179,6 +224,8 @@ impl<'a> AccountSelectorDefinition<'a> {
     /// 验证并创建账户选择合同。
     pub fn new(
         id: AccountSelectorId,
+        revision: SelectorRevision,
+        affinity_salt: SelectorAffinitySalt,
         policy: CredentialSelectionPolicy,
         topology_source: QuotaTopologySource,
         units: &'a [QuotaSelectionUnit<'a>],
@@ -238,6 +285,11 @@ impl<'a> AccountSelectorDefinition<'a> {
             if !units.iter().any(|unit| unit.id == member.unit) {
                 return Err(AccountSelectorError::UnknownUnit);
             }
+            if members[..index].iter().any(|previous| {
+                previous.unit == member.unit && previous.priority_tier != member.priority_tier
+            }) {
+                return Err(AccountSelectorError::MixedPriorityTierInUnit);
+            }
         }
         if units
             .iter()
@@ -248,6 +300,8 @@ impl<'a> AccountSelectorDefinition<'a> {
 
         Ok(Self {
             id,
+            revision,
+            affinity_salt,
             policy,
             topology_source,
             units,
@@ -258,6 +312,16 @@ impl<'a> AccountSelectorDefinition<'a> {
     /// 返回稳定账户选择合同标识。
     pub const fn id(self) -> AccountSelectorId {
         self.id
+    }
+
+    /// 返回不可变账户选择合同修订号。
+    pub const fn revision(self) -> SelectorRevision {
+        self.revision
+    }
+
+    /// 返回当前合同的亲和盐。
+    pub const fn affinity_salt(self) -> SelectorAffinitySalt {
+        self.affinity_salt
     }
 
     /// 返回未来运行时应采用的选择策略。
@@ -452,6 +516,14 @@ mod tests {
         AccountSelectorId::new(value).expect("测试选择合同 ID 非零")
     }
 
+    fn revision(value: u64) -> SelectorRevision {
+        SelectorRevision::new(value).expect("测试选择合同修订非零")
+    }
+
+    fn affinity_salt(value: u8) -> SelectorAffinitySalt {
+        SelectorAffinitySalt::new([value; 16])
+    }
+
     fn weight(value: u16) -> NonZeroU16 {
         NonZeroU16::new(value).expect("测试权重非零")
     }
@@ -504,6 +576,8 @@ mod tests {
         assert_eq!(
             AccountSelectorDefinition::new(
                 selector(1),
+                revision(1),
+                affinity_salt(1),
                 CredentialSelectionPolicy::PriorityFailover,
                 QuotaTopologySource::ConservativeDefault,
                 &units,
@@ -514,6 +588,8 @@ mod tests {
         assert_eq!(
             AccountSelectorDefinition::new(
                 selector(1),
+                revision(1),
+                affinity_salt(1),
                 CredentialSelectionPolicy::PriorityFailover,
                 QuotaTopologySource::ConservativeDefault,
                 &[],
@@ -524,6 +600,8 @@ mod tests {
         assert_eq!(
             AccountSelectorDefinition::new(
                 selector(1),
+                revision(1),
+                affinity_salt(1),
                 CredentialSelectionPolicy::PriorityFailover,
                 QuotaTopologySource::ConservativeDefault,
                 &units,
@@ -534,6 +612,8 @@ mod tests {
         assert_eq!(
             AccountSelectorDefinition::new(
                 selector(1),
+                revision(1),
+                affinity_salt(1),
                 CredentialSelectionPolicy::PriorityFailover,
                 QuotaTopologySource::UserConfirmed,
                 &too_many_units,
@@ -544,6 +624,8 @@ mod tests {
         assert_eq!(
             AccountSelectorDefinition::new(
                 selector(1),
+                revision(1),
+                affinity_salt(1),
                 CredentialSelectionPolicy::PriorityFailover,
                 QuotaTopologySource::ConservativeDefault,
                 &unit_with_too_many_groups,
@@ -609,6 +691,8 @@ mod tests {
             assert_eq!(
                 AccountSelectorDefinition::new(
                     selector(1),
+                    revision(1),
+                    affinity_salt(1),
                     CredentialSelectionPolicy::PriorityFailover,
                     QuotaTopologySource::UserConfirmed,
                     units,
@@ -620,12 +704,37 @@ mod tests {
     }
 
     #[test]
+    fn selector_rejects_mixed_priority_tiers_inside_one_quota_unit() {
+        let groups = [group(1)];
+        let units = [unit(1, 1, &groups)];
+        let members = [
+            AccountSelectorMember::new(account(1), credential(1), unit_id(1), 0),
+            AccountSelectorMember::new(account(2), credential(2), unit_id(1), 1),
+        ];
+
+        assert_eq!(
+            AccountSelectorDefinition::new(
+                selector(1),
+                revision(1),
+                affinity_salt(1),
+                CredentialSelectionPolicy::PriorityFailover,
+                QuotaTopologySource::ConservativeDefault,
+                &units,
+                &members,
+            ),
+            Err(AccountSelectorError::MixedPriorityTierInUnit)
+        );
+    }
+
+    #[test]
     fn shared_quota_unit_owns_weight_once_regardless_of_member_count() {
         let groups = [group(1)];
         let units = [unit(10, 7, &groups)];
         let members = [member(1, 1, 10), member(1, 2, 10)];
         let definition = AccountSelectorDefinition::new(
             selector(1),
+            revision(1),
+            affinity_salt(1),
             CredentialSelectionPolicy::WeightedLeastInflight,
             QuotaTopologySource::ConservativeDefault,
             &units,
@@ -635,6 +744,8 @@ mod tests {
 
         assert_eq!(definition.units().len(), 1);
         assert_eq!(definition.members().len(), 2);
+        assert_eq!(definition.revision().get(), 1);
+        assert_eq!(definition.affinity_salt().get(), [1; 16]);
         assert_eq!(
             definition
                 .unit(unit_id(10))
@@ -655,6 +766,8 @@ mod tests {
         assert_eq!(
             AccountSelectorDefinition::new(
                 selector(1),
+                revision(1),
+                affinity_salt(1),
                 CredentialSelectionPolicy::PriorityFailover,
                 QuotaTopologySource::ConservativeDefault,
                 &units,
@@ -664,6 +777,8 @@ mod tests {
         );
         let definition = AccountSelectorDefinition::new(
             selector(1),
+            revision(1),
+            affinity_salt(1),
             CredentialSelectionPolicy::PriorityFailover,
             QuotaTopologySource::UserConfirmed,
             &units,
@@ -683,7 +798,7 @@ mod tests {
 
     #[test]
     fn selector_definition_stays_borrowed_and_small() {
-        assert!(core::mem::size_of::<AccountSelectorDefinition<'_>>() <= 56);
+        assert!(core::mem::size_of::<AccountSelectorDefinition<'_>>() <= 80);
         assert!(core::mem::size_of::<QuotaSelectionUnit<'_>>() <= 32);
         assert!(core::mem::size_of::<AccountSelectorMember>() <= 32);
     }
@@ -695,6 +810,8 @@ mod tests {
         let members = [member(1, 1, 1)];
         let definition = AccountSelectorDefinition::new(
             selector(1),
+            revision(1),
+            affinity_salt(1),
             CredentialSelectionPolicy::PriorityFailover,
             QuotaTopologySource::ConservativeDefault,
             &units,

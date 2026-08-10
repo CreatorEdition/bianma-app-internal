@@ -23,13 +23,15 @@ mod coordinator;
 mod health;
 mod ingress;
 mod model_deployment;
+mod selection_input;
 
 pub use account_credential::*;
 pub(crate) use account_selector::AccountSelectionCandidates;
 pub use account_selector::{
     AccountSelectorCatalog, AccountSelectorCatalogError, AccountSelectorDefinition,
     AccountSelectorError, AccountSelectorMember, CredentialSelectionPolicy, QuotaSelectionUnit,
-    QuotaTopologySource, MAX_ACCOUNT_SELECTORS, MAX_ACCOUNT_SELECTOR_MEMBERS,
+    QuotaTopologySource, SelectorAffinitySalt, SelectorRevision, MAX_ACCOUNT_SELECTORS,
+    MAX_ACCOUNT_SELECTOR_MEMBERS,
     MAX_QUOTA_GROUPS_PER_UNIT, MAX_QUOTA_SELECTION_UNITS,
 };
 pub use attempt::{
@@ -41,6 +43,10 @@ use coordinator::{AttemptCoordinator, AttemptCoordinatorBuildError};
 pub use health::*;
 pub use ingress::*;
 pub use model_deployment::*;
+pub use selection_input::{
+    SelectionSession, SessionAffinityAlias, SESSION_AFFINITY_ALIAS_BYTES,
+};
+pub(crate) use selection_input::AccountSelectionRequest;
 
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -678,6 +684,9 @@ mod tests {
         AttemptCompleteError, AttemptCoordinatorBuildError, AttemptPermit, AttemptStartError,
         CoordinatorStep,
     };
+    use super::selection_input::{
+        AccountSelectionEligibility, AccountSelectionEligibilityError,
+    };
     use super::*;
 
     fn id(value: u64) -> RouteTargetId {
@@ -749,6 +758,8 @@ mod tests {
     ) -> AccountSelectorDefinition<'a> {
         AccountSelectorDefinition::new(
             AccountSelectorId::new(selector_value).expect("账户选择合同 ID 非零"),
+            SelectorRevision::new(1).expect("账户选择合同修订非零"),
+            SelectorAffinitySalt::new([1; 16]),
             CredentialSelectionPolicy::PriorityFailover,
             QuotaTopologySource::ConservativeDefault,
             units,
@@ -1521,6 +1532,8 @@ mod tests {
         ];
         let selectors = [AccountSelectorDefinition::new(
             AccountSelectorId::new(1).expect("账户选择合同 ID 非零"),
+            SelectorRevision::new(1).expect("账户选择合同修订非零"),
+            SelectorAffinitySalt::new([1; 16]),
             CredentialSelectionPolicy::WeightedLeastInflight,
             QuotaTopologySource::ConservativeDefault,
             &units,
@@ -1586,6 +1599,123 @@ mod tests {
     }
 
     #[test]
+    fn selection_input_binds_session_and_validates_dynamic_masks() {
+        let groups_one = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let groups_two = [QuotaGroupId::new(2).expect("测试额度组 ID 非零")];
+        let unit_one = QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零");
+        let unit_two = QuotaSelectionUnitId::new(2).expect("测试额度单元 ID 非零");
+        let units = [
+            QuotaSelectionUnit::new(
+                unit_one,
+                core::num::NonZeroU16::new(1).expect("测试权重非零"),
+                &groups_one,
+            ),
+            QuotaSelectionUnit::new(
+                unit_two,
+                core::num::NonZeroU16::new(1).expect("测试权重非零"),
+                &groups_two,
+            ),
+        ];
+        let members = [
+            AccountSelectorMember::new(
+                AccountId::new(1).expect("测试账户 ID 非零"),
+                CredentialId::new(1).expect("测试凭据 ID 非零"),
+                unit_one,
+                0,
+            ),
+            AccountSelectorMember::new(
+                AccountId::new(2).expect("测试账户 ID 非零"),
+                CredentialId::new(2).expect("测试凭据 ID 非零"),
+                unit_two,
+                0,
+            ),
+        ];
+        let selectors = [AccountSelectorDefinition::new(
+            AccountSelectorId::new(1).expect("账户选择合同 ID 非零"),
+            SelectorRevision::new(9).expect("账户选择合同修订非零"),
+            SelectorAffinitySalt::new([9; 16]),
+            CredentialSelectionPolicy::PriorityFailover,
+            QuotaTopologySource::UserConfirmed,
+            &units,
+            &members,
+        )
+        .expect("双独立额度单元的静态选择合同有效")];
+        let route_candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 1, 1, 1, 1),
+            0,
+        )];
+        let deployments = [deployment_definition(1, 1, 1)];
+        let accounts = [account_definition(1, 1), account_definition(2, 1)];
+        let credentials = [
+            credential_definition(1, 1),
+            credential_definition(2, 2),
+        ];
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &route_candidates,
+            RoutingStrategy::Priority,
+            1,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("同代账户目录有效");
+        let route_plan = plan(compiled.routing(), 0).expect("存在计划目标");
+        let resolved = compiled
+            .resolve_plan_target(&route_plan, 0)
+            .expect("计划与快照一致")
+            .expect("首个尝试存在");
+
+        let absent = compiled
+            .selection_request(resolved, SelectionSession::Absent)
+            .expect("同代目标可创建无会话选择请求");
+        assert_eq!(absent.target(), target_with_binding(1, 1, 1, 1, 1));
+        assert!(!absent.has_stable_session());
+        assert_eq!(absent.selector_revision().get(), 9);
+        assert_eq!(absent.selector_affinity_salt().get(), [9; 16]);
+
+        let stable = compiled
+            .selection_request(
+                resolved,
+                SelectionSession::Stable(SessionAffinityAlias::from_host_hmac([7; 16])),
+            )
+            .expect("同代目标可创建稳定会话选择请求");
+        assert!(stable.has_stable_session());
+        assert!(matches!(stable.session(), SelectionSession::Stable(_)));
+
+        let eligibility = AccountSelectionEligibility::new(absent, 0b11, 0b11)
+            .expect("Unit 与 Member 位图同时匹配时有效");
+        assert!(eligibility.request() == absent);
+        assert_eq!(eligibility.unit_mask(), 0b11);
+        assert_eq!(eligibility.member_mask(), 0b11);
+        assert_eq!(eligibility.unit_allowed_at(0), Some(true));
+        assert_eq!(eligibility.unit_allowed_at(1), Some(true));
+        assert_eq!(eligibility.unit_allowed_at(2), None);
+        assert_eq!(eligibility.member_allowed_at(0), Some(true));
+        assert_eq!(eligibility.member_allowed_at(1), Some(true));
+        assert_eq!(eligibility.member_allowed_at(2), None);
+        assert!(AccountSelectionEligibility::new(absent, 0, 0).is_ok());
+
+        assert!(matches!(
+            AccountSelectionEligibility::new(absent, 0b100, 0b1),
+            Err(AccountSelectionEligibilityError::UnitMaskOutOfBounds)
+        ));
+        assert!(matches!(
+            AccountSelectionEligibility::new(absent, 0b1, 0b100),
+            Err(AccountSelectionEligibilityError::MemberMaskOutOfBounds)
+        ));
+        assert!(matches!(
+            AccountSelectionEligibility::new(absent, 0b1, 0b10),
+            Err(AccountSelectionEligibilityError::MemberUnitNotAllowed)
+        ));
+        assert!(matches!(
+            AccountSelectionEligibility::new(absent, 0b10, 0),
+            Err(AccountSelectionEligibilityError::AllowedUnitWithoutMember)
+        ));
+    }
+
+    #[test]
     fn account_selection_candidates_reject_same_version_foreign_snapshot() {
         let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
         let unit_id = QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零");
@@ -1641,6 +1771,11 @@ mod tests {
             .resolve_plan_target(&route_plan, 0)
             .expect("计划与首个快照一致")
             .expect("首个尝试存在");
+
+        assert!(matches!(
+            compiled_b.selection_request(resolved, SelectionSession::Absent),
+            Err(PlanError::StaleSnapshot)
+        ));
 
         assert!(matches!(
             compiled_b.account_selection_candidates(resolved),
