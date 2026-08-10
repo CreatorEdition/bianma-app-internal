@@ -58,3 +58,5 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked -p bianma-app routing_v
 `routing_v2::vault_adapter::load_existing_device_root_key_v1` 是与 capability PoC 分离的、crate-private 的只读 root key loader。它仅尝试从固定 v1 identity（`com.creatoredition.bianma.routing-v2.vault` / `device-root-key-v1`）读取已经存在的 32-byte 设备材料，并立即交给不透明的 `RootKeyHandle`；缺失、锁定、后端错误和长度异常都关闭失败。它绝不创建、写入、删除、轮换或恢复 root key，且尚未接入 SQLite、凭据迁移、Proxy、Tauri IPC 或任何执行路径。
 
 `routing-core` 当前仍是未接入生产转发链的纯 Rust 领域切片：仅基于内存快照做闭集入站分类、有界路由计划与保守重试决策，不读取数据库/文件、不启动后台线程、不执行网络请求，也不承载 ContextPipeline；本地 compact 可被分类为本地 handler，但压缩、记忆和图的实现不会进入模型 RoutePlan 或该核心。
+
+其中 P1 仅增加 crate-private 的静态 Credential 精确授权：快照激活时，每个可达 `RouteTarget × AccountSelector member` 都必须有唯一的、用户确认且已批准的 Grant，精确绑定当前设备、Site/Endpoint、宿主规范化的 opaque Origin 及修订、Account/Credential、认证方案和 adapter 合同修订。运行期直接读取固定 `16 × 16` 槽位；旧 `compile` 入口稳定返回无授权。该切片不解析 URL、不构造 `CredentialUseContext`、不读取 Secret，也不接入 Vault、Transport 或旧 Proxy。

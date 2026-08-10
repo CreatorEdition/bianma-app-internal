@@ -4,15 +4,20 @@
 //! Credential 的静态引用完整性。catalog 不会进入 Planner 热路径、RoutePlan、Coordinator
 //! 或 Attempt 状态机。
 
+use super::credential_authorization::{
+    CredentialAuthorizationLookupError, CredentialUseAuthorization,
+    StaticCredentialAuthorizationDefinitions, StaticCredentialAuthorizationError,
+    StaticCredentialAuthorizations,
+};
 use super::{
     AccountCatalog, AccountCatalogError, AccountCredentialDefinitions, AccountSelectionCandidates,
     AccountSelectionRequest, AccountSelectorCatalog, AccountSelectorCatalogError,
-    AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError,
-    CredentialSelectionPolicy, ModelDeploymentCatalog, ModelDeploymentCatalogError,
-    ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan, RouteStageId, RouteTarget,
-    RouteTargetId, RoutingSnapshot, RoutingStrategy, SelectionRuntimeDefinitions,
-    SelectionRuntimeLayout, SelectionRuntimeLayoutError, SelectionSession, SnapshotVersion,
-    MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
+    AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError, CredentialSelectionPolicy,
+    ModelDeploymentCatalog, ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError,
+    RouteCandidate, RoutePlan, RouteStageId, RouteTarget, RouteTargetId, RoutingSnapshot,
+    RoutingStrategy, SelectionRuntimeDefinitions, SelectionRuntimeLayout,
+    SelectionRuntimeLayoutError, SelectionSession, SnapshotVersion, MAX_TRACKED_ACCOUNTS,
+    MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
 };
 use core::fmt;
 
@@ -38,6 +43,7 @@ pub enum CompiledRoutingSnapshotError {
 pub struct ResolvedRouteTarget<'snapshot, 'config> {
     routing: &'snapshot RoutingSnapshot<'config>,
     snapshot_version: SnapshotVersion,
+    candidate_index: u8,
     stage: RouteStageId,
     target: RouteTarget,
     deployment: &'config ModelDeploymentDefinition,
@@ -48,6 +54,7 @@ impl PartialEq for ResolvedRouteTarget<'_, '_> {
     fn eq(&self, other: &Self) -> bool {
         core::ptr::eq(self.routing, other.routing)
             && self.snapshot_version == other.snapshot_version
+            && self.candidate_index == other.candidate_index
             && self.stage == other.stage
             && self.target == other.target
             && self.deployment == other.deployment
@@ -72,6 +79,13 @@ impl<'snapshot, 'config> ResolvedRouteTarget<'snapshot, 'config> {
     /// 返回解析所用的编译快照版本。
     pub const fn snapshot_version(self) -> SnapshotVersion {
         self.snapshot_version
+    }
+
+    /// 返回 Target 在同一快照固定候选切片中的内部槽位。
+    ///
+    /// 该值只可作为同一快照中已编译授权的直接索引，不能持久化或跨快照复用。
+    pub(crate) const fn candidate_index(self) -> u8 {
+        self.candidate_index
     }
 
     /// 返回当前尝试所属的稳定路由阶段。
@@ -107,6 +121,13 @@ impl<'snapshot, 'config> ResolvedRouteTarget<'snapshot, 'config> {
     pub(crate) fn matches_snapshot(&self, snapshot: &RoutingSnapshot<'config>) -> bool {
         core::ptr::eq(self.routing, snapshot)
     }
+
+    /// 返回当前已解析 Target 绑定的 RoutingSnapshot 实例。
+    ///
+    /// 此入口仅供 crate 内的字段私有能力证明继续绑定同一实例，不能据此重新构造计划。
+    pub(crate) const fn routing_snapshot(self) -> &'snapshot RoutingSnapshot<'config> {
+        self.routing
+    }
 }
 
 /// 同时持有路由候选快照、模型部署目录、账户选择合同和静态身份目录的不可变编译结果。
@@ -119,6 +140,17 @@ pub struct CompiledRoutingSnapshot<'a> {
     selectors: AccountSelectorCatalog<'a>,
     accounts: AccountCatalog<'a>,
     credentials: CredentialCatalog<'a>,
+    credential_authorizations: Option<StaticCredentialAuthorizations<'a>>,
+}
+
+/// 带静态 Credential 精确授权的编译入口失败原因。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum StaticCredentialAuthorizationCompileError {
+    /// 基础路由快照、目录或静态身份合同无效。
+    Snapshot(CompiledRoutingSnapshotError),
+    /// Endpoint Origin、设备绑定、Grant 或固定授权索引无效。
+    Authorization(StaticCredentialAuthorizationError),
 }
 
 impl<'a> CompiledRoutingSnapshot<'a> {
@@ -219,7 +251,49 @@ impl<'a> CompiledRoutingSnapshot<'a> {
             selectors,
             accounts,
             credentials,
+            credential_authorizations: None,
         })
+    }
+
+    /// 编译基础路由快照并额外固化每个可达 Target × Selector member 的精确授权。
+    ///
+    /// 此 crate-private 入口不会替代公开 [`Self::compile`]，并且不构造最终 URL、请求 nonce、
+    /// CredentialUseContext、SecretResolver 或任何发送路径。所有 Grant 只在此激活阶段扫描；
+    /// 运行期通过固定 Target/member 槽位直接定位，缺失或错配均关闭失败。
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn compile_with_static_credential_authorizations(
+        version: SnapshotVersion,
+        candidates: &'a [RouteCandidate],
+        strategy: RoutingStrategy,
+        max_attempts: u8,
+        deployments: &'a [ModelDeploymentDefinition],
+        account_credentials: AccountCredentialDefinitions<'a>,
+        selectors: &'a [AccountSelectorDefinition<'a>],
+        authorization_definitions: StaticCredentialAuthorizationDefinitions<'a>,
+    ) -> Result<Self, StaticCredentialAuthorizationCompileError> {
+        let mut snapshot = Self::compile(
+            version,
+            candidates,
+            strategy,
+            max_attempts,
+            deployments,
+            account_credentials,
+            selectors,
+        )
+        .map_err(StaticCredentialAuthorizationCompileError::Snapshot)?;
+        let authorizations = StaticCredentialAuthorizations::compile(
+            snapshot.routing.version(),
+            snapshot.routing.candidates(),
+            &snapshot.deployments,
+            &snapshot.selectors,
+            &snapshot.accounts,
+            &snapshot.credentials,
+            authorization_definitions,
+        )
+        .map_err(StaticCredentialAuthorizationCompileError::Authorization)?;
+        snapshot.credential_authorizations = Some(authorizations);
+        Ok(snapshot)
     }
 
     /// 返回已完成结构校验的路由候选快照。
@@ -246,6 +320,13 @@ impl<'a> CompiledRoutingSnapshot<'a> {
             .routing
             .stage_for(target.id())
             .ok_or(PlanError::UnknownTarget)?;
+        let candidate_index = self
+            .routing
+            .candidates()
+            .iter()
+            .position(|candidate| candidate.target().id() == target.id())
+            .and_then(|index| u8::try_from(index).ok())
+            .ok_or(PlanError::UnknownTarget)?;
         let deployment = self
             .deployments
             .get(target.deployment())
@@ -258,11 +339,42 @@ impl<'a> CompiledRoutingSnapshot<'a> {
         Ok(Some(ResolvedRouteTarget {
             routing: &self.routing,
             snapshot_version: self.routing.version(),
+            candidate_index,
             stage,
             target: *target,
             deployment,
             selector,
         }))
+    }
+
+    /// 由同一快照解析 Target 与真实 Selector member 槽位签发静态 Credential 授权。
+    ///
+    /// 旧公开 [`Self::compile`] 路径没有授权索引并稳定关闭失败。此入口只证明编译期静态
+    /// 绑定，尚未冻结最终 URL 或构造一次性用途上下文，因此不能读取或注入 Secret。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn credential_use_authorization<'snapshot>(
+        &'snapshot self,
+        resolved: ResolvedRouteTarget<'snapshot, 'a>,
+        member_index: u8,
+    ) -> Result<CredentialUseAuthorization<'snapshot, 'a>, CredentialAuthorizationLookupError> {
+        if !resolved.matches_snapshot(&self.routing) {
+            return Err(CredentialAuthorizationLookupError::StaleSnapshot);
+        }
+        if resolved
+            .selector()
+            .members()
+            .get(usize::from(member_index))
+            .is_none()
+        {
+            return Err(CredentialAuthorizationLookupError::UnknownSelectorMember);
+        }
+        let authorizations = self
+            .credential_authorizations
+            .as_ref()
+            .ok_or(CredentialAuthorizationLookupError::AuthorizationUnavailable)?;
+        authorizations
+            .authorization_for(resolved, member_index)
+            .ok_or(CredentialAuthorizationLookupError::AuthorizationInvariantViolation)
     }
 
     /// 从同一 RoutingSnapshot 实例解析出的目标创建账户选择请求。
