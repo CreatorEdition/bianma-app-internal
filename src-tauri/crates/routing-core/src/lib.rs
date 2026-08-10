@@ -25,7 +25,13 @@ mod ingress;
 mod model_deployment;
 
 pub use account_credential::*;
-pub use account_selector::*;
+pub(crate) use account_selector::AccountSelectionCandidates;
+pub use account_selector::{
+    AccountSelectorCatalog, AccountSelectorCatalogError, AccountSelectorDefinition,
+    AccountSelectorError, AccountSelectorMember, CredentialSelectionPolicy, QuotaSelectionUnit,
+    QuotaTopologySource, MAX_ACCOUNT_SELECTORS, MAX_ACCOUNT_SELECTOR_MEMBERS,
+    MAX_QUOTA_GROUPS_PER_UNIT, MAX_QUOTA_SELECTION_UNITS,
+};
 pub use attempt::{
     AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState, SendPhase,
     UpstreamWriteState,
@@ -1482,6 +1488,170 @@ mod tests {
     #[test]
     fn resolved_route_target_stays_small_and_stack_only() {
         assert!(core::mem::size_of::<ResolvedRouteTarget<'_, '_>>() <= 128);
+    }
+
+    #[test]
+    fn account_selection_candidates_keep_target_topology_and_shared_unit_members() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let unit_id = QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零");
+        let units = [QuotaSelectionUnit::new(
+            unit_id,
+            core::num::NonZeroU16::new(7).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [
+            AccountSelectorMember::new(
+                AccountId::new(1).expect("测试账户 ID 非零"),
+                CredentialId::new(1).expect("测试凭据 ID 非零"),
+                unit_id,
+                0,
+            ),
+            AccountSelectorMember::new(
+                AccountId::new(1).expect("测试账户 ID 非零"),
+                CredentialId::new(2).expect("测试凭据 ID 非零"),
+                unit_id,
+                0,
+            ),
+            AccountSelectorMember::new(
+                AccountId::new(2).expect("测试账户 ID 非零"),
+                CredentialId::new(3).expect("测试凭据 ID 非零"),
+                unit_id,
+                0,
+            ),
+        ];
+        let selectors = [AccountSelectorDefinition::new(
+            AccountSelectorId::new(1).expect("账户选择合同 ID 非零"),
+            CredentialSelectionPolicy::WeightedLeastInflight,
+            QuotaTopologySource::ConservativeDefault,
+            &units,
+            &members,
+        )
+        .expect("保守单元的静态选择合同有效")];
+        let route_candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 1, 1, 1, 1),
+            0,
+        )];
+        let deployments = [deployment_definition(1, 1, 1)];
+        let accounts = [account_definition(1, 1), account_definition(2, 1)];
+        let credentials = [
+            credential_definition(1, 1),
+            credential_definition(2, 1),
+            credential_definition(3, 2),
+        ];
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &route_candidates,
+            RoutingStrategy::Priority,
+            1,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("同代静态目录有效");
+        let route_plan = plan(compiled.routing(), 0).expect("存在计划目标");
+        let resolved = compiled
+            .resolve_plan_target(&route_plan, 0)
+            .expect("计划与快照一致")
+            .expect("首个尝试存在");
+        let candidates = compiled
+            .account_selection_candidates(resolved)
+            .expect("同代目标可创建候选视图");
+
+        assert_eq!(candidates.target(), target_with_binding(1, 1, 1, 1, 1));
+        assert_eq!(
+            candidates.policy(),
+            CredentialSelectionPolicy::WeightedLeastInflight
+        );
+        assert_eq!(
+            candidates.topology_source(),
+            QuotaTopologySource::ConservativeDefault
+        );
+        let unit = candidates.unit_at(0).expect("保守拓扑的唯一单元存在");
+        assert_eq!(unit.id(), unit_id);
+        assert_eq!(unit.effective_weight().get(), 7);
+        assert_eq!(candidates.unit_at(1), None);
+
+        let mut unit_members = candidates.members_in_unit(unit_id);
+        assert_eq!(unit_members.next(), Some(members[0]));
+        assert_eq!(unit_members.next(), Some(members[1]));
+        assert_eq!(unit_members.next(), Some(members[2]));
+        assert_eq!(unit_members.next(), None);
+        assert_eq!(
+            candidates
+                .members_in_unit(QuotaSelectionUnitId::new(99).expect("测试额度单元 ID 非零"))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn account_selection_candidates_reject_same_version_foreign_snapshot() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let unit_id = QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零");
+        let units = [QuotaSelectionUnit::new(
+            unit_id,
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            unit_id,
+            0,
+        )];
+        let selectors = [selector_definition(1, &units, &members)];
+        let candidates_a = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 1, 1, 1, 1),
+            0,
+        )];
+        let candidates_b = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 2, 2, 2, 1),
+            0,
+        )];
+        let deployments_a = [deployment_definition(1, 1, 1)];
+        let deployments_b = [deployment_definition(2, 2, 2)];
+        let accounts_a = [account_definition(1, 1)];
+        let accounts_b = [account_definition(1, 2)];
+        let credentials = [credential_definition(1, 1)];
+        let compiled_a = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates_a,
+            RoutingStrategy::Priority,
+            1,
+            &deployments_a,
+            AccountCredentialDefinitions::new(&accounts_a, &credentials),
+            &selectors,
+        )
+        .expect("第一个编译快照有效");
+        let compiled_b = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates_b,
+            RoutingStrategy::Priority,
+            1,
+            &deployments_b,
+            AccountCredentialDefinitions::new(&accounts_b, &credentials),
+            &selectors,
+        )
+        .expect("第二个编译快照有效");
+        let route_plan = plan(compiled_a.routing(), 0).expect("存在第一个计划目标");
+        let resolved = compiled_a
+            .resolve_plan_target(&route_plan, 0)
+            .expect("计划与首个快照一致")
+            .expect("首个尝试存在");
+
+        assert!(matches!(
+            compiled_b.account_selection_candidates(resolved),
+            Err(PlanError::StaleSnapshot)
+        ));
+    }
+
+    #[test]
+    fn account_selection_candidates_stay_small_and_stack_only() {
+        assert!(core::mem::size_of::<AccountSelectionCandidates<'_, '_>>() <= 128);
+        assert!(core::mem::size_of::<account_selector::AccountSelectionMembers<'_>>() <= 32);
     }
 
     #[test]

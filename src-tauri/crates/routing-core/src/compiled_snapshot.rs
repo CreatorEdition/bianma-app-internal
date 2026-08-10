@@ -5,9 +5,9 @@
 //! 或 Attempt 状态机。
 
 use super::{
-    AccountCatalog, AccountCatalogError, AccountCredentialDefinitions, AccountSelectorCatalog,
-    AccountSelectorCatalogError, AccountSelectorDefinition, CredentialCatalog,
-    CredentialCatalogError, ModelDeploymentCatalog, ModelDeploymentCatalogError,
+    AccountCatalog, AccountCatalogError, AccountCredentialDefinitions, AccountSelectionCandidates,
+    AccountSelectorCatalog, AccountSelectorCatalogError, AccountSelectorDefinition,
+    CredentialCatalog, CredentialCatalogError, ModelDeploymentCatalog, ModelDeploymentCatalogError,
     ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan, RouteStageId, RouteTarget,
     RoutingSnapshot, RoutingStrategy, SnapshotVersion,
 };
@@ -258,5 +258,20 @@ impl<'a> CompiledRoutingSnapshot<'a> {
             deployment,
             selector,
         }))
+    }
+
+    /// 从同一 RoutingSnapshot 实例解析出的目标取得只读账户选择候选视图。
+    ///
+    /// 版本号或 TargetId 相同不足以保证静态账户目录、站点和部署一致；因此跨实例目标
+    /// 一律按陈旧快照拒绝，而不允许候选视图回退或重绑到当前 catalog。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn account_selection_candidates<'snapshot>(
+        &'snapshot self,
+        resolved: ResolvedRouteTarget<'snapshot, 'a>,
+    ) -> Result<AccountSelectionCandidates<'snapshot, 'a>, PlanError> {
+        if !resolved.matches_snapshot(&self.routing) {
+            return Err(PlanError::StaleSnapshot);
+        }
+        Ok(AccountSelectionCandidates::new(resolved))
     }
 }

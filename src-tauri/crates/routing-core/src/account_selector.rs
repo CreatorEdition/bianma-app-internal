@@ -6,7 +6,7 @@ use core::num::NonZeroU16;
 
 use super::{
     AccountId, AccountSelectorId, CredentialId, QuotaGroupId, QuotaSelectionUnitId,
-    MAX_ROUTE_TARGETS,
+    ResolvedRouteTarget, RouteTarget, MAX_ROUTE_TARGETS,
 };
 
 /// 单个账户选择合同允许的最大成员数。
@@ -283,6 +283,86 @@ impl<'a> AccountSelectorDefinition<'a> {
     /// 根据稳定标识查找额度单元。
     pub fn unit(&self, id: QuotaSelectionUnitId) -> Option<QuotaSelectionUnit<'a>> {
         self.units.iter().copied().find(|unit| unit.id == id)
+    }
+}
+
+/// 已解析路由目标可使用的静态账户选择候选视图。
+///
+/// 此视图只持有经同代编译快照解析的目标，并枚举其中已有的额度单元和成员。它不保存
+/// 选择游标、负载、时间、健康、租约或 Secret，因此不能执行账户或凭据选择。
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct AccountSelectionCandidates<'snapshot, 'config> {
+    resolved: ResolvedRouteTarget<'snapshot, 'config>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl<'snapshot, 'config> AccountSelectionCandidates<'snapshot, 'config> {
+    /// 从已由同代编译快照验证的目标创建候选视图。
+    pub(crate) const fn new(resolved: ResolvedRouteTarget<'snapshot, 'config>) -> Self {
+        Self { resolved }
+    }
+
+    /// 返回候选视图绑定的完整路由目标。
+    pub(crate) const fn target(&self) -> RouteTarget {
+        self.resolved.target()
+    }
+
+    /// 返回未来执行层应采用的静态选择策略。
+    pub(crate) const fn policy(&self) -> CredentialSelectionPolicy {
+        self.resolved.selector().policy()
+    }
+
+    /// 返回额度拓扑的可信来源。
+    pub(crate) const fn topology_source(&self) -> QuotaTopologySource {
+        self.resolved.selector().topology_source()
+    }
+
+    /// 按声明顺序返回额度单元；越界下标不回退。
+    pub(crate) fn unit_at(&self, index: u8) -> Option<QuotaSelectionUnit<'config>> {
+        self.resolved
+            .selector()
+            .units()
+            .get(usize::from(index))
+            .copied()
+    }
+
+    /// 返回指定额度单元中的静态成员；未知单元为空且不回退。
+    pub(crate) fn members_in_unit(
+        &self,
+        unit: QuotaSelectionUnitId,
+    ) -> AccountSelectionMembers<'config> {
+        let members = if self.resolved.selector().unit(unit).is_some() {
+            self.resolved.selector().members()
+        } else {
+            &[]
+        };
+        AccountSelectionMembers {
+            members: members.iter(),
+            unit,
+        }
+    }
+}
+
+/// 某个已验证额度单元的零分配成员迭代器。
+///
+/// 迭代器只在栈上保存切片游标和额度单元标识，不携带选择或健康状态。
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct AccountSelectionMembers<'config> {
+    members: core::slice::Iter<'config, AccountSelectorMember>,
+    unit: QuotaSelectionUnitId,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl Iterator for AccountSelectionMembers<'_> {
+    type Item = AccountSelectorMember;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for member in self.members.by_ref() {
+            if member.unit() == self.unit {
+                return Some(*member);
+            }
+        }
+        None
     }
 }
 
