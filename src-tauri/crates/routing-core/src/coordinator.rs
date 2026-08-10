@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::{
     attempt::{AttemptCompletion, AttemptSuccessCompletion},
+    selection_lease::{SelectionLocalRejection, SelectionLocalStop},
     RetryDecision, RetryGate, RetryPolicy, RetryStopReason, RouteEligibility, RoutePlan,
     RouteTargetId, RoutingSnapshot,
 };
@@ -328,6 +329,75 @@ impl<'snapshot, 'candidates> AttemptCoordinator<'snapshot, 'candidates> {
         self.active = None;
         self.stopped = true;
         Ok(CompletedAttempt)
+    }
+
+    /// 消费零发送的本地容量/选择拒绝，并直接推进下一个计划 Target。
+    ///
+    /// 此路径不构造 `AttemptOutcome`、不访问 `RetryGate`、不写 Health 或 429；它只在
+    /// Registry 尚未取得 Lease、尚未创建 Tracker 的情况下可达。token 失配时仍按所有
+    /// Completion 一样清除 active 并 fail closed。
+    pub(crate) fn complete_local_rejection(
+        &mut self,
+        rejection: SelectionLocalRejection<'snapshot, 'candidates>,
+        eligibility: &RouteEligibility<'snapshot, 'candidates>,
+    ) -> Result<CoordinatorStep<'snapshot, 'candidates>, AttemptCompleteError> {
+        let Some(active) = self.active else {
+            return Err(AttemptCompleteError::NoActive);
+        };
+        let Some(coordinator) = self.coordinator else {
+            self.active = None;
+            self.stopped = true;
+            return Err(AttemptCompleteError::Mismatched);
+        };
+        if !rejection.matches(coordinator, active.id) {
+            self.active = None;
+            self.stopped = true;
+            return Err(AttemptCompleteError::Mismatched);
+        }
+
+        self.active = None;
+        self.next_index = active.index.saturating_add(1);
+        match self.issue_next(eligibility) {
+            Err(()) => {
+                self.stopped = true;
+                Ok(CoordinatorStep::Stop(RetryStopReason::EligibilityMismatch))
+            }
+            Ok(Some(permit)) => Ok(CoordinatorStep::Next {
+                permit,
+                delay_ms: 0,
+            }),
+            Ok(None) => {
+                self.stopped = true;
+                Ok(CoordinatorStep::Stop(RetryStopReason::NoEligibleTargets))
+            }
+        }
+    }
+
+    /// 消费来源或策略不变量失效的本地停止 token。
+    ///
+    /// 与容量拒绝不同，此路径绝不推进 A → B；它只清除当前 active Attempt 并以
+    /// `EligibilityMismatch` 停止，防止跨快照、跨 Target 或未实现策略被错误执行。
+    pub(crate) fn complete_local_stop(
+        &mut self,
+        stop: SelectionLocalStop<'snapshot, 'candidates>,
+    ) -> Result<CoordinatorStep<'snapshot, 'candidates>, AttemptCompleteError> {
+        let Some(active) = self.active else {
+            return Err(AttemptCompleteError::NoActive);
+        };
+        let Some(coordinator) = self.coordinator else {
+            self.active = None;
+            self.stopped = true;
+            return Err(AttemptCompleteError::Mismatched);
+        };
+        if !stop.matches(coordinator, active.id) {
+            self.active = None;
+            self.stopped = true;
+            return Err(AttemptCompleteError::Mismatched);
+        }
+
+        self.active = None;
+        self.stopped = true;
+        Ok(CoordinatorStep::Stop(RetryStopReason::EligibilityMismatch))
     }
 
     fn issue_next(

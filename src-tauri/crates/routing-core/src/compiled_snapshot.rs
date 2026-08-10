@@ -7,9 +7,10 @@
 use super::{
     AccountCatalog, AccountCatalogError, AccountCredentialDefinitions, AccountSelectionCandidates,
     AccountSelectionRequest, AccountSelectorCatalog, AccountSelectorCatalogError,
-    AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError, ModelDeploymentCatalog,
-    ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan,
-    RouteStageId, RouteTarget, RoutingSnapshot, RoutingStrategy, SelectionRuntimeDefinitions,
+    AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError,
+    CredentialSelectionPolicy, ModelDeploymentCatalog, ModelDeploymentCatalogError,
+    ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan, RouteStageId, RouteTarget,
+    RouteTargetId, RoutingSnapshot, RoutingStrategy, SelectionRuntimeDefinitions,
     SelectionRuntimeLayout, SelectionRuntimeLayoutError, SelectionSession, SnapshotVersion,
     MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
 };
@@ -394,6 +395,21 @@ impl<'a> CompiledRoutingSnapshot<'a> {
         }
 
         Ok(SelectionRuntimeLayout::new(&self.routing, *definitions))
+    }
+
+    /// 返回一个同代 Target 声明的账户选择策略。
+    ///
+    /// 此入口只供 Registry 激活时拒绝未实现策略；无法解析 Target 或 Selector 时返回
+    /// `None`，调用方必须 fail closed。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn selection_policy_for(
+        &self,
+        target: RouteTargetId,
+    ) -> Option<CredentialSelectionPolicy> {
+        let selector_id = self.routing.resolve(target)?.account_selector();
+        self.selectors
+            .get(selector_id)
+            .map(|selector| selector.policy())
     }
 }
 

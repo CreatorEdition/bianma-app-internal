@@ -334,6 +334,19 @@ impl<'snapshot, 'config> SelectionRuntimeLayout<'snapshot, 'config> {
         }
     }
 
+    /// 返回 Registry 初始化所需的已验证静态定义副本。
+    ///
+    /// 此 crate-private 入口只为固定槽 Registry 建表使用；调用方不能替换布局的快照或
+    /// 传入任意 binding。
+    pub(crate) const fn definitions(&self) -> SelectionRuntimeDefinitions<'config> {
+        self.definitions
+    }
+
+    /// 判断给定快照是否为布局绑定的同一实例。
+    pub(crate) fn matches_snapshot(&self, snapshot: &RoutingSnapshot<'config>) -> bool {
+        core::ptr::eq(self.routing, snapshot)
+    }
+
     /// 为同一快照、同一目标 Selector 内的 Unit 与 Member 创建三资源静态 binding。
     ///
     /// 返回值只暴露 Account/Credential 标识及其上限，和该 Unit 全部额度组的受控迭代；

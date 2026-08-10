@@ -24,6 +24,8 @@ mod health;
 mod ingress;
 mod model_deployment;
 mod selection_input;
+#[cfg_attr(not(test), allow(dead_code))]
+mod selection_lease;
 mod selection_runtime_layout;
 
 pub use account_credential::*;
