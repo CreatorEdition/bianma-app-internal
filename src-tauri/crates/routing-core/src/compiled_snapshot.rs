@@ -9,15 +9,16 @@ use super::credential_authorization::{
     StaticCredentialAuthorizationDefinitions, StaticCredentialAuthorizationError,
     StaticCredentialAuthorizations,
 };
+use super::selection_lease::SelectedMember;
 use super::{
     AccountCatalog, AccountCatalogError, AccountCredentialDefinitions, AccountSelectionCandidates,
     AccountSelectionRequest, AccountSelectorCatalog, AccountSelectorCatalogError,
-    AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError, CredentialSelectionPolicy,
-    ModelDeploymentCatalog, ModelDeploymentCatalogError, ModelDeploymentDefinition, PlanError,
-    RouteCandidate, RoutePlan, RouteStageId, RouteTarget, RouteTargetId, RoutingSnapshot,
-    RoutingStrategy, SelectionRuntimeDefinitions, SelectionRuntimeLayout,
-    SelectionRuntimeLayoutError, SelectionSession, SnapshotVersion, MAX_TRACKED_ACCOUNTS,
-    MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
+    AccountSelectorDefinition, CredentialCatalog, CredentialCatalogError,
+    CredentialSelectionPolicy, ModelDeploymentCatalog, ModelDeploymentCatalogError,
+    ModelDeploymentDefinition, PlanError, RouteCandidate, RoutePlan, RouteStageId, RouteTarget,
+    RouteTargetId, RoutingSnapshot, RoutingStrategy, SelectionRuntimeDefinitions,
+    SelectionRuntimeLayout, SelectionRuntimeLayoutError, SelectionSession, SnapshotVersion,
+    MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
 };
 use core::fmt;
 
@@ -347,33 +348,29 @@ impl<'a> CompiledRoutingSnapshot<'a> {
         }))
     }
 
-    /// 由同一快照解析 Target 与真实 Selector member 槽位签发静态 Credential 授权。
+    /// 由实际成功选择并持有 Lease 的成员签发静态 Credential 授权。
     ///
     /// 旧公开 [`Self::compile`] 路径没有授权索引并稳定关闭失败。此入口只证明编译期静态
-    /// 绑定，尚未冻结最终 URL 或构造一次性用途上下文，因此不能读取或注入 Secret。
+    /// 绑定，尚未冻结最终 URL 或构造一次性用途上下文，因此不能读取或注入 Secret。调用方
+    /// 不能提供裸成员下标：只有 SelectionLeaseRegistry 在取得同一成员的 Lease 后封存的
+    /// 私有来源证明可以进入本入口。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn credential_use_authorization<'snapshot>(
+    pub(crate) fn credential_use_authorization<'attempt, 'snapshot>(
         &'snapshot self,
-        resolved: ResolvedRouteTarget<'snapshot, 'a>,
-        member_index: u8,
-    ) -> Result<CredentialUseAuthorization<'snapshot, 'a>, CredentialAuthorizationLookupError> {
-        if !resolved.matches_snapshot(&self.routing) {
+        selected_member: &'attempt SelectedMember<'snapshot, 'a>,
+    ) -> Result<
+        CredentialUseAuthorization<'attempt, 'snapshot, 'a>,
+        CredentialAuthorizationLookupError,
+    > {
+        if !selected_member.matches_snapshot(&self.routing) {
             return Err(CredentialAuthorizationLookupError::StaleSnapshot);
-        }
-        if resolved
-            .selector()
-            .members()
-            .get(usize::from(member_index))
-            .is_none()
-        {
-            return Err(CredentialAuthorizationLookupError::UnknownSelectorMember);
         }
         let authorizations = self
             .credential_authorizations
             .as_ref()
             .ok_or(CredentialAuthorizationLookupError::AuthorizationUnavailable)?;
         authorizations
-            .authorization_for(resolved, member_index)
+            .authorization_for(selected_member)
             .ok_or(CredentialAuthorizationLookupError::AuthorizationInvariantViolation)
     }
 

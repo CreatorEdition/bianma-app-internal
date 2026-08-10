@@ -4,9 +4,10 @@
 //! `RouteTarget × AccountSelectorMember` 的显式用户 Grant 固化为固定槽位。它不解析
 //! URI/IDNA、不保存或解析 Secret，也不构造最终 URL、请求 nonce 或 CredentialUseContext。
 
+use super::selection_lease::SelectedMember;
 use super::{
     AccountCatalog, AccountId, AccountSelectorCatalog, CredentialCatalog, CredentialId, EndpointId,
-    ModelDeploymentCatalog, ModelDeploymentId, ResolvedRouteTarget, RouteCandidate, SiteId,
+    ModelDeploymentCatalog, ModelDeploymentId, RouteCandidate, SiteId,
     MAX_ACCOUNT_SELECTOR_MEMBERS, MAX_ROUTE_TARGETS,
 };
 use core::num::{NonZeroU16, NonZeroU64};
@@ -154,7 +155,10 @@ pub(crate) struct DeploymentAdapterContractDefinition {
 
 impl DeploymentAdapterContractDefinition {
     /// 构造模型部署的 adapter 合同修订绑定。
-    pub(crate) const fn new(deployment: ModelDeploymentId, revision: AdapterContractRevision) -> Self {
+    pub(crate) const fn new(
+        deployment: ModelDeploymentId,
+        revision: AdapterContractRevision,
+    ) -> Self {
         Self {
             deployment,
             revision,
@@ -340,8 +344,8 @@ pub(crate) enum CredentialAuthorizationLookupError {
     AuthorizationUnavailable,
     /// 已解析 Target 不属于当前 CompiledRoutingSnapshot 实例。
     StaleSnapshot,
-    /// 成员索引不属于当前已解析 Selector。
-    UnknownSelectorMember,
+    /// 实际 Lease、Tracker 与封存的选择成员来源不再一致。
+    SelectionProvenanceMismatch,
     /// 固定授权槽缺失或绑定不变量遭到破坏。
     AuthorizationInvariantViolation,
 }
@@ -363,25 +367,18 @@ pub(crate) struct StaticCredentialAuthorizationEntry<'config> {
 }
 
 impl<'config> StaticCredentialAuthorizationEntry<'config> {
-    fn matches(
-        &self,
-        resolved: ResolvedRouteTarget<'_, 'config>,
-        member_index: u8,
-    ) -> bool {
-        let Some(member) = resolved.selector().members().get(usize::from(member_index)) else {
-            return false;
-        };
-        self.snapshot_version == resolved.snapshot_version()
-            && self.target == resolved.target()
-            && self.selector_id == resolved.selector().id()
-            && self.selector_revision == resolved.selector().revision()
-            && self.member_index == member_index
-            && self.account == member.account()
-            && self.credential == member.credential()
-            && self.endpoint_origin.site == resolved.target().site()
-            && self.endpoint_origin.endpoint == resolved.target().endpoint()
-            && self.adapter_contract.deployment == resolved.target().deployment()
-            && self.credential_binding.credential == member.credential()
+    fn matches(&self, selected_member: &SelectedMember<'_, 'config>) -> bool {
+        self.snapshot_version == selected_member.snapshot_version()
+            && self.target.id() == selected_member.target()
+            && self.selector_id == self.target.account_selector()
+            && self.selector_revision == selected_member.selector_revision()
+            && self.member_index == selected_member.member_index()
+            && self.account == selected_member.account()
+            && self.credential == selected_member.credential()
+            && self.endpoint_origin.site == self.target.site()
+            && self.endpoint_origin.endpoint == self.target.endpoint()
+            && self.adapter_contract.deployment == self.target.deployment()
+            && self.credential_binding.credential == selected_member.credential()
             && self.grant_revision.0.get() != 0
     }
 }
@@ -391,36 +388,35 @@ impl<'config> StaticCredentialAuthorizationEntry<'config> {
 /// 本类型刻意不实现 `Clone`、`Copy`、`Debug`、Serde 或 Origin getter。P1 只负责签发该
 /// 静态能力，不构造 `CredentialUseContext`，更不会读取 Secret 或调用 Transport。
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct CredentialUseAuthorization<'snapshot, 'config> {
-    snapshot: &'snapshot super::RoutingSnapshot<'config>,
+pub(crate) struct CredentialUseAuthorization<'attempt, 'snapshot, 'config> {
+    selected_member: &'attempt SelectedMember<'snapshot, 'config>,
     entry: StaticCredentialAuthorizationEntry<'config>,
 }
 
-impl<'snapshot, 'config> CredentialUseAuthorization<'snapshot, 'config> {
+impl<'attempt, 'snapshot, 'config> CredentialUseAuthorization<'attempt, 'snapshot, 'config> {
     fn new(
-        resolved: ResolvedRouteTarget<'snapshot, 'config>,
+        selected_member: &'attempt SelectedMember<'snapshot, 'config>,
         entry: StaticCredentialAuthorizationEntry<'config>,
     ) -> Self {
         Self {
-            snapshot: resolved.routing_snapshot(),
+            selected_member,
             entry,
         }
     }
 
-    fn matches(
-        &self,
-        resolved: ResolvedRouteTarget<'snapshot, 'config>,
-        member_index: u8,
-    ) -> bool {
-        core::ptr::eq(self.snapshot, resolved.routing_snapshot())
-            && self.entry.matches(resolved, member_index)
+    fn matches(&self) -> bool {
+        self.entry.matches(self.selected_member)
+    }
+
+    #[cfg(test)]
+    fn credential_for_test(&self) -> CredentialId {
+        self.entry.credential
     }
 }
 
 /// 已激活快照使用的固定容量授权索引。
 pub(crate) struct StaticCredentialAuthorizations<'a> {
-    entries: [Option<StaticCredentialAuthorizationEntry<'a>>;
-        MAX_STATIC_CREDENTIAL_AUTHORIZATIONS],
+    entries: [Option<StaticCredentialAuthorizationEntry<'a>>; MAX_STATIC_CREDENTIAL_AUTHORIZATIONS],
 }
 
 impl<'a> StaticCredentialAuthorizations<'a> {
@@ -486,7 +482,9 @@ impl<'a> StaticCredentialAuthorizations<'a> {
                     .find(|definition| definition.credential == member.credential())
                     .ok_or(StaticCredentialAuthorizationError::MissingCredentialBinding)?;
                 if credential_binding.device_binding != definitions.device_binding {
-                    return Err(StaticCredentialAuthorizationError::CredentialDeviceBindingMismatch);
+                    return Err(
+                        StaticCredentialAuthorizationError::CredentialDeviceBindingMismatch,
+                    );
                 }
 
                 let mut matched_grant = None;
@@ -519,10 +517,12 @@ impl<'a> StaticCredentialAuthorizations<'a> {
                     return Err(StaticCredentialAuthorizationError::GrantNotUserConfirmed);
                 }
 
-                let candidate_index = u8::try_from(candidate_index)
-                    .map_err(|_| StaticCredentialAuthorizationError::AuthorizationIndexOutOfBounds)?;
-                let member_index = u8::try_from(member_index)
-                    .map_err(|_| StaticCredentialAuthorizationError::AuthorizationIndexOutOfBounds)?;
+                let candidate_index = u8::try_from(candidate_index).map_err(|_| {
+                    StaticCredentialAuthorizationError::AuthorizationIndexOutOfBounds
+                })?;
+                let member_index = u8::try_from(member_index).map_err(|_| {
+                    StaticCredentialAuthorizationError::AuthorizationIndexOutOfBounds
+                })?;
                 let slot = authorization_index(candidate_index, member_index)
                     .ok_or(StaticCredentialAuthorizationError::AuthorizationIndexOutOfBounds)?;
                 if entries[slot].is_some() {
@@ -556,7 +556,7 @@ impl<'a> StaticCredentialAuthorizations<'a> {
     }
 
     /// 在固定槽位中取得某个已解析 Target 与 Selector member 的授权记录。
-    pub(crate) fn entry_for(
+    fn entry_for(
         &self,
         candidate_index: u8,
         member_index: u8,
@@ -565,17 +565,17 @@ impl<'a> StaticCredentialAuthorizations<'a> {
         self.entries[index]
     }
 
-    /// 仅当固定槽位仍与同一快照解析出的 Target 和真实成员完全一致时签发能力。
-    pub(crate) fn authorization_for<'snapshot>(
+    /// 仅当固定槽位仍与同一快照、实际获取 Lease 的 Target 与成员完全一致时签发能力。
+    pub(crate) fn authorization_for<'attempt, 'snapshot>(
         &self,
-        resolved: ResolvedRouteTarget<'snapshot, 'a>,
-        member_index: u8,
-    ) -> Option<CredentialUseAuthorization<'snapshot, 'a>> {
-        let entry = self.entry_for(resolved.candidate_index(), member_index)?;
-        let authorization = CredentialUseAuthorization::new(resolved, entry);
-        authorization
-            .matches(resolved, member_index)
-            .then_some(authorization)
+        selected_member: &'attempt SelectedMember<'snapshot, 'a>,
+    ) -> Option<CredentialUseAuthorization<'attempt, 'snapshot, 'a>> {
+        let entry = self.entry_for(
+            selected_member.candidate_index(),
+            selected_member.member_index(),
+        )?;
+        let authorization = CredentialUseAuthorization::new(selected_member, entry);
+        authorization.matches().then_some(authorization)
     }
 }
 
@@ -635,15 +635,20 @@ fn authorization_index(candidate_index: u8, member_index: u8) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::selection_input::AccountSelectionEligibility;
+    use super::super::selection_lease::{
+        PrioritySelectionStart, SelectionLeaseRegistry, TransportHandoffSuccess,
+    };
     use super::*;
     use crate::{
-        AccountCredentialDefinitions, AccountDefinition, AccountSelectorDefinition,
-        AccountSelectorMember, CompiledRoutingSnapshot, CredentialDefinition,
-        CredentialSelectionPolicy, HealthRegistry, HealthTick, IngressClassifier, IngressRequest,
-        ModelDeploymentDefinition, OperationId, QuotaGroupId, QuotaSelectionUnit,
-        QuotaSelectionUnitId, QuotaTopologySource, RouteCandidate, RoutePlanner, RouteStageId,
-        RouteTarget, RoutingStrategy, SelectorAffinitySalt, SelectorRevision,
-        VerifiedIngressDisposition,
+        AccountCredentialDefinitions, AccountDefinition, AccountRuntimeDefinition,
+        AccountSelectorDefinition, AccountSelectorMember, CompiledRoutingSnapshot,
+        CredentialDefinition, CredentialRuntimeDefinition, CredentialSelectionPolicy,
+        HealthRegistry, HealthTick, IngressClassifier, IngressRequest, ModelDeploymentDefinition,
+        OperationId, QuotaGroupId, QuotaGroupRuntimeDefinition, QuotaSelectionUnit,
+        QuotaSelectionUnitId, QuotaTopologySource, RetryPolicy, RouteCandidate, RoutePlanner,
+        RouteStageId, RouteTarget, RoutingStrategy, SelectionRuntimeDefinitions, SelectionSession,
+        SelectorAffinitySalt, SelectorRevision, VerifiedIngressDisposition,
     };
     use core::num::NonZeroU16;
 
@@ -749,30 +754,38 @@ mod tests {
             NonZeroU16::new(1).expect("测试权重非零"),
             &groups,
         )];
-        let members = [AccountSelectorMember::new(account(1), credential(1), unit(1), 0)];
-        let selectors = [
-            AccountSelectorDefinition::new(
-                selector(1),
-                SelectorRevision::new(1).expect("测试 Selector 修订非零"),
-                SelectorAffinitySalt::new([1; 16]),
-                CredentialSelectionPolicy::PriorityFailover,
-                QuotaTopologySource::ConservativeDefault,
-                &units,
-                &members,
-            )
-            .expect("测试 Selector 有效"),
-        ];
+        let members = [AccountSelectorMember::new(
+            account(1),
+            credential(1),
+            unit(1),
+            0,
+        )];
+        let selectors = [AccountSelectorDefinition::new(
+            selector(1),
+            SelectorRevision::new(1).expect("测试 Selector 修订非零"),
+            SelectorAffinitySalt::new([1; 16]),
+            CredentialSelectionPolicy::PriorityFailover,
+            QuotaTopologySource::ConservativeDefault,
+            &units,
+            &members,
+        )
+        .expect("测试 Selector 有效")];
         let candidates = [RouteCandidate::ready(
             stage(1),
             RouteTarget::new(target(1), site(1), deployment(1), endpoint(1), selector(1)),
             0,
         )];
-        let deployments = [ModelDeploymentDefinition::new(deployment(1), site(1), endpoint(1))];
+        let deployments = [ModelDeploymentDefinition::new(
+            deployment(1),
+            site(1),
+            endpoint(1),
+        )];
         let accounts = [AccountDefinition::new(account(1), site(1))];
         let credentials = [CredentialDefinition::new(credential(1), account(1))];
         let deployment_catalog =
             ModelDeploymentCatalog::new(&deployments).expect("测试部署目录有效");
-        let selector_catalog = AccountSelectorCatalog::new(&selectors).expect("测试 Selector 目录有效");
+        let selector_catalog =
+            AccountSelectorCatalog::new(&selectors).expect("测试 Selector 目录有效");
         let account_catalog = AccountCatalog::new(&accounts).expect("测试账户目录有效");
         let credential_catalog =
             CredentialCatalog::new(&credentials, &account_catalog).expect("测试凭据目录有效");
@@ -806,7 +819,10 @@ mod tests {
             origin,
             origin_revision,
         )];
-        let adapter_contracts = [DeploymentAdapterContractDefinition::new(deployment(1), adapter_revision)];
+        let adapter_contracts = [DeploymentAdapterContractDefinition::new(
+            deployment(1),
+            adapter_revision,
+        )];
         let credential_bindings = [CredentialDeviceBindingDefinition::new(
             credential(1),
             device(1),
@@ -847,7 +863,10 @@ mod tests {
             origin,
             origin_revision,
         )];
-        let adapter_contracts = [DeploymentAdapterContractDefinition::new(deployment(1), adapter_revision)];
+        let adapter_contracts = [DeploymentAdapterContractDefinition::new(
+            deployment(1),
+            adapter_revision,
+        )];
         let credential_bindings = [CredentialDeviceBindingDefinition::new(
             credential(1),
             device(1),
@@ -1092,7 +1111,10 @@ mod tests {
             EndpointOriginDefinition::new(site(1), endpoint(1), origin, origin_revision),
             EndpointOriginDefinition::new(site(1), endpoint(1), origin, origin_revision),
         ];
-        let adapter_contracts = [DeploymentAdapterContractDefinition::new(deployment(1), adapter_revision)];
+        let adapter_contracts = [DeploymentAdapterContractDefinition::new(
+            deployment(1),
+            adapter_revision,
+        )];
         let credential_bindings = [CredentialDeviceBindingDefinition::new(
             credential(1),
             device(1),
@@ -1144,7 +1166,10 @@ mod tests {
             origin,
             origin_revision,
         )];
-        let adapter_contracts = [DeploymentAdapterContractDefinition::new(deployment(1), adapter_revision)];
+        let adapter_contracts = [DeploymentAdapterContractDefinition::new(
+            deployment(1),
+            adapter_revision,
+        )];
         assert!(matches!(
             compile_single(
                 &wrong_site_origins,
@@ -1155,7 +1180,10 @@ mod tests {
             Err(StaticCredentialAuthorizationError::EndpointOriginSiteMismatch)
         ));
 
-        let adapter_contracts = [DeploymentAdapterContractDefinition::new(deployment(1), adapter_revision)];
+        let adapter_contracts = [DeploymentAdapterContractDefinition::new(
+            deployment(1),
+            adapter_revision,
+        )];
         let credential_bindings = [
             CredentialDeviceBindingDefinition::new(credential(1), device(1), auth_scheme),
             CredentialDeviceBindingDefinition::new(credential(1), device(1), auth_scheme),
@@ -1217,19 +1245,22 @@ mod tests {
             NonZeroU16::new(1).expect("测试权重非零"),
             &groups,
         )];
-        let members = [AccountSelectorMember::new(account(1), credential(1), unit(1), 0)];
-        let selectors = [
-            AccountSelectorDefinition::new(
-                selector(1),
-                SelectorRevision::new(1).expect("测试 Selector 修订非零"),
-                SelectorAffinitySalt::new([1; 16]),
-                CredentialSelectionPolicy::PriorityFailover,
-                QuotaTopologySource::ConservativeDefault,
-                &units,
-                &members,
-            )
-            .expect("测试 Selector 有效"),
-        ];
+        let members = [AccountSelectorMember::new(
+            account(1),
+            credential(1),
+            unit(1),
+            0,
+        )];
+        let selectors = [AccountSelectorDefinition::new(
+            selector(1),
+            SelectorRevision::new(1).expect("测试 Selector 修订非零"),
+            SelectorAffinitySalt::new([1; 16]),
+            CredentialSelectionPolicy::PriorityFailover,
+            QuotaTopologySource::ConservativeDefault,
+            &units,
+            &members,
+        )
+        .expect("测试 Selector 有效")];
         let candidates = [
             RouteCandidate::ready(
                 stage(1),
@@ -1299,7 +1330,8 @@ mod tests {
         ];
         let deployment_catalog =
             ModelDeploymentCatalog::new(&deployments).expect("测试部署目录有效");
-        let selector_catalog = AccountSelectorCatalog::new(&selectors).expect("测试 Selector 目录有效");
+        let selector_catalog =
+            AccountSelectorCatalog::new(&selectors).expect("测试 Selector 目录有效");
         let account_catalog = AccountCatalog::new(&accounts).expect("测试账户目录有效");
         let credential_catalog =
             CredentialCatalog::new(&credentials, &account_catalog).expect("测试凭据目录有效");
@@ -1336,49 +1368,74 @@ mod tests {
             NonZeroU16::new(1).expect("测试权重非零"),
             &groups,
         )];
-        let members = [AccountSelectorMember::new(account(1), credential(1), unit(1), 0)];
-        let selectors = [
-            AccountSelectorDefinition::new(
-                selector(1),
-                SelectorRevision::new(1).expect("测试 Selector 修订非零"),
-                SelectorAffinitySalt::new([1; 16]),
-                CredentialSelectionPolicy::PriorityFailover,
-                QuotaTopologySource::ConservativeDefault,
-                &units,
-                &members,
-            )
-            .expect("测试 Selector 有效"),
+        let members = [
+            AccountSelectorMember::new(account(1), credential(1), unit(1), 0),
+            AccountSelectorMember::new(account(2), credential(2), unit(1), 0),
         ];
+        let selectors = [AccountSelectorDefinition::new(
+            selector(1),
+            SelectorRevision::new(1).expect("测试 Selector 修订非零"),
+            SelectorAffinitySalt::new([1; 16]),
+            CredentialSelectionPolicy::PriorityFailover,
+            QuotaTopologySource::ConservativeDefault,
+            &units,
+            &members,
+        )
+        .expect("测试 Selector 有效")];
         let candidates = [RouteCandidate::ready(
             stage(1),
             RouteTarget::new(target(1), site(1), deployment(1), endpoint(1), selector(1)),
             0,
         )];
-        let deployments = [ModelDeploymentDefinition::new(deployment(1), site(1), endpoint(1))];
-        let accounts = [AccountDefinition::new(account(1), site(1))];
-        let credentials = [CredentialDefinition::new(credential(1), account(1))];
+        let deployments = [ModelDeploymentDefinition::new(
+            deployment(1),
+            site(1),
+            endpoint(1),
+        )];
+        let accounts = [
+            AccountDefinition::new(account(1), site(1)),
+            AccountDefinition::new(account(2), site(1)),
+        ];
+        let credentials = [
+            CredentialDefinition::new(credential(1), account(1)),
+            CredentialDefinition::new(credential(2), account(2)),
+        ];
         let endpoint_origins = [EndpointOriginDefinition::new(
             site(1),
             endpoint(1),
             origin,
             origin_revision,
         )];
-        let adapter_contracts = [DeploymentAdapterContractDefinition::new(deployment(1), adapter_revision)];
-        let credential_bindings = [CredentialDeviceBindingDefinition::new(
-            credential(1),
-            device(1),
-            auth_scheme,
-        )];
-        let grants = [exact_grant(
-            origin,
-            origin_revision,
-            account(1),
-            credential(1),
-            auth_scheme,
+        let adapter_contracts = [DeploymentAdapterContractDefinition::new(
+            deployment(1),
             adapter_revision,
-            CredentialUseGrantState::Approved,
-            true,
         )];
+        let credential_bindings = [
+            CredentialDeviceBindingDefinition::new(credential(1), device(1), auth_scheme),
+            CredentialDeviceBindingDefinition::new(credential(2), device(1), auth_scheme),
+        ];
+        let grants = [
+            exact_grant(
+                origin,
+                origin_revision,
+                account(1),
+                credential(1),
+                auth_scheme,
+                adapter_revision,
+                CredentialUseGrantState::Approved,
+                true,
+            ),
+            exact_grant(
+                origin,
+                origin_revision,
+                account(2),
+                credential(2),
+                auth_scheme,
+                adapter_revision,
+                CredentialUseGrantState::Approved,
+                true,
+            ),
+        ];
         let definitions = StaticCredentialAuthorizationDefinitions::new(
             device(1),
             &endpoint_origins,
@@ -1416,19 +1473,67 @@ mod tests {
             panic!("会话请求必须进入 Routed");
         };
         let mut health = HealthRegistry::new();
-        let eligibility = health.eligibility_for(compiled.routing(), HealthTick::new(0));
-        let plan = RoutePlanner::plan(&request, compiled.routing(), &eligibility, 0)
+        let route_eligibility = health.eligibility_for(compiled.routing(), HealthTick::new(0));
+        let plan = RoutePlanner::plan(&request, compiled.routing(), &route_eligibility, 0)
             .expect("测试计划有效");
         let resolved = compiled
             .resolve_plan_target(&plan, 0)
             .expect("计划与授权快照一致")
             .expect("首个 Target 存在");
+        let account_runtime = [
+            AccountRuntimeDefinition::new(
+                account(1),
+                NonZeroU16::new(1).expect("测试账户上限非零"),
+            ),
+            AccountRuntimeDefinition::new(
+                account(2),
+                NonZeroU16::new(1).expect("测试账户上限非零"),
+            ),
+        ];
+        let credential_runtime = [
+            CredentialRuntimeDefinition::new(
+                credential(1),
+                NonZeroU16::new(1).expect("测试凭据上限非零"),
+            ),
+            CredentialRuntimeDefinition::new(
+                credential(2),
+                NonZeroU16::new(1).expect("测试凭据上限非零"),
+            ),
+        ];
+        let quota_runtime = [QuotaGroupRuntimeDefinition::new(
+            group(1),
+            NonZeroU16::new(1).expect("测试额度组上限非零"),
+        )];
+        let runtime_definitions =
+            SelectionRuntimeDefinitions::new(&quota_runtime, &account_runtime, &credential_runtime)
+                .expect("测试运行时定义有效");
+        let layout = compiled
+            .selection_runtime_layout(&runtime_definitions)
+            .expect("授权快照可生成选择布局");
+        let registry =
+            SelectionLeaseRegistry::new(layout, &compiled).expect("选择 Registry 可激活");
+        let selection_request = compiled
+            .selection_request(resolved, SelectionSession::Absent)
+            .expect("同代选择请求有效");
+        let selection_eligibility = AccountSelectionEligibility::new(selection_request, 1, 0b10)
+            .expect("仅第二成员的动态资格有效");
+        let mut coordinator = plan
+            .into_attempt_coordinator(RetryPolicy::new(1, 0).expect("测试重试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let selected = match registry.start_priority(
+            coordinator
+                .start(&route_eligibility)
+                .expect("首个 Permit 可签发"),
+            selection_eligibility,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("第二成员必须成功取得 Lease"),
+        };
 
-        assert!(compiled.credential_use_authorization(resolved, 0).is_ok());
-        assert!(matches!(
-            compiled.credential_use_authorization(resolved, 1),
-            Err(CredentialAuthorizationLookupError::UnknownSelectorMember)
-        ));
+        let authorization = selected
+            .credential_use_authorization(&compiled)
+            .expect("实际选择第二成员时必须取得第二成员的授权");
+        assert_eq!(authorization.credential_for_test(), credential(2));
 
         let foreign = CompiledRoutingSnapshot::compile_with_static_credential_authorizations(
             version,
@@ -1442,19 +1547,64 @@ mod tests {
         )
         .expect("同版本的另一快照也可独立编译");
         assert!(matches!(
-            foreign.credential_use_authorization(resolved, 0),
+            selected.credential_use_authorization(&foreign),
             Err(CredentialAuthorizationLookupError::StaleSnapshot)
         ));
 
-        let legacy_eligibility = health.eligibility_for(legacy.routing(), HealthTick::new(0));
-        let legacy_plan = RoutePlanner::plan(&request, legacy.routing(), &legacy_eligibility, 0)
-            .expect("旧快照计划仍有效");
+        let handoff = selected.into_transport_handoff();
+        {
+            let handoff_authorization = handoff
+                .credential_use_authorization(&compiled)
+                .expect("交接后不得丢失第二成员的授权来源");
+            assert_eq!(handoff_authorization.credential_for_test(), credential(2));
+        }
+        let incomplete_handoff = match handoff.into_success_completion() {
+            TransportHandoffSuccess::Incomplete(handoff) => handoff,
+            TransportHandoffSuccess::Completed(_) => panic!("无响应证据的 handoff 不能提前完成"),
+        };
+        let incomplete_authorization = incomplete_handoff
+            .credential_use_authorization(&compiled)
+            .expect("不完整成功回退必须保留第二成员的授权来源");
+        assert_eq!(
+            incomplete_authorization.credential_for_test(),
+            credential(2)
+        );
+
+        let mut legacy_health = HealthRegistry::new();
+        let legacy_route_eligibility =
+            legacy_health.eligibility_for(legacy.routing(), HealthTick::new(0));
+        let legacy_plan =
+            RoutePlanner::plan(&request, legacy.routing(), &legacy_route_eligibility, 0)
+                .expect("旧快照计划仍有效");
         let legacy_resolved = legacy
             .resolve_plan_target(&legacy_plan, 0)
             .expect("旧计划与快照一致")
             .expect("旧 Target 存在");
+        let legacy_layout = legacy
+            .selection_runtime_layout(&runtime_definitions)
+            .expect("旧快照可生成选择布局");
+        let legacy_registry =
+            SelectionLeaseRegistry::new(legacy_layout, &legacy).expect("旧 Registry 可激活");
+        let legacy_selection_request = legacy
+            .selection_request(legacy_resolved, SelectionSession::Absent)
+            .expect("旧快照同代选择请求有效");
+        let legacy_selection_eligibility =
+            AccountSelectionEligibility::new(legacy_selection_request, 1, 1)
+                .expect("旧快照成员动态资格有效");
+        let mut legacy_coordinator = legacy_plan
+            .into_attempt_coordinator(RetryPolicy::new(1, 0).expect("测试重试策略有效"))
+            .expect("旧测试 Coordinator 有效");
+        let legacy_selected = match legacy_registry.start_priority(
+            legacy_coordinator
+                .start(&legacy_route_eligibility)
+                .expect("旧首个 Permit 可签发"),
+            legacy_selection_eligibility,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("旧快照唯一有效成员必须成功取得 Lease"),
+        };
         assert!(matches!(
-            legacy.credential_use_authorization(legacy_resolved, 0),
+            legacy_selected.credential_use_authorization(&legacy),
             Err(CredentialAuthorizationLookupError::AuthorizationUnavailable)
         ));
     }

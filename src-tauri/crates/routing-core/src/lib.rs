@@ -15,12 +15,12 @@ pub const MAX_ROUTE_TARGETS: usize = 16;
 mod account_credential;
 mod account_selector;
 #[cfg_attr(not(test), allow(dead_code))]
-mod credential_authorization;
-#[cfg_attr(not(test), allow(dead_code))]
 mod attempt;
 mod compiled_snapshot;
 #[cfg_attr(not(test), allow(dead_code))]
 mod coordinator;
+#[cfg_attr(not(test), allow(dead_code))]
+mod credential_authorization;
 #[cfg_attr(not(test), allow(dead_code))]
 mod health;
 mod ingress;
@@ -407,7 +407,6 @@ impl<'a> RoutingSnapshot<'a> {
             .find(|candidate| candidate.target.id == target_id)
             .map(|candidate| candidate.stage)
     }
-
 }
 
 #[derive(Clone, Copy)]

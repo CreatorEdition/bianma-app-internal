@@ -15,10 +15,12 @@ use super::{
         ReplayReporterError, TrustedPreExecutionRejection,
     },
     coordinator::AttemptPermit,
+    credential_authorization::{CredentialAuthorizationLookupError, CredentialUseAuthorization},
     selection_input::AccountSelectionEligibility,
     selection_runtime_layout::{SelectionRuntimeBinding, SelectionRuntimeLayout},
-    CompiledRoutingSnapshot, CredentialSelectionPolicy, FailureClass, HealthTick,
-    ResolvedRouteTarget, RouteTargetId, SnapshotVersion, MAX_QUOTA_GROUPS_PER_UNIT,
+    AccountId, AccountSelectorMember, CompiledRoutingSnapshot, CredentialId,
+    CredentialSelectionPolicy, FailureClass, HealthTick, ResolvedRouteTarget, RouteTargetId,
+    RoutingSnapshot, SelectorRevision, SnapshotVersion, MAX_QUOTA_GROUPS_PER_UNIT,
     MAX_TRACKED_ACCOUNTS, MAX_TRACKED_CREDENTIALS, MAX_TRACKED_QUOTA_GROUPS,
 };
 use adapter_contract::{
@@ -150,6 +152,104 @@ impl Drop for SelectedLease<'_> {
     }
 }
 
+/// 由实际成功选择与 Lease 获取同时封存的成员来源证明。
+///
+/// 本类型不公开构造、复制、调试或导出路径。它把同一快照实例解析出的 Target、Selector
+/// 修订和实际成员，与已获取 Lease 的 Account/Credential 及当前单次 Attempt 绑定在一起。
+/// 该证明只作为 SelectedAttempt/HandoffAttempt 的私有字段存在，不能被拆出或复制；后续
+/// Credential 授权只能借用该证明，不能重新接收调用方提供的成员下标。
+pub(crate) struct SelectedMember<'snapshot, 'config> {
+    snapshot: &'snapshot RoutingSnapshot<'config>,
+    target: RouteTargetId,
+    selector_revision: SelectorRevision,
+    member: &'config AccountSelectorMember,
+    candidate_index: u8,
+    member_index: u8,
+}
+
+impl<'snapshot, 'config> SelectedMember<'snapshot, 'config> {
+    fn from_acquired_lease(
+        resolved: ResolvedRouteTarget<'snapshot, 'config>,
+        member_index: u8,
+        lease: &SelectedLease<'_>,
+        permit: &AttemptPermit<'snapshot, 'config>,
+    ) -> Option<Self> {
+        let member = resolved
+            .selector()
+            .members()
+            .get(usize::from(member_index))?;
+        (lease.account.id == member.account().get()
+            && lease.credential.id == member.credential().get()
+            && resolved.matches_snapshot(permit.snapshot())
+            && resolved.target().id() == permit.target())
+        .then_some(Self {
+            snapshot: resolved.routing_snapshot(),
+            target: resolved.target().id(),
+            selector_revision: resolved.selector().revision(),
+            member,
+            candidate_index: resolved.candidate_index(),
+            member_index,
+        })
+    }
+
+    fn matches_attempt(
+        &self,
+        lease: &SelectedLease<'_>,
+        generation: SnapshotVersion,
+        target: RouteTargetId,
+    ) -> bool {
+        self.snapshot.version() == generation
+            && self.target == target
+            && lease.account.id == self.member.account().get()
+            && lease.credential.id == self.member.credential().get()
+    }
+
+    /// 返回由成功选择封存的固定 Target 槽位；只供相邻授权模块读取固定索引。
+    pub(crate) const fn candidate_index(&self) -> u8 {
+        self.candidate_index
+    }
+
+    /// 返回由成功选择封存的成员槽位；不得作为独立授权输入使用。
+    pub(crate) const fn member_index(&self) -> u8 {
+        self.member_index
+    }
+
+    /// 返回成功选择时已绑定的快照版本。
+    pub(crate) const fn snapshot_version(&self) -> SnapshotVersion {
+        self.snapshot.version()
+    }
+
+    /// 返回成功选择时的 Target 标识；只供固定授权槽校验。
+    pub(crate) const fn target(&self) -> RouteTargetId {
+        self.target
+    }
+
+    /// 返回成功选择时的 Selector 修订；只供固定授权槽校验。
+    pub(crate) const fn selector_revision(&self) -> SelectorRevision {
+        self.selector_revision
+    }
+
+    /// 返回成功获取 Lease 的 Account；只供固定授权槽校验。
+    pub(crate) const fn account(&self) -> AccountId {
+        self.member.account()
+    }
+
+    /// 返回成功获取 Lease 的 Credential；只供固定授权槽校验。
+    pub(crate) const fn credential(&self) -> CredentialId {
+        self.member.credential()
+    }
+
+    /// 判断证明是否仍属于指定编译快照的同一 RoutingSnapshot 实例。
+    pub(crate) fn matches_snapshot(&self, snapshot: &RoutingSnapshot<'config>) -> bool {
+        let Some(candidate) = snapshot.candidates().get(usize::from(self.candidate_index)) else {
+            return false;
+        };
+        core::ptr::eq(self.snapshot, snapshot)
+            && self.snapshot.version() == snapshot.version()
+            && candidate.target().id() == self.target
+    }
+}
+
 /// 资源级冷却应归属的最小范围。
 ///
 /// 本切片只允许精确的 Credential、Account 或当前实际持有的 QuotaGroup 集合。未知范围
@@ -267,6 +367,7 @@ pub(crate) enum ResourceCooldownReporterError {
 pub(crate) struct SelectedAttempt<'registry, 'snapshot, 'config> {
     lease: SelectedLease<'registry>,
     tracker: AttemptTracker<'snapshot, 'config>,
+    selected_member: SelectedMember<'snapshot, 'config>,
     generation: SnapshotVersion,
     target: RouteTargetId,
 }
@@ -295,6 +396,7 @@ enum TransportTerminalSafety {
 pub(crate) struct TransportHandoffAttempt<'registry, 'snapshot, 'config> {
     lease: SelectedLease<'registry>,
     tracker: AttemptTracker<'snapshot, 'config>,
+    selected_member: SelectedMember<'snapshot, 'config>,
     generation: SnapshotVersion,
     target: RouteTargetId,
     terminal_safety: TransportTerminalSafety,
@@ -315,6 +417,26 @@ pub(crate) enum TransportHandoffSuccess<'registry, 'snapshot, 'config> {
 }
 
 impl<'registry, 'snapshot, 'config> SelectedAttempt<'registry, 'snapshot, 'config> {
+    /// 仅为当前实际持有 Lease 的成员签发静态 Credential 授权。
+    ///
+    /// 不接收 Target、成员下标、Account 或 Credential 等调用方输入；证明与 Lease、Tracker
+    /// 任一绑定失配时关闭失败。返回能力借用本 Attempt，不能在交接或终结后继续使用。
+    pub(crate) fn credential_use_authorization<'attempt>(
+        &'attempt self,
+        compiled: &'snapshot CompiledRoutingSnapshot<'config>,
+    ) -> Result<
+        CredentialUseAuthorization<'attempt, 'snapshot, 'config>,
+        CredentialAuthorizationLookupError,
+    > {
+        if !self
+            .selected_member
+            .matches_attempt(&self.lease, self.generation, self.target)
+        {
+            return Err(CredentialAuthorizationLookupError::SelectionProvenanceMismatch);
+        }
+        compiled.credential_use_authorization(&self.selected_member)
+    }
+
     /// 消费选择结果并创建唯一的 Transport 交接包装器。
     ///
     /// 交接后不再存在 crate-wide 的裸 Tracker 或直接完成入口。若 Transport 未能通过受控
@@ -325,12 +447,14 @@ impl<'registry, 'snapshot, 'config> SelectedAttempt<'registry, 'snapshot, 'confi
         let Self {
             lease,
             tracker,
+            selected_member,
             generation,
             target,
         } = self;
         TransportHandoffAttempt {
             lease,
             tracker,
+            selected_member,
             generation,
             target,
             terminal_safety: TransportTerminalSafety::NoBytesProven,
@@ -340,6 +464,26 @@ impl<'registry, 'snapshot, 'config> SelectedAttempt<'registry, 'snapshot, 'confi
 }
 
 impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot, 'config> {
+    /// 仅为当前交接 Attempt 原样携带的实际选中成员签发静态 Credential 授权。
+    ///
+    /// Selected → Handoff 的移动不允许丢失或替换成员来源证明；能力同样只能借用当前
+    /// handoff，不能脱离其 Lease 与单次 Attempt 继续存在。
+    pub(crate) fn credential_use_authorization<'attempt>(
+        &'attempt self,
+        compiled: &'snapshot CompiledRoutingSnapshot<'config>,
+    ) -> Result<
+        CredentialUseAuthorization<'attempt, 'snapshot, 'config>,
+        CredentialAuthorizationLookupError,
+    > {
+        if !self
+            .selected_member
+            .matches_attempt(&self.lease, self.generation, self.target)
+        {
+            return Err(CredentialAuthorizationLookupError::SelectionProvenanceMismatch);
+        }
+        compiled.credential_use_authorization(&self.selected_member)
+    }
+
     /// 记录受控 writer 已写出首个请求字节。
     pub(crate) fn request_write_started(&mut self) -> Result<(), AttemptTransitionError> {
         self.tracker.request_write_started()?;
@@ -457,6 +601,7 @@ impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot
         let Self {
             lease,
             tracker,
+            selected_member,
             generation,
             target,
             terminal_safety,
@@ -470,6 +615,7 @@ impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot
             Err(tracker) => TransportHandoffSuccess::Incomplete(Self {
                 lease,
                 tracker,
+                selected_member,
                 generation,
                 target,
                 terminal_safety,
@@ -527,6 +673,10 @@ impl SelectionLocalStop<'_, '_> {
 }
 
 /// PriorityFailover 选择的唯一下一步。
+///
+/// Selected 分支线性持有 Lease、Tracker 与成员来源证明；为维持路由热路径的零堆分配，不能
+/// 按 Clippy 建议把该分支装箱。其固定栈大小受下方尺寸门禁约束。
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum PrioritySelectionStart<'registry, 'snapshot, 'config> {
     /// 成功取得全部三类资源，可以开始受控发送。
     Selected(SelectedAttempt<'registry, 'snapshot, 'config>),
@@ -647,11 +797,25 @@ impl<'snapshot, 'config> SelectionLeaseRegistry<'snapshot, 'config> {
                 }
                 match self.acquire(binding) {
                     Ok(lease) => {
+                        let Ok(member_index) = u8::try_from(index) else {
+                            drop(lease);
+                            return PrioritySelectionStart::Stopped(SelectionLocalStop { permit });
+                        };
+                        let Some(selected_member) = SelectedMember::from_acquired_lease(
+                            resolved,
+                            member_index,
+                            &lease,
+                            &permit,
+                        ) else {
+                            drop(lease);
+                            return PrioritySelectionStart::Stopped(SelectionLocalStop { permit });
+                        };
                         let generation = permit.snapshot().version();
                         let target = permit.target();
                         return PrioritySelectionStart::Selected(SelectedAttempt {
                             lease,
                             tracker: AttemptTracker::from_permit(permit),
+                            selected_member,
                             generation,
                             target,
                         });
