@@ -45,6 +45,11 @@ struct CapacitySlot {
 }
 
 impl CapacitySlot {
+    /// 单次无等待获取允许的最多 CAS 尝试次数。
+    ///
+    /// 达到上限时保守返回容量不可用，避免高竞争下无界自旋拉高本地路由 CPU。
+    const MAX_CAS_ATTEMPTS: usize = 8;
+
     const fn empty() -> Self {
         Self {
             id: 0,
@@ -62,32 +67,26 @@ impl CapacitySlot {
     }
 
     fn try_acquire(&self) -> bool {
-        let mut active = self.active.load(Ordering::Acquire);
-        loop {
+        for _ in 0..Self::MAX_CAS_ATTEMPTS {
+            let active = self.active.load(Ordering::Acquire);
             if active >= self.limit {
                 return false;
             }
             let next = active + 1;
-            match self.active.compare_exchange_weak(
-                active,
-                next,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => return true,
-                Err(observed) => active = observed,
+            if self
+                .active
+                .compare_exchange_weak(active, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return true;
             }
         }
+        false
     }
 
     fn release(&self) {
-        let released = self
-            .active
-            .fetch_update(Ordering::Release, Ordering::Acquire, |active| {
-                active.checked_sub(1)
-            })
-            .is_ok();
-        debug_assert!(released, "Lease 释放前必须持有容量");
+        let previous = self.active.fetch_sub(1, Ordering::Release);
+        debug_assert!(previous > 0, "Lease 释放前必须持有容量");
     }
 
     #[cfg(test)]
