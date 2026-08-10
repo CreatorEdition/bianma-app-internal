@@ -23,6 +23,10 @@ mod prompt_files;
 mod provider;
 mod provider_defaults;
 mod proxy;
+// Phase 2 读端口在独立 Saga 接线前必须保持不可达，不能为了消除警告而误接入旧
+// Proxy、启动路径或路由热循环。
+#[allow(dead_code)]
+mod routing_v2;
 mod services;
 mod session_manager;
 mod settings;
