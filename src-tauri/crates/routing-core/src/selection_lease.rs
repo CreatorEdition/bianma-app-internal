@@ -6,6 +6,11 @@
 
 use core::sync::atomic::{AtomicU16, Ordering};
 
+mod adapter_contract;
+
+use adapter_contract::{
+    HandoffRateLimitReporter, HandoffRateLimitReporterError, VerifiedRateLimitContract,
+};
 use super::{
     attempt::{
         AdapterRateLimitReporter, AdapterReplayReporter, AttemptCompletion,
@@ -362,11 +367,27 @@ impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot
     }
 
     /// 为当前交接 Attempt 签发一次受信限流上报器。
-    pub(crate) fn rate_limit_reporter(
+    fn rate_limit_reporter(
         &mut self,
         resolved: ResolvedRouteTarget<'_, '_>,
     ) -> Result<AdapterRateLimitReporter, RateLimitReporterError> {
         self.tracker.rate_limit_reporter(resolved)
+    }
+
+    /// 为当前 Transport handoff 签发一次受信 adapter 限流合同上报器。
+    ///
+    /// 合同先按当前 Target 所属 Site 校验，随后复用 Tracker 的精确 Target / 快照校验。
+    /// 即使合同投影到资源冷却，也会先占用该 Attempt 的 Target reporter，从而一个 handoff
+    /// 只能处理一个 adapter 限流信号；资源 ID 始终从实际 Lease 派生。
+    fn adapter_rate_limit_reporter<'handoff>(
+        &'handoff mut self,
+        resolved: ResolvedRouteTarget<'snapshot, 'config>,
+        contract: VerifiedRateLimitContract,
+    ) -> Result<
+        HandoffRateLimitReporter<'handoff, 'registry, 'snapshot, 'config>,
+        HandoffRateLimitReporterError,
+    > {
+        adapter_contract::issue(self, resolved, contract)
     }
 
     /// 为当前交接 Attempt 签发一次受信执行前拒绝上报器。
@@ -382,7 +403,7 @@ impl<'registry, 'snapshot, 'config> TransportHandoffAttempt<'registry, 'snapshot
     /// 上报器不接收任何裸资源 ID，只能从 handoff 已持有的 Account、Credential 与当前 Unit
     /// 全部 QuotaGroup 派生 observation。它与现有 Target 限流上报器、执行前拒绝收据和
     /// 当前 Attempt 的 ReplayGate 完全独立。
-    pub(crate) fn resource_cooldown_reporter<'handoff>(
+    fn resource_cooldown_reporter<'handoff>(
         &'handoff mut self,
     ) -> Result<ResourceCooldownReporter<'handoff, 'registry>, ResourceCooldownReporterError> {
         if self.resource_cooldown_reporter_issued {
@@ -750,6 +771,10 @@ fn rollback(
 
 #[cfg(test)]
 mod tests {
+    use super::adapter_contract::{
+        test_only_verified_rate_limit_contract, AdapterRateLimitKind, CooldownProjection,
+        HandoffRateLimitReporterError, VerifiedRateLimitContract,
+    };
     use super::super::selection_cooldown::{
         SelectionCooldownFilterError, SelectionCooldownRecordError, SelectionCooldownRegistry,
     };
@@ -761,7 +786,7 @@ mod tests {
         HealthTick, IngressClassifier, IngressRequest, ModelDeploymentDefinition,
         ModelDeploymentId, OperationId, QuotaGroupId, QuotaGroupRuntimeDefinition,
         QuotaSelectionUnit, QuotaSelectionUnitId, QuotaTopologySource, RetryPolicy, RouteCandidate,
-        RoutePlanner, RouteStageId, RouteTarget, RouteTargetId, RoutingStrategy,
+        RoutePlanner, RouteStageId, RouteTarget, RouteTargetId, RoutingStrategy, RateLimitScope,
         SelectionRuntimeDefinitions, SelectionSession, SelectorAffinitySalt, SelectorRevision,
         SiteId, SnapshotVersion, VerifiedIngressDisposition,
     };
@@ -943,6 +968,22 @@ mod tests {
             .selection_runtime_layout(definitions)
             .expect("测试静态布局有效");
         SelectionLeaseRegistry::new(layout, compiled).expect("Priority Registry 应可激活")
+    }
+
+    fn registered_rate_limit_contract(
+        site: SiteId,
+        projection: CooldownProjection,
+    ) -> VerifiedRateLimitContract {
+        test_only_verified_rate_limit_contract(
+            site,
+            0x1001,
+            1,
+            1,
+            1,
+            AdapterRateLimitKind::QuotaExhausted,
+            projection,
+        )
+        .expect("测试已登记限流合同有效")
     }
 
     #[test]
@@ -1839,8 +1880,13 @@ mod tests {
         let route_eligibility = route_eligibility(compiled.routing());
         let plan = route_plan(compiled.routing(), &route_eligibility);
         let base = selection_eligibility(&compiled, &plan, 0b11, 0b111);
+        let first_resolved = compiled
+            .resolve_plan_target(&plan, 0)
+            .expect("首个 Target 与快照一致")
+            .expect("首个 Target 存在");
 
         let mut credential_cooldowns = SelectionCooldownRegistry::new();
+        let mut credential_health = HealthRegistry::new();
         let mut credential_coordinator = plan
             .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
             .expect("测试 Coordinator 有效");
@@ -1854,17 +1900,26 @@ mod tests {
             _ => panic!("凭据冷却路径应选择首个成员"),
         };
         let mut credential_handoff = credential_selected.into_transport_handoff();
-        let credential_observation = credential_handoff
-            .resource_cooldown_reporter()
-            .expect("实际 handoff 可签发资源冷却上报器")
-            .report(ResourceCooldownScope::Credential, HealthTick::new(10));
+        credential_handoff
+            .adapter_rate_limit_reporter(
+                first_resolved,
+                registered_rate_limit_contract(
+                    SiteId::new(1).expect("测试 Site ID 非零"),
+                    CooldownProjection::Resource(ResourceCooldownScope::Credential),
+                ),
+            )
+            .expect("当前 handoff 可签发受信 adapter 限流上报器")
+            .report(
+                HealthTick::new(10),
+                HealthTick::new(1),
+                &mut credential_health,
+                &mut credential_cooldowns,
+            )
+            .expect("受信凭据冷却合同可记录");
         assert!(matches!(
             credential_handoff.resource_cooldown_reporter(),
             Err(ResourceCooldownReporterError::AlreadyReported)
         ));
-        credential_cooldowns
-            .record(credential_observation, HealthTick::new(1))
-            .expect("受信凭据观测可记录");
         let credential_filtered = credential_cooldowns
             .filter(base, HealthTick::new(1))
             .expect("凭据冷却过滤有效");
@@ -1909,6 +1964,7 @@ mod tests {
         let _credential_completion = credential_handoff.into_cancelled_completion();
 
         let mut account_cooldowns = SelectionCooldownRegistry::new();
+        let mut account_health = HealthRegistry::new();
         let account_plan = route_plan(compiled.routing(), &route_eligibility);
         let mut account_coordinator = account_plan
             .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
@@ -1922,14 +1978,23 @@ mod tests {
             PrioritySelectionStart::Selected(selected) => selected,
             _ => panic!("账户冷却路径应选择首个成员"),
         };
-        let account_observation = account_selected
+        account_selected
             .into_transport_handoff()
-            .resource_cooldown_reporter()
-            .expect("实际 handoff 可签发账户上报器")
-            .report(ResourceCooldownScope::Account, HealthTick::new(10));
-        account_cooldowns
-            .record(account_observation, HealthTick::new(1))
-            .expect("受信账户观测可记录");
+            .adapter_rate_limit_reporter(
+                first_resolved,
+                registered_rate_limit_contract(
+                    SiteId::new(1).expect("测试 Site ID 非零"),
+                    CooldownProjection::Resource(ResourceCooldownScope::Account),
+                ),
+            )
+            .expect("当前 handoff 可签发受信 adapter 限流上报器")
+            .report(
+                HealthTick::new(10),
+                HealthTick::new(1),
+                &mut account_health,
+                &mut account_cooldowns,
+            )
+            .expect("受信账户冷却合同可记录");
         let account_filtered = account_cooldowns
             .filter(base, HealthTick::new(1))
             .expect("账户冷却过滤有效");
@@ -1937,6 +2002,7 @@ mod tests {
         assert_eq!(account_filtered.unit_mask(), 0b10);
 
         let mut quota_cooldowns = SelectionCooldownRegistry::new();
+        let mut quota_health = HealthRegistry::new();
         let quota_plan = route_plan(compiled.routing(), &route_eligibility);
         let mut quota_coordinator = quota_plan
             .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
@@ -1950,22 +2016,114 @@ mod tests {
             PrioritySelectionStart::Selected(selected) => selected,
             _ => panic!("额度组冷却路径应选择首个成员"),
         };
-        let quota_observation = quota_selected
+        quota_selected
             .into_transport_handoff()
-            .resource_cooldown_reporter()
-            .expect("实际 handoff 可签发额度组上报器")
+            .adapter_rate_limit_reporter(
+                first_resolved,
+                registered_rate_limit_contract(
+                    SiteId::new(1).expect("测试 Site ID 非零"),
+                    CooldownProjection::Resource(ResourceCooldownScope::CurrentQuotaGroups),
+                ),
+            )
+            .expect("当前 handoff 可签发受信 adapter 限流上报器")
             .report(
-                ResourceCooldownScope::CurrentQuotaGroups,
                 HealthTick::new(10),
-            );
-        quota_cooldowns
-            .record(quota_observation, HealthTick::new(1))
-            .expect("受信额度组观测可记录");
+                HealthTick::new(1),
+                &mut quota_health,
+                &mut quota_cooldowns,
+            )
+            .expect("受信额度组冷却合同可记录");
         let quota_filtered = quota_cooldowns
             .filter(base, HealthTick::new(1))
             .expect("额度组冷却过滤有效");
         assert_eq!(quota_filtered.member_mask(), 0b100);
         assert_eq!(quota_filtered.unit_mask(), 0b10);
+
+        let mut unknown_health = HealthRegistry::new();
+        let mut unknown_resources = SelectionCooldownRegistry::new();
+        let unknown_plan = route_plan(compiled.routing(), &route_eligibility);
+        let mut unknown_coordinator = unknown_plan
+            .into_attempt_coordinator(RetryPolicy::new(2, 0).expect("测试策略有效"))
+            .expect("测试 Coordinator 有效");
+        let unknown_selected = match lease_registry.start_priority(
+            unknown_coordinator
+                .start(&route_eligibility)
+                .expect("Unknown 限流 Permit 有效"),
+            base,
+        ) {
+            PrioritySelectionStart::Selected(selected) => selected,
+            _ => panic!("Unknown 限流路径应选择首个成员"),
+        };
+        let mut unknown_handoff = unknown_selected.into_transport_handoff();
+        assert!(matches!(
+            unknown_handoff.adapter_rate_limit_reporter(
+                first_resolved,
+                registered_rate_limit_contract(
+                    SiteId::new(2).expect("测试 Site ID 非零"),
+                    CooldownProjection::Health(RateLimitScope::Unknown),
+                ),
+            ),
+            Err(HandoffRateLimitReporterError::Contract(
+                super::adapter_contract::VerifiedRateLimitContractError::SiteMismatch
+            ))
+        ));
+        unknown_handoff
+            .adapter_rate_limit_reporter(
+                first_resolved,
+                registered_rate_limit_contract(
+                    SiteId::new(1).expect("测试 Site ID 非零"),
+                    CooldownProjection::Health(RateLimitScope::Unknown),
+                ),
+            )
+            .expect("Site 错配不能消耗正确 reporter")
+            .report(
+                HealthTick::new(10),
+                HealthTick::new(1),
+                &mut unknown_health,
+                &mut unknown_resources,
+            )
+            .expect("受信 Unknown 合同可记录 Site 冷却");
+        assert_eq!(
+            unknown_resources
+                .filter(base, HealthTick::new(1))
+                .expect("Unknown 不应缩窄为资源级冷却")
+                .member_mask(),
+            0b111
+        );
+        let unknown_eligibility = unknown_health.eligibility_for(compiled.routing(), HealthTick::new(1));
+        let unknown_future_plan = route_plan(compiled.routing(), &unknown_eligibility);
+        assert_eq!(
+            unknown_future_plan
+                .resolve(0)
+                .expect("Unknown 冷却后的计划必须可解析")
+                .expect("另一个 Site 仍应可用")
+                .id(),
+            target_id(2)
+        );
+        assert!(matches!(
+            unknown_handoff.adapter_rate_limit_reporter(
+                first_resolved,
+                registered_rate_limit_contract(
+                    SiteId::new(1).expect("测试 Site ID 非零"),
+                    CooldownProjection::Health(RateLimitScope::Unknown),
+                ),
+            ),
+            Err(HandoffRateLimitReporterError::Attempt(
+                crate::attempt::RateLimitReporterError::AlreadyReported
+            ))
+        ));
+        unknown_handoff
+            .request_write_started()
+            .expect("当前请求可记录首字节写出");
+        let unknown_completion =
+            unknown_handoff.into_completion(FailureClass::RateLimited, Some(500), None);
+        assert_eq!(unknown_completion.outcome().delivery(), DeliveryState::Sent);
+        assert!(matches!(
+            unknown_coordinator
+                .complete(unknown_completion, &route_eligibility)
+                .expect("当前 Attempt 完成可消费"),
+            crate::coordinator::CoordinatorStep::Stop(crate::RetryStopReason::ReplayNotProven)
+        ));
         let second_resolved = compiled
             .resolve_plan_target(&route_plan(compiled.routing(), &route_eligibility), 1)
             .expect("第二 Target 与快照一致")
