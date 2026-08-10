@@ -5,7 +5,7 @@
 
 use core::num::NonZeroU16;
 
-use super::{PlanError, QuotaGroupId, ResolvedRouteTarget, RoutingSnapshot};
+use super::{QuotaGroupId, QuotaSelectionUnitId, ResolvedRouteTarget, RoutingSnapshot};
 
 /// 单个编译快照允许追踪的最多全局额度组数量。
 ///
@@ -108,6 +108,8 @@ impl<'a> QuotaGroupRuntimeDefinitions<'a> {
 /// 将额度组定义绑定到编译快照时的拒绝原因。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SelectionRuntimeLayoutError {
+    /// 解析目标并非由布局绑定的同一 RoutingSnapshot 实例产生。
+    StaleSnapshot,
     /// 同一可达路由候选引用的 Selector 在已编译目录中缺失；理论不变量失效时保守拒绝。
     UnknownReachableSelector,
     /// 所有可达 Selector 去重后引用的额度组超过固定上限。
@@ -116,6 +118,10 @@ pub enum SelectionRuntimeLayoutError {
     MissingReachableGroupDefinition,
     /// 输入定义未被任何可达 Selector 引用。
     UnusedDefinition,
+    /// 解析目标的 Selector 不包含调用方声明的额度单元。
+    UnknownTargetUnit,
+    /// 声明的额度组不属于解析目标的额度单元。
+    GroupNotInTargetUnit,
 }
 
 /// 与唯一 `RoutingSnapshot` 实例绑定的只读全局额度组布局。
@@ -140,24 +146,33 @@ impl<'snapshot, 'config> SelectionRuntimeLayout<'snapshot, 'config> {
         }
     }
 
-    /// 按稳定额度组标识查询静态在途上限；未知组不回退。
-    pub(crate) fn max_inflight(&self, id: QuotaGroupId) -> Option<NonZeroU16> {
+    fn max_inflight(&self, id: QuotaGroupId) -> Option<NonZeroU16> {
         self.definitions
             .get(id)
             .map(|definition| definition.max_inflight())
     }
 
-    /// 在先确认解析目标属于同一快照实例后查询静态在途上限。
+    /// 在先确认解析目标、额度单元与额度组存在静态拓扑关系后查询在途上限。
     ///
-    /// 此入口不执行选择；它只为未来 C2 的受控 Lease 获取链保留同代绑定证据。版本号或
-    /// TargetId 相同的其他快照解析目标一律拒绝，绝不重绑到当前布局。
+    /// 此入口不执行选择；它只为未来 C2 的受控 Lease 获取链保留同代绑定证据。调用方
+    /// 必须显式提供目标 Selector 中存在的 Unit，且 Group 必须属于该 Unit；同快照中的
+    /// 另一个 Selector 或 Unit 也不能借用此目标访问任意全局 Group。版本号或 TargetId
+    /// 相同的其他快照解析目标一律拒绝，绝不重绑到当前布局。
     pub(crate) fn max_inflight_for(
         &self,
         resolved: ResolvedRouteTarget<'snapshot, 'config>,
+        unit: QuotaSelectionUnitId,
         id: QuotaGroupId,
-    ) -> Result<Option<NonZeroU16>, PlanError> {
+    ) -> Result<Option<NonZeroU16>, SelectionRuntimeLayoutError> {
         if !resolved.matches_snapshot(self.routing) {
-            return Err(PlanError::StaleSnapshot);
+            return Err(SelectionRuntimeLayoutError::StaleSnapshot);
+        }
+        let target_unit = resolved
+            .selector()
+            .unit(unit)
+            .ok_or(SelectionRuntimeLayoutError::UnknownTargetUnit)?;
+        if !target_unit.quota_groups().contains(&id) {
+            return Err(SelectionRuntimeLayoutError::GroupNotInTargetUnit);
         }
         Ok(self.max_inflight(id))
     }

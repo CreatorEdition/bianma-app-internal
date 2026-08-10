@@ -1049,16 +1049,20 @@ mod tests {
 
     #[test]
     fn global_quota_runtime_layout_deduplicates_shared_reachable_group() {
-        let group = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let shared_group = QuotaGroupId::new(1).expect("测试额度组 ID 非零");
+        let first_only_group = QuotaGroupId::new(2).expect("测试额度组 ID 非零");
+        let second_only_group = QuotaGroupId::new(3).expect("测试额度组 ID 非零");
+        let first_groups = [shared_group, first_only_group];
+        let second_groups = [shared_group, second_only_group];
         let first_unit = [QuotaSelectionUnit::new(
             QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
             core::num::NonZeroU16::new(1).expect("测试权重非零"),
-            &group,
+            &first_groups,
         )];
         let second_unit = [QuotaSelectionUnit::new(
             QuotaSelectionUnitId::new(2).expect("测试额度单元 ID 非零"),
             core::num::NonZeroU16::new(1).expect("测试权重非零"),
-            &group,
+            &second_groups,
         )];
         let first_members = [AccountSelectorMember::new(
             AccountId::new(1).expect("测试账户 ID 非零"),
@@ -1096,16 +1100,45 @@ mod tests {
             &selectors,
         )
         .expect("共享额度组的编译快照有效");
-        let runtime = [runtime_definition(1, 5)];
+        let runtime = [
+            runtime_definition(1, 5),
+            runtime_definition(2, 6),
+            runtime_definition(3, 7),
+        ];
         let definitions = QuotaGroupRuntimeDefinitions::new(&runtime).expect("共享额度组定义有效");
         let layout = compiled
             .selection_runtime_layout(&definitions)
             .expect("跨 Selector 共享的 Group 只占一个布局项");
 
-        assert_eq!(layout.max_inflight(group[0]), core::num::NonZeroU16::new(5));
+        let route_eligibility = eligibility(compiled.routing());
+        let route_plan = RoutePlanner::plan(
+            &routed(compiled.routing().version()),
+            compiled.routing(),
+            &route_eligibility,
+            0,
+        )
+        .expect("两个可达目标都可规划");
+        let first_resolved = compiled
+            .resolve_plan_target(&route_plan, 0)
+            .expect("计划绑定当前快照")
+            .expect("第一个解析目标存在");
         assert_eq!(
-            layout.max_inflight(QuotaGroupId::new(2).expect("测试 ID 非零")),
-            None
+            layout
+                .max_inflight_for(
+                    first_resolved,
+                    QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+                    first_only_group,
+                )
+                .expect("目标自己的额度组可查询"),
+            core::num::NonZeroU16::new(6)
+        );
+        assert_eq!(
+            layout.max_inflight_for(
+                first_resolved,
+                QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+                second_only_group,
+            ),
+            Err(SelectionRuntimeLayoutError::GroupNotInTargetUnit)
         );
         assert!(core::mem::size_of::<QuotaGroupRuntimeDefinitions<'_>>() <= 16);
         assert!(core::mem::size_of::<SelectionRuntimeLayout<'_, '_>>() <= 32);
@@ -1253,6 +1286,23 @@ mod tests {
         let definitions =
             QuotaGroupRuntimeDefinitions::new(&runtime).expect("256 个静态定义输入有效");
 
+        let at_limit_candidates = [RouteCandidate::ready(
+            stage(1),
+            target_with_binding(1, 1, 1, 1, 1),
+            0,
+        )];
+        let at_limit = CompiledRoutingSnapshot::compile(
+            version(1),
+            &at_limit_candidates,
+            RoutingStrategy::Priority,
+            1,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("恰好 256 个可达额度组的快照编译有效");
+        assert!(at_limit.selection_runtime_layout(&definitions).is_ok());
+
         assert!(matches!(
             compiled.selection_runtime_layout(&definitions),
             Err(SelectionRuntimeLayoutError::TooManyReachableGroups)
@@ -1325,13 +1375,21 @@ mod tests {
 
         assert_eq!(
             first_layout
-                .max_inflight_for(first_resolved, groups[0])
+                .max_inflight_for(
+                    first_resolved,
+                    QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+                    groups[0],
+                )
                 .expect("同快照目标可查询"),
             core::num::NonZeroU16::new(2)
         );
         assert_eq!(
-            second_layout.max_inflight_for(first_resolved, groups[0]),
-            Err(PlanError::StaleSnapshot)
+            second_layout.max_inflight_for(
+                first_resolved,
+                QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零"),
+                groups[0],
+            ),
+            Err(SelectionRuntimeLayoutError::StaleSnapshot)
         );
     }
 
