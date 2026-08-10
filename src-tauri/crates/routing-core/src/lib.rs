@@ -1106,6 +1106,16 @@ mod tests {
         assert_eq!(definitions.quota_group_len(), 1);
         assert_eq!(definitions.account_len(), 1);
         assert_eq!(definitions.credential_len(), 1);
+
+        let max_accounts: [AccountRuntimeDefinition; MAX_TRACKED_ACCOUNTS] =
+            core::array::from_fn(|index| account_runtime_definition((index + 1) as u64, 1));
+        let max_credentials: [CredentialRuntimeDefinition; MAX_TRACKED_CREDENTIALS] =
+            core::array::from_fn(|index| credential_runtime_definition((index + 1) as u64, 1));
+        let at_limit =
+            SelectionRuntimeDefinitions::new(&quota_groups, &max_accounts, &max_credentials)
+                .expect("16 个 Account 与 Credential 定义应有效");
+        assert_eq!(at_limit.account_len(), MAX_TRACKED_ACCOUNTS);
+        assert_eq!(at_limit.credential_len(), MAX_TRACKED_CREDENTIALS);
     }
 
     #[test]
@@ -1216,7 +1226,7 @@ mod tests {
         assert_eq!(limits.next(), None);
         assert!(core::mem::size_of::<SelectionRuntimeDefinitions<'_>>() <= 48);
         assert!(core::mem::size_of::<SelectionRuntimeLayout<'_, '_>>() <= 64);
-        assert!(core::mem::size_of::<SelectionRuntimeBinding<'_, '_>>() <= 80);
+        assert!(core::mem::size_of::<SelectionRuntimeBinding<'_, '_>>() <= 128);
     }
 
     #[test]
@@ -1651,6 +1661,80 @@ mod tests {
             layout.binding_for(resolved, second_unit_id, members[0]),
             Err(SelectionRuntimeLayoutError::MemberNotInTargetUnit)
         ));
+    }
+
+    #[test]
+    fn selection_runtime_binding_is_bound_to_its_exact_target_provenance() {
+        let groups = [QuotaGroupId::new(1).expect("测试额度组 ID 非零")];
+        let unit_id = QuotaSelectionUnitId::new(1).expect("测试额度单元 ID 非零");
+        let units = [QuotaSelectionUnit::new(
+            unit_id,
+            core::num::NonZeroU16::new(1).expect("测试权重非零"),
+            &groups,
+        )];
+        let members = [AccountSelectorMember::new(
+            AccountId::new(1).expect("测试账户 ID 非零"),
+            CredentialId::new(1).expect("测试凭据 ID 非零"),
+            unit_id,
+            0,
+        )];
+        let selectors = [selector_definition(1, &units, &members)];
+        let candidates = [
+            RouteCandidate::ready(stage(1), target_with_binding(1, 1, 1, 1, 1), 0),
+            RouteCandidate::ready(stage(2), target_with_binding(2, 1, 2, 1, 1), 0),
+        ];
+        let deployments = [
+            deployment_definition(1, 1, 1),
+            deployment_definition(2, 1, 1),
+        ];
+        let accounts = [account_definition(1, 1)];
+        let credentials = [credential_definition(1, 1)];
+        let compiled = CompiledRoutingSnapshot::compile(
+            version(1),
+            &candidates,
+            RoutingStrategy::Priority,
+            2,
+            &deployments,
+            AccountCredentialDefinitions::new(&accounts, &credentials),
+            &selectors,
+        )
+        .expect("共享 Selector 的双 Target 快照有效");
+        let runtime_groups = [runtime_definition(1, 3)];
+        let runtime_accounts = [account_runtime_definition(1, 4)];
+        let runtime_credentials = [credential_runtime_definition(1, 5)];
+        let definitions = SelectionRuntimeDefinitions::new(
+            &runtime_groups,
+            &runtime_accounts,
+            &runtime_credentials,
+        )
+        .expect("共享资源定义有效");
+        let layout = compiled
+            .selection_runtime_layout(&definitions)
+            .expect("共享 Selector 布局有效");
+        let route_eligibility = eligibility(compiled.routing());
+        let route_plan = RoutePlanner::plan(
+            &routed(compiled.routing().version()),
+            compiled.routing(),
+            &route_eligibility,
+            0,
+        )
+        .expect("双 Target 可规划");
+        let first = compiled
+            .resolve_plan_target(&route_plan, 0)
+            .expect("计划绑定当前快照")
+            .expect("首个解析目标存在");
+        let second = compiled
+            .resolve_plan_target(&route_plan, 1)
+            .expect("计划绑定当前快照")
+            .expect("第二个解析目标存在");
+        let binding = layout
+            .binding_for(first, unit_id, members[0])
+            .expect("第一个目标可以创建 binding");
+
+        assert!(binding.matches_provenance(first, unit_id, members[0]));
+        assert!(binding.matches_attempt_target(compiled.routing(), first.target().id()));
+        assert!(!binding.matches_provenance(second, unit_id, members[0]));
+        assert!(!binding.matches_attempt_target(compiled.routing(), second.target().id()));
     }
 
     #[test]

@@ -4,11 +4,11 @@
 //! 零分配的三资源 binding。它不选择账户、不发放 Lease、不维护在途数、健康、游标或
 //! 任何其他运行时状态。
 
-use core::{marker::PhantomData, num::NonZeroU16, slice::Iter};
+use core::{num::NonZeroU16, slice::Iter};
 
 use super::{
     AccountId, AccountSelectorMember, CredentialId, QuotaGroupId, QuotaSelectionUnitId,
-    ResolvedRouteTarget, RoutingSnapshot, MAX_ACCOUNTS, MAX_CREDENTIALS,
+    ResolvedRouteTarget, RouteTargetId, RoutingSnapshot, MAX_ACCOUNTS, MAX_CREDENTIALS,
 };
 
 /// 单个编译快照允许追踪的最多全局额度组数量。
@@ -375,7 +375,9 @@ impl<'snapshot, 'config> SelectionRuntimeLayout<'snapshot, 'config> {
         }
 
         Ok(SelectionRuntimeBinding {
-            snapshot: PhantomData,
+            routing: self.routing,
+            target_id: resolved.target().id(),
+            member,
             account,
             credential,
             quota_groups: target_unit.quota_groups(),
@@ -387,10 +389,13 @@ impl<'snapshot, 'config> SelectionRuntimeLayout<'snapshot, 'config> {
 /// 一个同代目标、额度单元与成员的只读三资源静态 binding。
 ///
 /// 该值只能由 [`SelectionRuntimeLayout::binding_for`] 创建；它不选择账户、不会发放 Lease，
-/// 也不包含凭据内容或任何可写运行时状态。
+/// 也不包含凭据内容或任何可写运行时状态。它私有地保留快照实例、Target 与成员来源，
+/// 让后续受控执行层不能把一个 Target 的 binding 混配给同一快照中的另一个 Target。
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct SelectionRuntimeBinding<'snapshot, 'config> {
-    snapshot: PhantomData<&'snapshot RoutingSnapshot<'config>>,
+    routing: &'snapshot RoutingSnapshot<'config>,
+    target_id: RouteTargetId,
+    member: AccountSelectorMember,
     account: AccountRuntimeDefinition,
     credential: CredentialRuntimeDefinition,
     quota_groups: &'config [QuotaGroupId],
@@ -399,6 +404,35 @@ pub(crate) struct SelectionRuntimeBinding<'snapshot, 'config> {
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl<'snapshot, 'config> SelectionRuntimeBinding<'snapshot, 'config> {
+    /// 判断同代解析目标、额度单元与成员是否与此 binding 的创建来源完全一致。
+    ///
+    /// 即使快照实例相同，另一个 Target 也不能复用本 binding；`RouteTargetId` 在一个
+    /// `RoutingSnapshot` 内唯一。成员的完整值包含其 Unit，因此调用方也不能替换成员或
+    /// 将同一成员混配到另一个 Unit。
+    pub(crate) fn matches_provenance(
+        &self,
+        resolved: ResolvedRouteTarget<'snapshot, 'config>,
+        unit: QuotaSelectionUnitId,
+        member: AccountSelectorMember,
+    ) -> bool {
+        resolved.matches_snapshot(self.routing)
+            && resolved.target().id() == self.target_id
+            && member == self.member
+            && unit == self.member.unit()
+    }
+
+    /// 判断同代尝试目标是否与此 binding 的 Target 来源一致。
+    ///
+    /// 该入口只验证执行许可持有的快照实例与 Target 标识；需要同时验证 Unit 和成员时，
+    /// 调用方必须改用 [`Self::matches_provenance`]。
+    pub(crate) fn matches_attempt_target(
+        &self,
+        snapshot: &'snapshot RoutingSnapshot<'config>,
+        target_id: RouteTargetId,
+    ) -> bool {
+        core::ptr::eq(self.routing, snapshot) && self.target_id == target_id
+    }
+
     /// 返回绑定 Account 的稳定标识。
     pub(crate) const fn account_id(&self) -> AccountId {
         self.account.id()
