@@ -1,5 +1,10 @@
 # bianma-app 单仓开源主线说明
 
+## 当前完成
+
+- ✅ 已完成（2026-08-13）：重做 RT-002 轻量控制面。默认路径固定为“概览 → 上游 → 路由 → 用量”，首次上游仅要求 API 地址、API Key 与默认模型；普通路由页只提供统一启动、统一恢复与只读接入状态，客户端专属映射和旧 Provider Workspace 下沉为高级兼容入口。本切片只复用现有 Tauri API，不修改旧 Forwarder，不新增后台轮询。
+- ⚠️ 能力边界：当前 `UniversalProvider` 仍是向 Claude、Codex、Gemini 客户端配置同步的兼容层；多账户/多 API Key 池、JWT 屏蔽、模型级故障链与统一 Header/User-Agent 策略继续由 routing-core v2 实现。
+
 ## 当前定位
 
 - `bianma-app` 当前是 `Bianma` 唯一正式 App 主仓。

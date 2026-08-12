@@ -19,6 +19,7 @@ interface UniversalProviderCardProps {
   onSelectChange?: (id: string, selected: boolean) => void;
   syncStatus?: UniversalProviderSyncStatus;
   selectionDisabled?: boolean;
+  simpleMode?: boolean;
 }
 
 export function UniversalProviderCard({
@@ -30,6 +31,7 @@ export function UniversalProviderCard({
   onSelectChange,
   syncStatus,
   selectionDisabled = false,
+  simpleMode = false,
 }: UniversalProviderCardProps) {
   const { t } = useTranslation();
 
@@ -39,9 +41,15 @@ export function UniversalProviderCard({
     provider.apps.codex ? "Codex" : null,
     provider.apps.gemini ? "Gemini" : null,
   ].filter((app): app is string => app !== null);
+  const configuredModels = [
+    provider.models.claude?.model,
+    provider.models.codex?.model,
+    provider.models.gemini?.model,
+  ].filter((model): model is string => Boolean(model));
+  const uniqueModels = Array.from(new Set(configuredModels));
 
   return (
-    <div className="group relative rounded-xl border border-border/50 bg-card p-4 transition-all hover:border-border hover:shadow-md">
+    <div className="group relative py-4 pr-8">
       {onSelectChange ? (
         <div className="absolute right-3 top-3 z-10">
           <input
@@ -66,24 +74,30 @@ export function UniversalProviderCard({
           </div>
           <div>
             <h3 className="font-semibold text-foreground">{provider.name}</h3>
-            <p className="text-xs text-muted-foreground">
-              {provider.providerType}
-            </p>
+            {!simpleMode ? (
+              <p className="text-xs text-muted-foreground">
+                {provider.providerType}
+              </p>
+            ) : null}
           </div>
         </div>
 
         {/* 操作按钮 */}
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => onSync(provider.id)}
-            data-testid={`sync-provider-${provider.id}`}
-            title={t("universalProvider.sync", { defaultValue: "同步到应用" })}
-          >
-            <RefreshCw className="h-4 w-4" />
-          </Button>
+        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          {!simpleMode ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => onSync(provider.id)}
+              data-testid={`sync-provider-${provider.id}`}
+              title={t("universalProvider.sync", {
+                defaultValue: "同步到应用",
+              })}
+            >
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             size="icon"
@@ -107,7 +121,7 @@ export function UniversalProviderCard({
       </div>
 
       {/* 配置信息 */}
-      <div className="mt-4 space-y-2">
+      <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
         {/* Base URL */}
         <div className="flex items-center gap-2 text-sm">
           <Globe className="h-3.5 w-3.5 text-muted-foreground" />
@@ -116,63 +130,72 @@ export function UniversalProviderCard({
           </span>
         </div>
 
-        <div
-          className="rounded-md border border-border/60 bg-muted/20 px-2.5 py-2"
-          data-testid={`sync-status-${provider.id}`}
-        >
-          {syncStatus ? (
-            <>
-              <p
-                className={`text-xs font-medium ${
-                  syncStatus.status === "success"
-                    ? "text-emerald-500"
-                    : "text-destructive"
-                }`}
-              >
-                {syncStatus.status === "success"
-                  ? t("universalProvider.syncStatusSuccess", {
-                      defaultValue: "最近同步成功",
-                    })
-                  : t("universalProvider.syncStatusError", {
-                      defaultValue: "最近同步失败",
-                    })}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {new Date(syncStatus.lastSyncedAt).toLocaleString()}
-              </p>
-              {syncStatus.status === "error" && syncStatus.errorMessage ? (
-                <p className="mt-1 line-clamp-2 text-xs text-destructive/90">
-                  {syncStatus.errorMessage}
+        {!simpleMode ? (
+          <div className="px-0 py-1" data-testid={`sync-status-${provider.id}`}>
+            {syncStatus ? (
+              <>
+                <p
+                  className={`text-xs font-medium ${
+                    syncStatus.status === "success"
+                      ? "text-emerald-500"
+                      : "text-destructive"
+                  }`}
+                >
+                  {syncStatus.status === "success"
+                    ? t("universalProvider.syncStatusSuccess", {
+                        defaultValue: "最近同步成功",
+                      })
+                    : t("universalProvider.syncStatusError", {
+                        defaultValue: "最近同步失败",
+                      })}
                 </p>
-              ) : null}
-            </>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              {t("universalProvider.syncStatusEmpty", {
-                defaultValue: "暂无同步记录",
-              })}
-            </p>
-          )}
-        </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {new Date(syncStatus.lastSyncedAt).toLocaleString()}
+                </p>
+                {syncStatus.status === "error" && syncStatus.errorMessage ? (
+                  <p className="mt-1 line-clamp-2 text-xs text-destructive/90">
+                    {syncStatus.errorMessage}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {t("universalProvider.syncStatusEmpty", {
+                  defaultValue: "暂无同步记录",
+                })}
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            {uniqueModels.length === 1
+              ? `默认模型：${uniqueModels[0]}`
+              : uniqueModels.length > 1
+                ? "已使用高级模型映射"
+                : "未设置默认模型"}
+          </p>
+        )}
 
         {/* 启用的应用 */}
-        <div className="flex flex-wrap gap-1.5">
-          {enabledApps.map((app) => (
-            <span
-              key={app}
-              className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-            >
-              {app}
-            </span>
-          ))}
-          {enabledApps.length === 0 && (
-            <span className="text-xs text-muted-foreground">
-              {t("universalProvider.noAppsEnabled", {
-                defaultValue: "未启用任何应用",
-              })}
-            </span>
-          )}
-        </div>
+        {!simpleMode ? (
+          <div className="flex flex-wrap gap-1.5 md:col-span-2">
+            {enabledApps.map((app) => (
+              <span
+                key={app}
+                className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+              >
+                {app}
+              </span>
+            ))}
+            {enabledApps.length === 0 && (
+              <span className="text-xs text-muted-foreground">
+                {t("universalProvider.noAppsEnabled", {
+                  defaultValue: "未启用任何应用",
+                })}
+              </span>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {/* 备注 */}

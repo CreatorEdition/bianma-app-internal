@@ -10,7 +10,6 @@ import {
   Wrench,
   RefreshCw,
   History,
-  BarChart2,
   Download,
   FolderArchive,
   Search,
@@ -21,6 +20,8 @@ import {
   Home,
   Boxes,
   Route,
+  Gauge,
+  PanelLeft,
 } from "lucide-react";
 import type { Provider, VisibleApps } from "@/types";
 import type { EnvConflict } from "@/types/env";
@@ -56,7 +57,8 @@ import {
 } from "@/lib/storageKeys";
 import { AppSwitcher } from "@/components/AppSwitcher";
 import { ProviderWorkspacePanel } from "@/components/providers/ProviderWorkspacePanel";
-import { HomeDashboard } from "@/components/home/HomeDashboard";
+import { RouteCenterDashboard } from "@/components/control-plane/RouteCenterDashboard";
+import { RouteCenterPanel } from "@/components/control-plane/RouteCenterPanel";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -86,7 +88,8 @@ import { UsageDashboard } from "@/components/usage/UsageDashboard";
 type View = AppKeyboardShortcutView;
 
 const DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28; // px
-const HEADER_HEIGHT = 64; // px
+const HEADER_HEIGHT = 44; // px
+const SIDEBAR_WIDTH = 188; // px
 const CONTENT_TOP_OFFSET = DRAG_BAR_HEIGHT + HEADER_HEIGHT;
 
 const VALID_APPS: AppId[] = [
@@ -128,6 +131,13 @@ const VALID_VIEWS: View[] = [
 ];
 
 const getInitialView = (): View => {
+  if (import.meta.env.DEV) {
+    const previewView = new URLSearchParams(window.location.search).get("view");
+    if (previewView && VALID_VIEWS.includes(previewView as View)) {
+      return previewView as View;
+    }
+  }
+
   const saved = readCompatibleStorage(LAST_VIEW_STORAGE_KEY, [
     ...LAST_VIEW_LEGACY_STORAGE_KEYS,
   ]) as View | null;
@@ -153,7 +163,6 @@ function App() {
     effectiveUsageProvider,
     openGeneralSettings,
     openProxySettings,
-    openUsageSettings,
     openAboutSettings,
     openAddDialog,
     handleAddDialogOpenChange,
@@ -213,6 +222,9 @@ function App() {
     status: proxyStatus,
   } = useProxyStatus();
   const isCurrentAppTakeoverActive = takeoverStatus?.[activeApp] || false;
+  const takeoverCount = takeoverStatus
+    ? Object.values(takeoverStatus).filter(Boolean).length
+    : 0;
   const activeProviderId = useMemo(() => {
     const target = proxyStatus?.active_targets?.find(
       (t) => t.app_type === activeApp,
@@ -220,11 +232,14 @@ function App() {
     return target?.provider_id;
   }, [proxyStatus?.active_targets, activeApp]);
 
+  const isServicesView = currentView === "providers";
   const { data, isLoading, refetch } = useProvidersQuery(activeApp, {
-    isProxyRunning,
+    enabled: isServicesView,
+    isProxyRunning: isProxyRunning && isServicesView,
   });
   useAppEventSubscriptions({
     activeApp,
+    watchActiveProvider: isServicesView,
     refetchProviders: refetch,
     queryClient,
     t,
@@ -237,11 +252,6 @@ function App() {
   });
   const providers = useMemo(() => data?.providers ?? {}, [data]);
   const currentProviderId = data?.currentProviderId ?? "";
-  const currentProviderName =
-    providers[currentProviderId]?.name ??
-    (activeProviderId ? providers[activeProviderId]?.name : undefined);
-  const isServicesView =
-    currentView === "services" || currentView === "providers";
   const isPrimaryView =
     currentView === "home" ||
     currentView === "services" ||
@@ -317,24 +327,27 @@ function App() {
       switch (currentView) {
         case "home":
           return (
-            <HomeDashboard
-              activeAppLabel={t(`apps.${activeApp}`)}
-              providerCount={Object.keys(providers).length}
-              currentProviderName={currentProviderName}
-              isProxyReady={isProxyRunning && isCurrentAppTakeoverActive}
-              onOpenServices={() => setCurrentView("services")}
-              onOpenStrategy={() => setCurrentView("strategy")}
-              onOpenStats={openUsageSettings}
+            <RouteCenterDashboard
+              status={proxyStatus}
+              isProxyRunning={isProxyRunning}
+              takeoverCount={takeoverCount}
+              onOpenUpstreams={() => setCurrentView("services")}
+              onOpenRoutes={() => setCurrentView("strategy")}
             />
+          );
+        case "services":
+          return (
+            <div className="mx-auto w-full max-w-6xl px-8 py-8">
+              <UniversalProviderPanel
+                simpleMode
+                onOpenAdvanced={() => setCurrentView("providers")}
+              />
+            </div>
           );
         case "strategy":
           return (
-            <SettingsPage
-              open={true}
-              onOpenChange={() => setCurrentView("home")}
-              onImportSuccess={handleImportSuccess}
-              defaultTab="proxy"
-              strategyOnly
+            <RouteCenterPanel
+              onOpenAdvanced={() => setCurrentView("providers")}
             />
           );
         case "stats":
@@ -404,7 +417,6 @@ function App() {
           return <ToolsPanel />;
         case "openclawAgents":
           return <AgentsDefaultsPanel />;
-        case "services":
         case "providers":
           return (
             <div className="px-6 flex flex-col flex-1 min-h-0 overflow-hidden">
@@ -464,25 +476,12 @@ function App() {
       }
     })();
 
-    return (
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={currentView}
-          className="flex-1 min-h-0"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-        >
-          {content}
-        </motion.div>
-      </AnimatePresence>
-    );
+    return <div className="flex-1 min-h-0">{content}</div>;
   };
 
   return (
     <div
-      className="flex flex-col h-screen overflow-hidden bg-background text-foreground selection:bg-primary/30"
+      className="flex h-screen overflow-hidden bg-background text-foreground selection:bg-primary/30"
       style={{ overflowX: "hidden", paddingTop: CONTENT_TOP_OFFSET }}
     >
       <div
@@ -515,17 +514,18 @@ function App() {
           style={{ WebkitAppRegion: "drag" } as any}
         >
           <div
-            className="flex items-center gap-1"
+            className="flex items-center gap-2"
             style={{ WebkitAppRegion: "no-drag" } as any}
           >
             {isPrimaryView ? (
               <div className="flex items-center gap-2">
+                <PanelLeft className="h-4 w-4 text-muted-foreground" />
                 <a
                   href={BIANMA_GITHUB_REPOSITORY_URL}
                   target="_blank"
                   rel="noreferrer"
                   className={cn(
-                    "text-xl font-semibold transition-colors",
+                    "text-sm font-semibold transition-colors",
                     isProxyRunning && isCurrentAppTakeoverActive
                       ? "text-emerald-500 hover:text-emerald-600 dark:text-emerald-400 dark:hover:text-emerald-300"
                       : "text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300",
@@ -533,42 +533,6 @@ function App() {
                 >
                   {BIANMA_DISPLAY_NAME}
                 </a>
-                <nav
-                  aria-label={t("navigation.label")}
-                  className="flex items-center gap-1 rounded-xl bg-muted/70 p-1"
-                >
-                  {[
-                    { view: "home", label: "navigation.home", icon: Home },
-                    {
-                      view: "services",
-                      label: "navigation.services",
-                      icon: Boxes,
-                    },
-                    {
-                      view: "strategy",
-                      label: "navigation.strategy",
-                      icon: Route,
-                    },
-                    {
-                      view: "stats",
-                      label: "navigation.stats",
-                      icon: BarChart2,
-                    },
-                  ].map(({ view, label, icon: Icon }) => (
-                    <Button
-                      key={view}
-                      variant={currentView === view ? "secondary" : "ghost"}
-                      size="sm"
-                      onClick={() => setCurrentView(view as View)}
-                      aria-current={currentView === view ? "page" : undefined}
-                      data-testid={`primary-nav-${view}`}
-                      className="gap-1.5 px-2.5"
-                    >
-                      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                      {t(label)}
-                    </Button>
-                  ))}
-                </nav>
               </div>
             ) : (
               <div className="flex items-center gap-2">
@@ -618,15 +582,6 @@ function App() {
                 className="flex shrink-0 items-center gap-1"
                 style={{ WebkitAppRegion: "no-drag" } as any}
               >
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={openGeneralSettings}
-                  title={t("common.settings")}
-                  className="hover:bg-black/5 dark:hover:bg-white/5"
-                >
-                  <Settings className="w-4 h-4" />
-                </Button>
                 <UpdateBadge onClick={openAboutSettings} />
               </div>
             )}
@@ -894,8 +849,83 @@ function App() {
         </div>
       </header>
 
+      {isPrimaryView && (
+        <aside
+          className="fixed bottom-0 left-0 z-40 border-r border-border bg-muted/20"
+          style={{ top: CONTENT_TOP_OFFSET, width: SIDEBAR_WIDTH }}
+        >
+          <nav
+            aria-label={t("navigation.label")}
+            className="flex h-full flex-col p-3"
+          >
+            <div className="space-y-1">
+              {[
+                {
+                  view: "home",
+                  label: "概览",
+                  detail: "状态与一键启动",
+                  icon: Home,
+                },
+                {
+                  view: "services",
+                  label: "上游",
+                  detail: "渠道与模型",
+                  icon: Boxes,
+                },
+                {
+                  view: "strategy",
+                  label: "路由",
+                  detail: "统一入口与接入状态",
+                  icon: Route,
+                },
+                {
+                  view: "stats",
+                  label: "用量",
+                  detail: "请求、成本与记录",
+                  icon: Gauge,
+                },
+              ].map(({ view, label, detail, icon: Icon }) => (
+                <button
+                  key={view}
+                  type="button"
+                  onClick={() => setCurrentView(view as View)}
+                  aria-current={currentView === view ? "page" : undefined}
+                  data-testid={`primary-nav-${view}`}
+                  className={cn(
+                    "flex w-full items-start gap-3 rounded-md px-3 py-2 text-left transition-colors",
+                    currentView === view
+                      ? "bg-accent text-foreground"
+                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  )}
+                >
+                  <Icon
+                    className="mt-0.5 h-4 w-4 shrink-0"
+                    aria-hidden="true"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium">{label}</span>
+                    <span className="block text-[11px] leading-4 opacity-75">
+                      {detail}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={openGeneralSettings}
+              className="mt-auto flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+            >
+              <Settings className="h-4 w-4" />
+              设置
+            </button>
+          </nav>
+        </aside>
+      )}
+
       <main
-        className="flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in"
+        className="flex-1 min-h-0 flex flex-col overflow-y-auto"
+        style={{ marginLeft: isPrimaryView ? SIDEBAR_WIDTH : 0 }}
         tabIndex={-1}
       >
         {isOpenClawView && openclawHealthWarnings.length > 0 && (

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Layers, Plus } from "lucide-react";
+import { Layers, Plus, ServerCog, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -21,10 +21,14 @@ const getErrorMessage = (error: unknown): string => {
 
 interface UniversalProviderPanelProps {
   showAddButton?: boolean;
+  onOpenAdvanced?: () => void;
+  simpleMode?: boolean;
 }
 
 export function UniversalProviderPanel({
   showAddButton = true,
+  onOpenAdvanced,
+  simpleMode = false,
 }: UniversalProviderPanelProps = {}) {
   const { t } = useTranslation();
 
@@ -344,44 +348,53 @@ export function UniversalProviderPanel({
   const providerList = Object.values(providers);
 
   return (
-    <div className="space-y-4" data-testid="universal-provider-panel">
-      {/* 头部 */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Layers className="h-5 w-5 text-primary" />
-          <h2 className="text-lg font-semibold">
-            {t("universalProvider.title", { defaultValue: "统一供应商" })}
-          </h2>
-          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-            {providerList.length}
-          </span>
+    <div className="space-y-5" data-testid="universal-provider-panel">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+            Upstreams
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <ServerCog className="h-5 w-5 text-primary" />
+            <h1 className="text-2xl font-semibold">上游渠道</h1>
+            <span className="text-sm text-muted-foreground">
+              {providerList.length}
+            </span>
+          </div>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+            默认只配置一次 API 地址、Key
+            和模型。当前支持的已接入客户端继承同一套路由。
+          </p>
         </div>
-        {showAddButton ? (
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditingProvider(null);
-              setIsFormOpen(true);
-            }}
-            className="rounded-lg bg-orange-500 text-white hover:bg-orange-600 dark:bg-orange-500 dark:hover:bg-orange-600"
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            {t("universalProvider.addButton", {
-              defaultValue: "添加统一供应商",
-            })}
-          </Button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {onOpenAdvanced ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onOpenAdvanced}
+              className="gap-2"
+            >
+              <Settings2 className="h-4 w-4" />
+              高级配置
+            </Button>
+          ) : null}
+          {showAddButton ? (
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingProvider(null);
+                setIsFormOpen(true);
+              }}
+              className="gap-2 rounded-md"
+            >
+              <Plus className="h-4 w-4" />
+              添加上游
+            </Button>
+          ) : null}
+        </div>
       </div>
 
-      {/* 描述 */}
-      <p className="text-sm text-muted-foreground">
-        {t("universalProvider.description", {
-          defaultValue:
-            "统一供应商可以同时管理 Claude、Codex 和 Gemini 的配置。修改后会自动同步到所有启用的应用。",
-        })}
-      </p>
-
-      {providerList.length > 0 ? (
+      {!simpleMode && providerList.length > 0 ? (
         <div
           className="rounded-xl border border-border/60 bg-muted/20 p-3"
           data-testid="batch-actions-bar"
@@ -435,21 +448,15 @@ export function UniversalProviderPanel({
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         </div>
       ) : providerList.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-12 text-center">
-          <Layers className="mb-3 h-10 w-10 text-muted-foreground/50" />
-          <p className="text-sm text-muted-foreground">
-            {t("universalProvider.empty", {
-              defaultValue: "还没有统一供应商",
-            })}
-          </p>
+        <div className="border-y border-border py-12 text-left">
+          <Layers className="mb-3 h-8 w-8 text-muted-foreground/50" />
+          <p className="text-sm text-muted-foreground">还没有上游渠道</p>
           <p className="mt-1 text-xs text-muted-foreground/70">
-            {t("universalProvider.emptyHint", {
-              defaultValue: "点击下方「添加统一供应商」按钮创建一个",
-            })}
+            填写一个 API 地址、Key 和默认模型，再到路由页一键接入。
           </p>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="divide-y divide-border border-y border-border">
           {providerList.map((provider) => (
             <UniversalProviderCard
               key={provider.id}
@@ -457,10 +464,15 @@ export function UniversalProviderPanel({
               onEdit={handleEdit}
               onDelete={handleDeleteClick}
               onSync={handleSyncClick}
-              selected={selectedProviderIds.has(provider.id)}
-              onSelectChange={handleProviderSelectionChange}
-              syncStatus={syncStatusById[provider.id]}
+              selected={
+                simpleMode ? undefined : selectedProviderIds.has(provider.id)
+              }
+              onSelectChange={
+                simpleMode ? undefined : handleProviderSelectionChange
+              }
+              syncStatus={simpleMode ? undefined : syncStatusById[provider.id]}
               selectionDisabled={isBatchSyncing}
+              simpleMode={simpleMode}
             />
           ))}
         </div>
