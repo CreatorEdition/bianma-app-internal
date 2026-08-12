@@ -1946,7 +1946,7 @@
         "saveFailed": "保存失败: {{error}}"
       },
       "invalidPort": "端口无效，请输入 1024-65535 之间的数字",
-      "invalidAddress": "地址无效，请输入有效的 IP 地址（如 127.0.0.1）或 localhost",
+      "invalidAddress": "代理仅允许本机回环地址：127.0.0.1、localhost 或 ::1",
       "configSaved": "代理配置已保存",
       "configSaveFailed": "保存配置失败",
       "restartRequired": "修改地址或端口后需要重启代理服务才能生效"

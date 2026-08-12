@@ -2,7 +2,7 @@
 //!
 //! Uses raw TCP/TLS writes to preserve exact original header name casing.
 //! Supports HTTP CONNECT tunneling through upstream proxies.
-//! Falls back to hyper-util Client (title-case headers) when raw write is not feasible.
+//! Uses hyper-util Client (title-case headers) only when the raw path is not selected.
 
 use super::ProxyError;
 use bytes::Bytes;
@@ -115,12 +115,12 @@ impl ProxyResponse {
         match self {
             Self::Hyper(r) => {
                 let collected = r.into_body().collect().await.map_err(|e| {
-                    ProxyError::ForwardFailed(format!("Failed to read response body: {e}"))
+                    ProxyError::DeliveryUnknown(format!("Failed to read response body: {e}"))
                 })?;
                 Ok(collected.to_bytes())
             }
             Self::Reqwest(r) => r.bytes().await.map_err(|e| {
-                ProxyError::ForwardFailed(format!("Failed to read response body: {e}"))
+                ProxyError::DeliveryUnknown(format!("Failed to read response body: {e}"))
             }),
         }
     }
@@ -167,12 +167,12 @@ impl ProxyResponse {
 
 /// Send an HTTP request with header-case preservation.
 ///
-/// Uses a two-tier strategy:
+/// Uses a single-send strategy:
 /// 1. Primary: raw HTTP/1.1 write via TLS stream with exact original header casing
 ///    (from `OriginalHeaderCases` captured by peek in server.rs), then hand off to
 ///    hyper for response parsing.
-/// 2. Fallback: hyper-util Client with `title_case_headers(true)` when raw write
-///    isn't feasible (e.g., missing original cases).
+/// 2. Alternative: hyper-util Client with `title_case_headers(true)` only when
+///    original header cases are unavailable before any upstream write begins.
 ///
 /// The caller is expected to include `Host` in the supplied `headers` at the
 /// correct position.
@@ -218,19 +218,11 @@ pub async fn send_request(
             ),
         )
         .await
-        .map_err(|_| ProxyError::Timeout(format!("请求超时: {}s", timeout.as_secs())))?;
+        .map_err(|_| {
+            ProxyError::DeliveryUnknown(format!("raw 请求超时: {}s", timeout.as_secs()))
+        })?;
 
-        match result {
-            Ok(resp) => return Ok(resp),
-            Err(e) => {
-                if proxy_url.is_some() {
-                    // Don't bypass configured proxy with direct connect fallback
-                    return Err(e);
-                }
-                log::warn!("[HyperClient] Raw write failed, falling back to hyper-util: {e}");
-                // Fall through to hyper-util Client
-            }
-        }
+        return result;
     }
 
     // Fallback: hyper-util Client (title-case headers, no proxy support)
@@ -246,8 +238,8 @@ pub async fn send_request(
     let client = global_hyper_client();
     let resp = tokio::time::timeout(timeout, client.request(req))
         .await
-        .map_err(|_| ProxyError::Timeout(format!("请求超时: {}s", timeout.as_secs())))?
-        .map_err(|e| ProxyError::ForwardFailed(format!("上游请求失败: {e}")))?;
+        .map_err(|_| ProxyError::DeliveryUnknown(format!("上游请求超时: {}s", timeout.as_secs())))?
+        .map_err(|e| ProxyError::DeliveryUnknown(format!("上游请求失败: {e}")))?;
 
     Ok(ProxyResponse::Hyper(resp))
 }
@@ -358,11 +350,11 @@ async fn send_raw_request(
         tls_stream
             .write_all(&raw)
             .await
-            .map_err(|e| ProxyError::ForwardFailed(format!("Write failed: {e}")))?;
+            .map_err(|e| ProxyError::DeliveryUnknown(format!("Write failed: {e}")))?;
         tls_stream
             .flush()
             .await
-            .map_err(|e| ProxyError::ForwardFailed(format!("Flush failed: {e}")))?;
+            .map_err(|e| ProxyError::DeliveryUnknown(format!("Flush failed: {e}")))?;
 
         let filtered = WriteFilter::new(tls_stream);
         do_hyper_response(filtered, method.clone()).await
@@ -371,11 +363,11 @@ async fn send_raw_request(
         stream
             .write_all(&raw)
             .await
-            .map_err(|e| ProxyError::ForwardFailed(format!("Write failed: {e}")))?;
+            .map_err(|e| ProxyError::DeliveryUnknown(format!("Write failed: {e}")))?;
         stream
             .flush()
             .await
-            .map_err(|e| ProxyError::ForwardFailed(format!("Flush failed: {e}")))?;
+            .map_err(|e| ProxyError::DeliveryUnknown(format!("Flush failed: {e}")))?;
 
         let filtered = WriteFilter::new(stream);
         do_hyper_response(filtered, method.clone()).await
@@ -619,7 +611,7 @@ where
         .preserve_header_case(true)
         .handshake::<_, http_body_util::Full<Bytes>>(io)
         .await
-        .map_err(|e| ProxyError::ForwardFailed(format!("Handshake failed: {e}")))?;
+        .map_err(|e| ProxyError::DeliveryUnknown(format!("Handshake failed: {e}")))?;
 
     // Spawn the connection driver (reads responses from the stream)
     tokio::spawn(async move {
@@ -634,12 +626,12 @@ where
         .method(method)
         .uri("/")
         .body(http_body_util::Full::new(Bytes::new()))
-        .map_err(|e| ProxyError::ForwardFailed(format!("Build dummy request: {e}")))?;
+        .map_err(|e| ProxyError::DeliveryUnknown(format!("Build dummy request: {e}")))?;
 
     let resp = sender
         .send_request(dummy_req)
         .await
-        .map_err(|e| ProxyError::ForwardFailed(format!("Response parse failed: {e}")))?;
+        .map_err(|e| ProxyError::DeliveryUnknown(format!("Response parse failed: {e}")))?;
 
     Ok(ProxyResponse::Hyper(resp))
 }

@@ -53,8 +53,15 @@ impl Database {
     /// 更新全局代理配置（镜像写三行）
     pub async fn update_global_proxy_config(
         &self,
-        config: GlobalProxyConfig,
+        mut config: GlobalProxyConfig,
     ) -> Result<(), AppError> {
+        let Some(listen_address) = normalized_loopback_listen_address(&config.listen_address)
+        else {
+            return Err(AppError::InvalidInput(
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+            ));
+        };
+        config.listen_address = listen_address.to_string();
         let conn = lock_conn!(self.conn);
 
         conn.execute(
@@ -419,7 +426,14 @@ impl Database {
     }
 
     /// 更新代理配置（兼容旧接口，更新所有三行的公共字段）
-    pub async fn update_proxy_config(&self, config: ProxyConfig) -> Result<(), AppError> {
+    pub async fn update_proxy_config(&self, mut config: ProxyConfig) -> Result<(), AppError> {
+        let Some(listen_address) = normalized_loopback_listen_address(&config.listen_address)
+        else {
+            return Err(AppError::InvalidInput(
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+            ));
+        };
+        config.listen_address = listen_address.to_string();
         let conn = lock_conn!(self.conn);
 
         // 更新所有三行的公共字段
@@ -852,6 +866,46 @@ impl Database {
 mod tests {
     use crate::database::Database;
     use crate::error::AppError;
+    use crate::proxy::types::{GlobalProxyConfig, ProxyConfig};
+
+    #[tokio::test]
+    async fn proxy_config_rejects_non_loopback_addresses() -> Result<(), AppError> {
+        let db = Database::memory()?;
+
+        let global_error = db
+            .update_global_proxy_config(GlobalProxyConfig {
+                proxy_enabled: false,
+                listen_address: "0.0.0.0".to_string(),
+                listen_port: 15721,
+                enable_logging: true,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(global_error, AppError::InvalidInput(_)));
+
+        let legacy_error = db
+            .update_proxy_config(ProxyConfig {
+                listen_address: "192.168.1.10".to_string(),
+                ..ProxyConfig::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(legacy_error, AppError::InvalidInput(_)));
+
+        db.update_global_proxy_config(GlobalProxyConfig {
+            proxy_enabled: false,
+            listen_address: "localhost".to_string(),
+            listen_port: 15721,
+            enable_logging: true,
+        })
+        .await?;
+        assert_eq!(
+            db.get_global_proxy_config().await?.listen_address,
+            "127.0.0.1"
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_default_cost_multiplier_round_trip() -> Result<(), AppError> {

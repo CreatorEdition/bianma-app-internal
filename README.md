@@ -30,6 +30,8 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 
 仅保留[迁移兼容说明](docs/user-manual/zh/5-faq/5.5-migration-compatibility.md)作为历史兼容文档，用于帮助还在使用旧方案的团队过渡；其他场景均以 bianma-app 为主，新的体验与 URI 规范已经完全统一。
 
+本地代理只允许绑定 `127.0.0.1`、`localhost` 或 `::1`；模型路由会拒绝带 `Origin` 的浏览器请求。该边界用于避免设备保存的上游凭据被局域网设备或网页借用。
+
 ## 测试与质量
 
 声明参与贡献前先在本地运行以下命令确认状态：
