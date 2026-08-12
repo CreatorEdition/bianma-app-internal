@@ -123,9 +123,18 @@ export function UniversalProviderPanel({
   const syncProviderById = useCallback(
     async (id: string): Promise<boolean> => {
       try {
-        await universalProvidersApi.sync(id);
-        updateSyncStatus(id, "success");
-        return true;
+        const result = await universalProvidersApi.sync(id);
+        if (result.success) {
+          updateSyncStatus(id, "success");
+          return true;
+        }
+
+        const failedApps = result.apps
+          .filter((app) => !app.success)
+          .map((app) => `${app.app}: ${app.error || "同步失败"}`)
+          .join("；");
+        updateSyncStatus(id, "error", failedApps || "部分客户端同步失败");
+        return false;
       } catch (error) {
         console.error("Failed to sync universal provider:", error);
         updateSyncStatus(id, "error", getErrorMessage(error));
@@ -141,11 +150,14 @@ export function UniversalProviderPanel({
       try {
         await universalProvidersApi.upsert(provider);
 
-        // 新建模式下自动同步到各应用
-        if (!editingProvider) {
+        // 新建或简易模式编辑后自动同步，保持统一入口为事实来源。
+        if (!editingProvider || simpleMode) {
           const syncOk = await syncProviderById(provider.id);
           if (!syncOk) {
-            throw new Error("Sync failed");
+            await loadProviders();
+            setEditingProvider(null);
+            toast.error("上游已保存，但未完全同步，请在列表中重试");
+            return;
           }
         }
 
@@ -172,7 +184,14 @@ export function UniversalProviderPanel({
         );
       }
     },
-    [editingProvider, loadProviders, syncProviderById, t, updateSyncStatus],
+    [
+      editingProvider,
+      loadProviders,
+      simpleMode,
+      syncProviderById,
+      t,
+      updateSyncStatus,
+    ],
   );
 
   // 保存并同步供应商
@@ -244,6 +263,18 @@ export function UniversalProviderPanel({
 
     setSyncConfirm({ open: false, id: "", name: "" });
   }, [syncConfirm.id, syncProviderById, t]);
+
+  const handleSimpleRetry = useCallback(
+    async (id: string) => {
+      const syncOk = await syncProviderById(id);
+      if (syncOk) {
+        toast.success("同步已恢复");
+      } else {
+        toast.error("仍有客户端同步失败，请再次重试或进入高级配置检查");
+      }
+    },
+    [syncProviderById],
+  );
 
   const handleProviderSelectionChange = useCallback(
     (id: string, selected: boolean) => {
@@ -463,14 +494,14 @@ export function UniversalProviderPanel({
               provider={provider}
               onEdit={handleEdit}
               onDelete={handleDeleteClick}
-              onSync={handleSyncClick}
+              onSync={simpleMode ? handleSimpleRetry : handleSyncClick}
               selected={
                 simpleMode ? undefined : selectedProviderIds.has(provider.id)
               }
               onSelectChange={
                 simpleMode ? undefined : handleProviderSelectionChange
               }
-              syncStatus={simpleMode ? undefined : syncStatusById[provider.id]}
+              syncStatus={syncStatusById[provider.id]}
               selectionDisabled={isBatchSyncing}
               simpleMode={simpleMode}
             />
@@ -488,6 +519,7 @@ export function UniversalProviderPanel({
         onSave={handleSave}
         onSaveAndSync={handleSaveAndSync}
         editingProvider={editingProvider}
+        simpleMode={simpleMode}
       />
 
       {/* 删除确认对话框 */}

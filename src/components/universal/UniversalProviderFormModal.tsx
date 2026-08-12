@@ -23,6 +23,7 @@ interface UniversalProviderFormModalProps {
   onSaveAndSync?: (provider: UniversalProvider) => void;
   editingProvider?: UniversalProvider | null;
   initialPreset?: UniversalProviderPreset | null;
+  simpleMode?: boolean;
 }
 
 export function UniversalProviderFormModal({
@@ -32,6 +33,7 @@ export function UniversalProviderFormModal({
   onSaveAndSync,
   editingProvider,
   initialPreset,
+  simpleMode = false,
 }: UniversalProviderFormModalProps) {
   const { t } = useTranslation();
   const isEditMode = !!editingProvider;
@@ -391,7 +393,7 @@ requires_openai_auth = true`;
       <Button variant="outline" onClick={onClose}>
         {t("common.cancel", { defaultValue: "取消" })}
       </Button>
-      {isEditMode && onSaveAndSync ? (
+      {isEditMode && onSaveAndSync && !simpleMode ? (
         <Button
           onClick={handleSaveAndSyncClick}
           disabled={!baseUrl.trim() || !apiKey.trim()}
@@ -402,9 +404,15 @@ requires_openai_auth = true`;
       ) : (
         <Button
           onClick={handleSubmit}
-          disabled={!baseUrl.trim() || !apiKey.trim() || !defaultModel.trim()}
+          disabled={
+            !baseUrl.trim() ||
+            !apiKey.trim() ||
+            (!isEditMode && !defaultModel.trim())
+          }
         >
-          {t("common.add", { defaultValue: "添加" })}
+          {isEditMode
+            ? t("common.save", { defaultValue: "保存" })
+            : t("common.add", { defaultValue: "添加" })}
         </Button>
       )}
     </>

@@ -83,16 +83,22 @@ export function UniversalProviderCard({
         </div>
 
         {/* 操作按钮 */}
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          {!simpleMode ? (
+        <div
+          className={`flex items-center gap-1 transition-opacity ${
+            simpleMode && syncStatus?.status === "error"
+              ? "opacity-100"
+              : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+          }`}
+        >
+          {!simpleMode || syncStatus?.status === "error" ? (
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8"
               onClick={() => onSync(provider.id)}
               data-testid={`sync-provider-${provider.id}`}
-              title={t("universalProvider.sync", {
-                defaultValue: "同步到应用",
+              title={t("universalProvider.retrySync", {
+                defaultValue: simpleMode ? "重试同步" : "同步到应用",
               })}
             >
               <RefreshCw className="h-4 w-4" />
@@ -165,6 +171,17 @@ export function UniversalProviderCard({
                 })}
               </p>
             )}
+          </div>
+        ) : syncStatus?.status === "error" ? (
+          <div data-testid={`sync-status-${provider.id}`}>
+            <p className="text-xs font-medium text-destructive">
+              已保存，但未完全同步
+            </p>
+            {syncStatus.errorMessage ? (
+              <p className="mt-1 line-clamp-2 text-xs text-destructive/90">
+                {syncStatus.errorMessage}
+              </p>
+            ) : null}
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">

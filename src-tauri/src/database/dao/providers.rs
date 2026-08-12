@@ -309,6 +309,38 @@ impl Database {
         Ok(())
     }
 
+    /// 仅在当前供应商缺失时设置，避免首次配置覆盖用户已有选择。
+    pub fn set_current_provider_if_none(&self, app_type: &str, id: &str) -> Result<bool, AppError> {
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let current_exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM providers WHERE app_type = ?1 AND is_current = 1
+                )",
+                params![app_type],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        if current_exists {
+            tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
+            return Ok(false);
+        }
+
+        let changed = tx
+            .execute(
+                "UPDATE providers SET is_current = 1 WHERE id = ?1 AND app_type = ?2",
+                params![id, app_type],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(changed > 0)
+    }
+
     pub fn update_provider_settings_config(
         &self,
         app_type: &str,

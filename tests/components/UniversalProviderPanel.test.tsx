@@ -81,6 +81,16 @@ const createProvider = (id: string, name: string): UniversalProvider => ({
   models: {},
 });
 
+const successfulSyncResult = (id: string) => ({
+  providerId: id,
+  success: true,
+  apps: ["claude", "codex", "gemini"].map((app) => ({
+    app,
+    success: true,
+    becameCurrent: false,
+  })),
+});
+
 describe("UniversalProviderPanel", () => {
   beforeEach(() => {
     toastSuccessMock.mockReset();
@@ -97,7 +107,7 @@ describe("UniversalProviderPanel", () => {
     });
     upsertMock.mockResolvedValue(true);
     deleteMock.mockResolvedValue(true);
-    syncMock.mockResolvedValue(true);
+    syncMock.mockImplementation(async (id: string) => successfulSyncResult(id));
   });
 
   it("简易模式新建上游后先保存再同步", async () => {
@@ -108,7 +118,7 @@ describe("UniversalProviderPanel", () => {
     });
     syncMock.mockImplementation(async () => {
       callOrder.push("sync");
-      return true;
+      return successfulSyncResult("new");
     });
 
     render(<UniversalProviderPanel simpleMode />);
@@ -126,6 +136,60 @@ describe("UniversalProviderPanel", () => {
       expect(syncMock).toHaveBeenCalledWith("new");
     });
     expect(callOrder).toEqual(["upsert", "sync"]);
+  });
+
+  it("简易模式编辑上游后自动同步", async () => {
+    render(<UniversalProviderPanel simpleMode />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Provider One")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getAllByTitle("编辑")[0]);
+    fireEvent.click(screen.getByText("submit-provider"));
+
+    await waitFor(() => {
+      expect(upsertMock).toHaveBeenCalled();
+      expect(syncMock).toHaveBeenCalled();
+    });
+  });
+
+  it("简易模式部分同步失败后显示已保存状态并允许直接重试", async () => {
+    syncMock
+      .mockResolvedValueOnce({
+        providerId: "new",
+        success: false,
+        apps: [
+          { app: "claude", success: true, becameCurrent: true },
+          {
+            app: "codex",
+            success: false,
+            becameCurrent: false,
+            error: "写入失败",
+          },
+          { app: "gemini", success: true, becameCurrent: true },
+        ],
+      })
+      .mockResolvedValueOnce(successfulSyncResult("new"));
+    getAllMock
+      .mockResolvedValueOnce({})
+      .mockResolvedValue({ new: createProvider("new", "New") });
+
+    render(<UniversalProviderPanel simpleMode />);
+
+    await waitFor(() =>
+      expect(screen.getByText("还没有上游渠道")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("添加上游"));
+    fireEvent.click(screen.getByText("submit-provider"));
+
+    await waitFor(() => {
+      expect(screen.getByText("已保存，但未完全同步")).toBeInTheDocument();
+      expect(screen.getByText("codex: 写入失败")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("sync-provider-new"));
+    await waitFor(() => expect(syncMock).toHaveBeenCalledTimes(2));
+    expect(toastSuccessMock).toHaveBeenCalledWith("同步已恢复");
   });
 
   it("单个同步成功后显示最近同步成功并传入正确 provider id", async () => {

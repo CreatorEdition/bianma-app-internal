@@ -50,4 +50,34 @@ describe("UniversalProviderFormModal", () => {
     expect(screen.getByText("启用的应用")).toBeInTheDocument();
     expect(screen.getByText("模型配置")).toBeInTheDocument();
   });
+
+  it("简易模式编辑只显示保存，不要求再次确认同步", () => {
+    const provider = {
+      id: "p1",
+      name: "上游",
+      providerType: "custom",
+      apps: { claude: true, codex: true, gemini: true },
+      baseUrl: "https://api.example.com",
+      apiKey: "test-key",
+      models: {
+        claude: { model: "gpt-5.4" },
+        codex: { model: "gpt-5.4" },
+        gemini: { model: "gpt-5.4" },
+      },
+    };
+
+    render(
+      <UniversalProviderFormModal
+        isOpen
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onSaveAndSync={vi.fn()}
+        editingProvider={provider}
+        simpleMode
+      />,
+    );
+
+    expect(screen.getByText("保存")).toBeInTheDocument();
+    expect(screen.queryByText("保存并同步")).not.toBeInTheDocument();
+  });
 });
