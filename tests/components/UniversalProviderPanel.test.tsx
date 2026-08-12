@@ -9,6 +9,7 @@ const getAllMock = vi.hoisted(() => vi.fn());
 const upsertMock = vi.hoisted(() => vi.fn());
 const deleteMock = vi.hoisted(() => vi.fn());
 const syncMock = vi.hoisted(() => vi.fn());
+const formPropsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("sonner", () => ({
   toast: {
@@ -27,7 +28,17 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/components/universal/UniversalProviderFormModal", () => ({
-  UniversalProviderFormModal: () => null,
+  UniversalProviderFormModal: (props: {
+    isOpen: boolean;
+    onSave: (provider: UniversalProvider) => void;
+  }) => {
+    formPropsMock(props);
+    return props.isOpen ? (
+      <button onClick={() => props.onSave(createProvider("new", "New"))}>
+        submit-provider
+      </button>
+    ) : null;
+  },
 }));
 
 vi.mock("@/components/ConfirmDialog", () => ({
@@ -78,6 +89,7 @@ describe("UniversalProviderPanel", () => {
     upsertMock.mockReset();
     deleteMock.mockReset();
     syncMock.mockReset();
+    formPropsMock.mockReset();
 
     getAllMock.mockResolvedValue({
       p1: createProvider("p1", "Provider One"),
@@ -86,6 +98,34 @@ describe("UniversalProviderPanel", () => {
     upsertMock.mockResolvedValue(true);
     deleteMock.mockResolvedValue(true);
     syncMock.mockResolvedValue(true);
+  });
+
+  it("简易模式新建上游后先保存再同步", async () => {
+    const callOrder: string[] = [];
+    upsertMock.mockImplementation(async () => {
+      callOrder.push("upsert");
+      return true;
+    });
+    syncMock.mockImplementation(async () => {
+      callOrder.push("sync");
+      return true;
+    });
+
+    render(<UniversalProviderPanel simpleMode />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Provider One")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("添加上游"));
+    fireEvent.click(screen.getByText("submit-provider"));
+
+    await waitFor(() => {
+      expect(upsertMock).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "new" }),
+      );
+      expect(syncMock).toHaveBeenCalledWith("new");
+    });
+    expect(callOrder).toEqual(["upsert", "sync"]);
   });
 
   it("单个同步成功后显示最近同步成功并传入正确 provider id", async () => {

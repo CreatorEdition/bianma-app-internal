@@ -30,10 +30,14 @@ const flushEffects = async () => {
   await Promise.resolve();
 };
 
-const renderUseAppEventSubscriptions = (activeApp: AppId = "codex") =>
+const renderUseAppEventSubscriptions = (
+  activeApp: AppId = "codex",
+  watchActiveProvider = true,
+) =>
   renderHook(() =>
     useAppEventSubscriptions({
       activeApp,
+      watchActiveProvider,
       refetchProviders: refetchProvidersMock,
       queryClient,
       t,
@@ -61,6 +65,19 @@ afterEach(() => {
 });
 
 describe("useAppEventSubscriptions", () => {
+  it("默认控制面不监听 provider-switched 事件", async () => {
+    renderUseAppEventSubscriptions("codex", false);
+    await flushEffects();
+
+    emitTauriEvent("provider-switched", {
+      appType: "codex",
+      providerId: "codex-1",
+    });
+
+    await flushEffects();
+    expect(refetchProvidersMock).not.toHaveBeenCalled();
+  });
+
   it("only refetches providers when provider-switched matches the active app", async () => {
     renderUseAppEventSubscriptions("codex");
     await flushEffects();
