@@ -421,6 +421,15 @@ function App() {
           return (
             <div className="px-6 flex flex-col flex-1 min-h-0 overflow-hidden">
               <div className="flex-1 overflow-y-auto overflow-x-hidden pb-12 px-1">
+                <div className="mx-auto mb-5 max-w-6xl border-b border-border py-5">
+                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                    Advanced
+                  </p>
+                  <h1 className="mt-2 text-xl font-semibold">客户端例外配置</h1>
+                  <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                    普通使用无需在这里逐个设置。仅在某个客户端需要独立渠道、模型映射或兼容参数时调整。
+                  </p>
+                </div>
                 <AnimatePresence mode="wait">
                   <motion.div
                     key={activeApp}

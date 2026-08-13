@@ -13,7 +13,7 @@ describe("RouteCenterPanel", () => {
     useProxyStatusMock.mockReset();
   });
 
-  it("逐项接入支持的客户端并报告部分失败", async () => {
+  it("默认只展示聚合状态，并在接入失败时给出可操作结果", async () => {
     const setTakeoverForApp = vi.fn(({ appType }: { appType: string }) =>
       appType === "codex"
         ? Promise.reject(new Error("broken"))
@@ -38,6 +38,12 @@ describe("RouteCenterPanel", () => {
 
     render(<RouteCenterPanel onOpenAdvanced={vi.fn()} />);
 
+    expect(screen.getByTestId("aggregate-takeover-status")).toHaveTextContent(
+      "尚未启动",
+    );
+    expect(screen.queryByText("Claude Code")).not.toBeInTheDocument();
+    expect(screen.queryByText("Gemini CLI")).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByText("一键启动并接入"));
 
     await waitFor(() => {
@@ -51,9 +57,36 @@ describe("RouteCenterPanel", () => {
       enabled: true,
       silent: true,
     });
-    expect(
-      screen.getByText(/OpenCode 与 OpenClaw 当前不支持自动接入/),
-    ).toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("全部接入后只呈现统一路由已接入", () => {
+    useProxyStatusMock.mockReturnValue({
+      status: { address: "127.0.0.1", port: 15721 },
+      isRunning: true,
+      takeoverStatus: {
+        claude: true,
+        codex: true,
+        gemini: true,
+        opencode: false,
+        openclaw: false,
+      },
+      startProxyServer: vi.fn(),
+      stopWithRestore: vi.fn(),
+      setTakeoverForApp: vi.fn(),
+      isPending: false,
+    });
+
+    render(<RouteCenterPanel onOpenAdvanced={vi.fn()} />);
+
+    expect(screen.getByTestId("aggregate-takeover-status")).toHaveTextContent(
+      "统一路由已接入",
+    );
+    expect(screen.getByTestId("aggregate-takeover-status")).toHaveTextContent(
+      "所有支持自动接入的客户端都在使用这个本地入口",
+    );
+    expect(screen.queryByText("Claude Code")).not.toBeInTheDocument();
+    expect(screen.queryByText("Codex")).not.toBeInTheDocument();
+    expect(screen.queryByText("Gemini CLI")).not.toBeInTheDocument();
   });
 });

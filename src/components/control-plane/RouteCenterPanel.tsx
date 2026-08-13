@@ -29,6 +29,23 @@ export function RouteCenterPanel({ onOpenAdvanced }: RouteCenterPanelProps) {
   const endpoint = status
     ? `http://${status.address}:${status.port}`
     : "将使用本机默认监听地址";
+  const connectedClientCount = CLIENTS.filter(
+    ([appType]) => takeoverStatus?.[appType],
+  ).length;
+  const connectionSummary = !isRunning
+    ? "尚未启动"
+    : connectedClientCount === CLIENTS.length
+      ? "统一路由已接入"
+      : connectedClientCount > 0
+        ? `部分接入 · ${connectedClientCount}/${CLIENTS.length}`
+        : "等待接入";
+  const connectionDetail = !isRunning
+    ? "点击一次即可启动本地入口并接入支持的客户端。"
+    : connectedClientCount === CLIENTS.length
+      ? "所有支持自动接入的客户端都在使用这个本地入口。"
+      : connectedClientCount > 0
+        ? "已有部分客户端接入，可再次点击完成其余接入。"
+        : "本地入口已启动，点击接入即可完成客户端配置。";
 
   const startAndConnect = async () => {
     setIsConnecting(true);
@@ -97,7 +114,7 @@ export function RouteCenterPanel({ onOpenAdvanced }: RouteCenterPanelProps) {
           ) : null}
         </div>
       </div>
-      <div className="grid gap-8 py-8 lg:grid-cols-[1fr_0.8fr]">
+      <div className="grid gap-8 py-8 lg:grid-cols-[1.15fr_0.65fr]">
         <div className="space-y-6">
           <div>
             <p className="text-xs text-muted-foreground">本地入口</p>
@@ -108,35 +125,29 @@ export function RouteCenterPanel({ onOpenAdvanced }: RouteCenterPanelProps) {
           <div>
             <h2 className="text-base font-semibold">统一接入状态</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              正常情况下不需要逐个配置客户端；点击统一接入即可。
+              正常情况下不需要逐个查看或配置客户端。
             </p>
-            <div className="mt-3 divide-y divide-border border-y border-border">
-              {CLIENTS.map(([appType, name]) => (
-                <div
-                  key={appType}
-                  className="flex items-center justify-between py-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium">{name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {takeoverStatus?.[appType] ? "已接入统一路由" : "未接入"}
-                    </p>
-                  </div>
-                  <span
-                    className={
-                      takeoverStatus?.[appType]
-                        ? "text-xs font-medium text-emerald-600 dark:text-emerald-400"
-                        : "text-xs text-muted-foreground"
-                    }
-                  >
-                    {takeoverStatus?.[appType] ? "已接入" : "待接入"}
-                  </span>
-                </div>
-              ))}
+            <div
+              className="mt-3 flex items-start gap-3 border-y border-border py-5"
+              data-testid="aggregate-takeover-status"
+            >
+              <span
+                className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                  isRunning && connectedClientCount === CLIENTS.length
+                    ? "bg-emerald-500"
+                    : isRunning
+                      ? "bg-amber-500"
+                      : "bg-muted-foreground/40"
+                }`}
+                aria-hidden="true"
+              />
+              <div>
+                <p className="text-sm font-medium">{connectionSummary}</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  {connectionDetail}
+                </p>
+              </div>
             </div>
-            <p className="mt-3 text-xs text-muted-foreground">
-              OpenCode 与 OpenClaw 当前不支持自动接入，可在高级配置中手动兼容。
-            </p>
             {connectionResult ? (
               <p
                 className="mt-3 text-sm font-medium"
@@ -152,8 +163,8 @@ export function RouteCenterPanel({ onOpenAdvanced }: RouteCenterPanelProps) {
           <Network className="h-5 w-5 text-primary" />
           <h2 className="mt-4 text-base font-semibold">高级配置</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            仅当你需要为某个客户端改模型映射、Header 或手动兼容
-            OpenCode、OpenClaw 时，才进入这里。
+            仅当你需要客户端专属模型映射、Header、User-Agent 或手动兼容时，
+            才进入这里查看逐客户端设置。
           </p>
           <Button
             variant="ghost"

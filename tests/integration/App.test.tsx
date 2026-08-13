@@ -286,6 +286,7 @@ describe("App integration with MSW", () => {
     await waitFor(() =>
       expect(screen.getByTestId("route-center-page")).toBeInTheDocument(),
     );
+    expect(screen.queryByTestId("app-switcher")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("primary-nav-stats"));
     await waitFor(() =>
@@ -299,6 +300,13 @@ describe("App integration with MSW", () => {
         "page",
       ),
     );
+
+    fireEvent.click(screen.getByTestId("primary-nav-strategy"));
+    await screen.findByTestId("route-center-page");
+    fireEvent.click(screen.getByText("advanced-providers"));
+    await screen.findByTestId("provider-list");
+    expect(screen.getByText("客户端例外配置")).toBeInTheDocument();
+    expect(screen.getByTestId("app-switcher")).toBeInTheDocument();
   });
 
   it("covers basic provider flows via real hooks", async () => {
