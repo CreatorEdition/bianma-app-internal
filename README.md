@@ -36,7 +36,7 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 
 默认产品路径是一套本地路由中心：用户只需录入 API 地址、API Key 和默认模型，Claude Code、Codex、Gemini 等客户端共用同一份规范化模型路由。客户端专属模型映射、Header/User-Agent、同阶段均衡与多账户选择属于高级配置，不作为首次接入步骤。
 
-`src-tauri/crates/routing-core` 是独立的纯 Rust Stage-first 规划器。它只使用不可变内存快照生成固定容量的 `A -> B -> C` 计划，热路径不访问数据库、文件或网络，不启动后台线程，也不持有账户或凭据。HTTP、429/重试、健康状态、Secret 和 ContextPipeline 将在后续独立切片接入。
+`src-tauri/crates/routing-core` 是独立的纯 Rust Stage-first 规划器。它使用不可变内存快照生成固定容量的 `A -> B -> C` 计划，并以固定大小 ReplayGate 区分“零写出”“受信执行前拒绝”和 `DeliveryUnknown`。普通 429/503、`Retry-After` 或错误文本不能自行授权重放；已写出不明、首个有效语义事件或下游提交后必须停止。核心仍不访问数据库、文件或网络，不等待、不启动后台线程，也不持有账户或凭据；实际 HTTP、冷却、预算、Secret 和 ContextPipeline 继续由后续独立切片接入。
 
 ## 测试与质量
 
