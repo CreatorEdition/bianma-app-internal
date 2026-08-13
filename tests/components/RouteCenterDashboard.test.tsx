@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RouteCenterDashboard } from "@/components/control-plane/RouteCenterDashboard";
 import type { ProxyStatus } from "@/types/proxy";
@@ -75,5 +75,56 @@ describe("RouteCenterDashboard", () => {
     expect(screen.getByText("12 次请求 · 91.7% 成功")).toBeInTheDocument();
     expect(screen.getByText("codex")).toBeInTheDocument();
     expect(screen.queryByText("默认可用")).not.toBeInTheDocument();
+  });
+
+  it("没有上游时主按钮直接进入上游配置", async () => {
+    const onOpenUpstreams = vi.fn();
+    const onOpenRoutes = vi.fn();
+    getAllMock.mockResolvedValue({});
+
+    render(
+      <RouteCenterDashboard
+        isProxyRunning={false}
+        takeoverCount={0}
+        onOpenUpstreams={onOpenUpstreams}
+        onOpenRoutes={onOpenRoutes}
+      />,
+    );
+
+    const addUpstream = await screen.findByText("先添加上游");
+    fireEvent.click(addUpstream);
+
+    expect(onOpenUpstreams).toHaveBeenCalledTimes(1);
+    expect(onOpenRoutes).not.toHaveBeenCalled();
+  });
+
+  it("空壳上游不会解锁路由中心", async () => {
+    const onOpenUpstreams = vi.fn();
+    const onOpenRoutes = vi.fn();
+    getAllMock.mockResolvedValue({
+      broken: {
+        id: "broken",
+        name: "损坏配置",
+        providerType: "custom_gateway",
+        apps: { claude: true, codex: true, gemini: true },
+        baseUrl: " ",
+        apiKey: " ",
+        models: {},
+      },
+    });
+
+    render(
+      <RouteCenterDashboard
+        isProxyRunning={false}
+        takeoverCount={0}
+        onOpenUpstreams={onOpenUpstreams}
+        onOpenRoutes={onOpenRoutes}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("先添加上游"));
+
+    expect(onOpenUpstreams).toHaveBeenCalledTimes(1);
+    expect(onOpenRoutes).not.toHaveBeenCalled();
   });
 });

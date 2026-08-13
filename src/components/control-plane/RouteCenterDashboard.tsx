@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Boxes, Network, PlugZap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { universalProvidersApi } from "@/lib/api";
+import { isUsableUniversalProvider } from "@/lib/universalProvider";
 import type { ProxyStatus } from "@/types/proxy";
 import type { UniversalProvidersMap } from "@/types";
 
@@ -22,15 +23,20 @@ export function RouteCenterDashboard({
   onOpenRoutes,
 }: RouteCenterDashboardProps) {
   const [upstreams, setUpstreams] = useState<UniversalProvidersMap>({});
+  const [isLoadingUpstreams, setIsLoadingUpstreams] = useState(true);
 
   useEffect(() => {
     void universalProvidersApi
       .getAll()
       .then(setUpstreams)
-      .catch(() => setUpstreams({}));
+      .catch(() => setUpstreams({}))
+      .finally(() => setIsLoadingUpstreams(false));
   }, []);
 
-  const upstreamList = useMemo(() => Object.values(upstreams), [upstreams]);
+  const upstreamList = useMemo(
+    () => Object.values(upstreams).filter(isUsableUniversalProvider),
+    [upstreams],
+  );
   const endpoint = status
     ? `http://${status.address}:${status.port}`
     : "本地入口尚未启动";
@@ -57,9 +63,23 @@ export function RouteCenterDashboard({
               配置一次上游，当前支持的客户端通过同一个本地入口请求模型。
             </p>
           </div>
-          <Button onClick={onOpenRoutes} className="gap-2">
-            <PlugZap className="h-4 w-4" />
-            {isProxyRunning ? "查看路由中心" : "启动并接入客户端"}
+          <Button
+            onClick={upstreamList.length ? onOpenRoutes : onOpenUpstreams}
+            disabled={isLoadingUpstreams}
+            className="gap-2"
+          >
+            {upstreamList.length ? (
+              <PlugZap className="h-4 w-4" />
+            ) : (
+              <Boxes className="h-4 w-4" />
+            )}
+            {isLoadingUpstreams
+              ? "正在读取上游"
+              : upstreamList.length
+                ? isProxyRunning
+                  ? "查看路由中心"
+                  : "启动并接入客户端"
+                : "先添加上游"}
           </Button>
         </div>
       </div>

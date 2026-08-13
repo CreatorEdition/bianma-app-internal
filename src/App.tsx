@@ -348,6 +348,7 @@ function App() {
           return (
             <RouteCenterPanel
               onOpenAdvanced={() => setCurrentView("providers")}
+              onOpenUpstreams={() => setCurrentView("services")}
             />
           );
         case "stats":
