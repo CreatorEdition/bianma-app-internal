@@ -2,6 +2,7 @@
 
 ## 当前完成
 
+- ✅ 已完成（2026-08-13）：增加所有权驱动的线性 Attempt Coordinator。`RoutePlan → AttemptPermit → AttemptTracker → AttemptCompletion → Next/Stop` 每一步消费上一步，Permit、Tracker 与 Completion 都不可复制，因此每条逻辑请求链不可能出现两个同时活跃的 Attempt、重复启动 A、回退或跳跃推进。ReplayGate 只在 `NotSent` 或受信执行前拒绝时允许从当前计划位置推进到下一个 Stage；`DeliveryUnknown`、取消、下游提交、语义事件、计划或预算耗尽均停止。本切片不使用全局 ID、锁、线程或分配，不执行 HTTP、等待、同 Target 重试、换 Key、健康更新，也不接旧 Forwarder。
 - ✅ 已完成（2026-08-13）：在 Stage-first 规划器上增加固定大小、零正常依赖的 ReplayGate 合同。Attempt 事实状态只能在 crate 内单调推进；错误类别与重放证据完全解耦，普通 429/503、Retry-After 与错误文本不能自行签发许可。只有计数 writer 证明零写出，或未来已登记 adapter 合同签发执行前拒绝证明时，才允许 Coordinator 新建独立 Attempt；`DeliveryUnknown`、客户端取消、首个有效语义事件和下游提交均 fail closed。本切片不解析 HTTP、不等待、不更新健康、不选择同目标/换 Key/A→B，也不接旧 Forwarder。
 - ✅ 已完成（2026-08-13）：从已验证安全基线 `5888952` 独立重建纯 Rust Stage-first 路由规划器。新增无正常依赖、固定容量的 `routing-core` crate；Target 只绑定 Site、ModelDeployment、Endpoint 与 AccountSelector，计划直接借用同一不可变快照并按 Stage 最多选择一个目标。Priority、RoundRobin、LeastPenalty 均被限制在当前 Stage；非法容量、预算、重复目标/部署、非连续 Stage 与无可用候选会在发送前拒绝。本切片未接入旧 Forwarder、HTTP、429/重试、健康、数据库、Secret、ContextPipeline 或 UI；默认产品仍是一套全局统一路由，客户端专属映射与同级均衡仅作为高级配置输入。
 - ✅ 已完成（2026-08-13）：收口旧 Proxy 的接流前安全门禁，并通过 Terra 三轮独立安全复审（0 个剩余 BLOCKING）。代理配置在前端、Tauri 命令、服务、DAO 与最终 bind 五层只允许本机回环地址，模型路由统一拒绝带 `Origin` 的浏览器请求；传输一旦可能写出请求就转为 `DeliveryUnknown`，已经收到任何上游 HTTP 响应也不得切换 Provider 重放。本切片不新增鉴权系统、后台线程、轮询、依赖或 routing-core 功能；可信 429 回执与受控 A→B 留给 routing-core v2。旧 Forwarder 的同 Provider thinking 整流重试作为后续 Attempt 合同审计项，不在本切片扩展。

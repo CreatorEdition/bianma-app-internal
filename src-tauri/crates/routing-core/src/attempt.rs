@@ -3,6 +3,8 @@
 //! 本模块不解析 HTTP、`Retry-After` 或错误文本，也不执行等待和下一次发送。未来的
 //! Transport 只能通过 crate 内状态机记录事实；普通 429/503 本身不能签发重放许可。
 
+use super::coordinator::{AttemptCompletion, AttemptPermit, AttemptPosition};
+
 /// 一次发送失败的无敏感分类。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AttemptFailure {
@@ -125,28 +127,33 @@ pub(crate) struct TrustedPreExecutionRejection(());
 
 impl TrustedPreExecutionRejection {
     #[cfg(test)]
-    const fn test_only() -> Self {
+    pub(crate) const fn test_only() -> Self {
         Self(())
     }
 }
 
 /// 固定大小、不可复制的单次发送事实记录器。
-#[derive(Debug)]
-pub(crate) struct AttemptTracker {
+pub(crate) struct AttemptTracker<'s, 'c> {
+    permit: AttemptPermit<'s, 'c>,
     phase: SendPhase,
     write: UpstreamWriteState,
     downstream: DownstreamCommitState,
     cancelled: bool,
 }
 
-impl AttemptTracker {
-    pub(crate) const fn new() -> Self {
+impl<'s, 'c> AttemptTracker<'s, 'c> {
+    pub(crate) const fn from_permit(permit: AttemptPermit<'s, 'c>) -> Self {
         Self {
+            permit,
             phase: SendPhase::Pending,
             write: UpstreamWriteState::NoBytesProven,
             downstream: DownstreamCommitState::NotCommitted,
             cancelled: false,
         }
+    }
+
+    pub(crate) const fn position(&self) -> AttemptPosition {
+        self.permit.position()
     }
 
     pub(crate) fn request_write_started(&mut self) -> Result<(), AttemptTransitionError> {
@@ -212,7 +219,7 @@ impl AttemptTracker {
         self,
         failure: AttemptFailure,
         trusted_rejection: Option<TrustedPreExecutionRejection>,
-    ) -> AttemptOutcome {
+    ) -> AttemptCompletion<'s, 'c> {
         let delivery = if self.write == UpstreamWriteState::Unknown
             || matches!(
                 self.phase,
@@ -230,15 +237,25 @@ impl AttemptTracker {
             DeliveryState::NotSent | DeliveryState::PreExecutionRejected => ChargeState::NotCharged,
             DeliveryState::DeliveryUnknown => ChargeState::Unknown,
         };
-        AttemptOutcome {
-            failure,
-            phase: self.phase,
-            write: self.write,
-            downstream: self.downstream,
-            delivery,
-            charge,
-            cancelled: self.cancelled,
-        }
+        AttemptCompletion::new(
+            self.permit,
+            AttemptOutcome {
+                failure,
+                phase: self.phase,
+                write: self.write,
+                downstream: self.downstream,
+                delivery,
+                charge,
+                cancelled: self.cancelled,
+            },
+        )
+    }
+}
+
+#[cfg(test)]
+impl AttemptTracker<'static, 'static> {
+    fn test_only() -> Self {
+        Self::from_permit(AttemptPermit::test_only())
     }
 }
 
@@ -313,10 +330,10 @@ mod tests {
     #[test]
     fn ordinary_429_or_503_never_self_authorizes_replay_after_write() {
         for failure in [AttemptFailure::RateLimited, AttemptFailure::Overloaded] {
-            let mut tracker = AttemptTracker::new();
+            let mut tracker = AttemptTracker::test_only();
             tracker.request_write_started().unwrap();
             tracker.upstream_response_observed().unwrap();
-            let outcome = tracker.finish(failure, None);
+            let outcome = tracker.finish(failure, None).into_outcome_for_test();
             assert_eq!(outcome.delivery(), DeliveryState::DeliveryUnknown);
             assert_eq!(
                 outcome.replay_decision(),
@@ -328,7 +345,9 @@ mod tests {
 
     #[test]
     fn zero_write_proof_permits_a_new_independent_attempt() {
-        let outcome = AttemptTracker::new().finish(AttemptFailure::Transport, None);
+        let outcome = AttemptTracker::test_only()
+            .finish(AttemptFailure::Transport, None)
+            .into_outcome_for_test();
         assert_eq!(outcome.delivery(), DeliveryState::NotSent);
         assert_eq!(
             outcome.replay_decision(),
@@ -339,13 +358,15 @@ mod tests {
 
     #[test]
     fn trusted_pre_execution_rejection_is_the_only_written_request_exception() {
-        let mut tracker = AttemptTracker::new();
+        let mut tracker = AttemptTracker::test_only();
         tracker.request_write_started().unwrap();
         tracker.upstream_response_observed().unwrap();
-        let outcome = tracker.finish(
-            AttemptFailure::RateLimited,
-            Some(TrustedPreExecutionRejection::test_only()),
-        );
+        let outcome = tracker
+            .finish(
+                AttemptFailure::RateLimited,
+                Some(TrustedPreExecutionRejection::test_only()),
+            )
+            .into_outcome_for_test();
         assert_eq!(outcome.delivery(), DeliveryState::PreExecutionRejected);
         assert_eq!(
             outcome.replay_decision(),
@@ -355,24 +376,28 @@ mod tests {
 
     #[test]
     fn semantic_event_or_downstream_commit_always_stops() {
-        let mut semantic = AttemptTracker::new();
+        let mut semantic = AttemptTracker::test_only();
         semantic.request_write_started().unwrap();
         semantic.upstream_response_observed().unwrap();
         semantic.first_semantic_event_observed().unwrap();
-        let outcome = semantic.finish(
-            AttemptFailure::Protocol,
-            Some(TrustedPreExecutionRejection::test_only()),
-        );
+        let outcome = semantic
+            .finish(
+                AttemptFailure::Protocol,
+                Some(TrustedPreExecutionRejection::test_only()),
+            )
+            .into_outcome_for_test();
         assert_eq!(
             outcome.replay_decision(),
             ReplayDecision::Stop(ReplayStopReason::SemanticEventObserved)
         );
 
-        let mut committed = AttemptTracker::new();
+        let mut committed = AttemptTracker::test_only();
         committed.request_write_started().unwrap();
         committed.upstream_response_observed().unwrap();
         committed.downstream_committed().unwrap();
-        let outcome = committed.finish(AttemptFailure::Unknown, None);
+        let outcome = committed
+            .finish(AttemptFailure::Unknown, None)
+            .into_outcome_for_test();
         assert_eq!(
             outcome.replay_decision(),
             ReplayDecision::Stop(ReplayStopReason::DownstreamCommitted)
@@ -381,20 +406,24 @@ mod tests {
 
     #[test]
     fn unknown_write_state_and_cancel_fail_closed() {
-        let mut unknown = AttemptTracker::new();
+        let mut unknown = AttemptTracker::test_only();
         unknown.write_state_unknown().unwrap();
-        let outcome = unknown.finish(
-            AttemptFailure::Timeout,
-            Some(TrustedPreExecutionRejection::test_only()),
-        );
+        let outcome = unknown
+            .finish(
+                AttemptFailure::Timeout,
+                Some(TrustedPreExecutionRejection::test_only()),
+            )
+            .into_outcome_for_test();
         assert_eq!(
             outcome.replay_decision(),
             ReplayDecision::Stop(ReplayStopReason::DeliveryUnknown)
         );
 
-        let mut cancelled = AttemptTracker::new();
+        let mut cancelled = AttemptTracker::test_only();
         cancelled.cancel().unwrap();
-        let outcome = cancelled.finish(AttemptFailure::Cancelled, None);
+        let outcome = cancelled
+            .finish(AttemptFailure::Cancelled, None)
+            .into_outcome_for_test();
         assert_eq!(
             outcome.replay_decision(),
             ReplayDecision::Stop(ReplayStopReason::Cancelled)
@@ -403,12 +432,14 @@ mod tests {
 
     #[test]
     fn cancellation_never_erases_observed_semantics() {
-        let mut tracker = AttemptTracker::new();
+        let mut tracker = AttemptTracker::test_only();
         tracker.request_write_started().unwrap();
         tracker.upstream_response_observed().unwrap();
         tracker.first_semantic_event_observed().unwrap();
         tracker.cancel().unwrap();
-        let outcome = tracker.finish(AttemptFailure::Cancelled, None);
+        let outcome = tracker
+            .finish(AttemptFailure::Cancelled, None)
+            .into_outcome_for_test();
         assert_eq!(outcome.phase(), SendPhase::FirstSemanticEventObserved);
         assert_eq!(outcome.delivery(), DeliveryState::DeliveryUnknown);
         assert_eq!(outcome.charge_state(), ChargeState::Unknown);
@@ -420,7 +451,7 @@ mod tests {
 
     #[test]
     fn transitions_and_runtime_state_stay_small() {
-        let mut tracker = AttemptTracker::new();
+        let mut tracker = AttemptTracker::test_only();
         assert_eq!(
             tracker.first_semantic_event_observed(),
             Err(AttemptTransitionError::InvalidPhase)
@@ -430,7 +461,7 @@ mod tests {
             tracker.request_write_started(),
             Err(AttemptTransitionError::InvalidPhase)
         );
-        assert!(core::mem::size_of::<AttemptTracker>() <= 8);
+        assert!(core::mem::size_of::<AttemptTracker<'_, '_>>() <= 96);
         assert!(core::mem::size_of::<AttemptOutcome>() <= 8);
     }
 }
