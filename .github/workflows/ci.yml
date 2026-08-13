@@ -107,6 +107,12 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
 
+      - name: Check routing-core
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked
+          cargo clippy --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked -- -D warnings
+          test "$(cargo tree --manifest-path src-tauri/Cargo.toml -p routing-core --locked --edges normal --prefix none | wc -l)" -eq 1
+
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 

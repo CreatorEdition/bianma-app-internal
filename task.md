@@ -2,6 +2,7 @@
 
 ## 当前完成
 
+- ✅ 已完成（2026-08-13）：从已验证安全基线 `5888952` 独立重建纯 Rust Stage-first 路由规划器。新增无正常依赖、固定容量的 `routing-core` crate；Target 只绑定 Site、ModelDeployment、Endpoint 与 AccountSelector，计划直接借用同一不可变快照并按 Stage 最多选择一个目标。Priority、RoundRobin、LeastPenalty 均被限制在当前 Stage；非法容量、预算、重复目标/部署、非连续 Stage 与无可用候选会在发送前拒绝。本切片未接入旧 Forwarder、HTTP、429/重试、健康、数据库、Secret、ContextPipeline 或 UI；默认产品仍是一套全局统一路由，客户端专属映射与同级均衡仅作为高级配置输入。
 - ✅ 已完成（2026-08-13）：收口旧 Proxy 的接流前安全门禁，并通过 Terra 三轮独立安全复审（0 个剩余 BLOCKING）。代理配置在前端、Tauri 命令、服务、DAO 与最终 bind 五层只允许本机回环地址，模型路由统一拒绝带 `Origin` 的浏览器请求；传输一旦可能写出请求就转为 `DeliveryUnknown`，已经收到任何上游 HTTP 响应也不得切换 Provider 重放。本切片不新增鉴权系统、后台线程、轮询、依赖或 routing-core 功能；可信 429 回执与受控 A→B 留给 routing-core v2。旧 Forwarder 的同 Provider thinking 整流重试作为后续 Attempt 合同审计项，不在本切片扩展。
 - ✅ 已完成（2026-08-13）：重做 RT-002 轻量控制面。产品按工具软件而非用户留存目标优化，默认路径固定为“概览 → 上游 → 路由 → 用量”；首次上游仅要求 API 地址、API Key 与默认模型，保存后自动同步并在无现有选择时成为当前供应商，部分同步失败可见且可直接重试。高阶映射继续下沉高级配置；本切片不修改旧 Forwarder，不新增后台轮询。
 - ⚠️ 能力边界：当前 `UniversalProvider` 仍是向 Claude、Codex、Gemini 客户端配置同步的兼容层；多账户/多 API Key 池、JWT 屏蔽、模型级故障链与统一 Header/User-Agent 策略继续由 routing-core v2 实现。
