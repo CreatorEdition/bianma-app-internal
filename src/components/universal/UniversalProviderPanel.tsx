@@ -10,7 +10,12 @@ import {
 } from "./UniversalProviderCard";
 import { UniversalProviderFormModal } from "./UniversalProviderFormModal";
 import { universalProvidersApi } from "@/lib/api";
+import { isUniversalRouteProvider } from "@/lib/universalProvider";
 import type { UniversalProvider, UniversalProvidersMap } from "@/types";
+import {
+  getActiveUniversalProviderId,
+  setActiveUniversalProviderId,
+} from "@/lib/universalProviderSelection";
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error && error.message) {
@@ -55,6 +60,7 @@ export function UniversalProviderPanel({
   const [syncStatusById, setSyncStatusById] = useState<
     Record<string, UniversalProviderSyncStatus>
   >({});
+  const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
 
   // 加载数据
   const loadProviders = useCallback(async () => {
@@ -106,6 +112,26 @@ export function UniversalProviderPanel({
     });
   }, [providers]);
 
+  useEffect(() => {
+    setActiveProviderId(getActiveUniversalProviderId(providers));
+  }, [providers]);
+
+  useEffect(() => {
+    const handleActiveProviderChange = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      setActiveProviderId(id);
+    };
+    window.addEventListener(
+      "universal-active-provider-changed",
+      handleActiveProviderChange,
+    );
+    return () =>
+      window.removeEventListener(
+        "universal-active-provider-changed",
+        handleActiveProviderChange,
+      );
+  }, []);
+
   const updateSyncStatus = useCallback(
     (id: string, status: "success" | "error", errorMessage?: string) => {
       setSyncStatusById((current) => ({
@@ -150,8 +176,8 @@ export function UniversalProviderPanel({
       try {
         await universalProvidersApi.upsert(provider);
 
-        // 新建或简易模式编辑后自动同步，保持统一入口为事实来源。
-        if (!editingProvider || simpleMode) {
+        // 高级模式新建时保留旧兼容同步；简易模式统一在路由中心启动时准备。
+        if (!simpleMode && !editingProvider) {
           const syncOk = await syncProviderById(provider.id);
           if (!syncOk) {
             await loadProviders();
@@ -162,13 +188,15 @@ export function UniversalProviderPanel({
         }
 
         toast.success(
-          editingProvider
-            ? t("universalProvider.updated", {
-                defaultValue: "统一供应商已更新",
-              })
-            : t("universalProvider.addedAndSynced", {
-                defaultValue: "统一供应商已添加并同步",
-              }),
+          simpleMode
+            ? "统一上游已保存，返回路由中心一键启动即可接入"
+            : editingProvider
+              ? t("universalProvider.updated", {
+                  defaultValue: "统一供应商已更新",
+                })
+              : t("universalProvider.addedAndSynced", {
+                  defaultValue: "统一供应商已添加并同步",
+                }),
         );
         loadProviders();
         setEditingProvider(null);
@@ -263,18 +291,6 @@ export function UniversalProviderPanel({
 
     setSyncConfirm({ open: false, id: "", name: "" });
   }, [syncConfirm.id, syncProviderById, t]);
-
-  const handleSimpleRetry = useCallback(
-    async (id: string) => {
-      const syncOk = await syncProviderById(id);
-      if (syncOk) {
-        toast.success("同步已恢复");
-      } else {
-        toast.error("仍有客户端同步失败，请再次重试或进入高级配置检查");
-      }
-    },
-    [syncProviderById],
-  );
 
   const handleProviderSelectionChange = useCallback(
     (id: string, selected: boolean) => {
@@ -377,6 +393,10 @@ export function UniversalProviderPanel({
   );
 
   const providerList = Object.values(providers);
+  const handleSetActiveProvider = useCallback((id: string) => {
+    setActiveUniversalProviderId(id);
+    setActiveProviderId(id);
+  }, []);
 
   return (
     <div className="space-y-5" data-testid="universal-provider-panel">
@@ -494,7 +514,17 @@ export function UniversalProviderPanel({
               provider={provider}
               onEdit={handleEdit}
               onDelete={handleDeleteClick}
-              onSync={simpleMode ? handleSimpleRetry : handleSyncClick}
+              isActive={
+                simpleMode &&
+                isUniversalRouteProvider(provider) &&
+                activeProviderId === provider.id
+              }
+              onSetActive={
+                simpleMode && isUniversalRouteProvider(provider)
+                  ? handleSetActiveProvider
+                  : undefined
+              }
+              onSync={simpleMode ? undefined : handleSyncClick}
               selected={
                 simpleMode ? undefined : selectedProviderIds.has(provider.id)
               }

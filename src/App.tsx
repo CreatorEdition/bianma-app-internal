@@ -19,7 +19,6 @@ import {
   Cpu,
   Home,
   Boxes,
-  Route,
   Gauge,
   PanelLeft,
 } from "lucide-react";
@@ -57,7 +56,6 @@ import {
 } from "@/lib/storageKeys";
 import { AppSwitcher } from "@/components/AppSwitcher";
 import { ProviderWorkspacePanel } from "@/components/providers/ProviderWorkspacePanel";
-import { RouteCenterDashboard } from "@/components/control-plane/RouteCenterDashboard";
 import { RouteCenterPanel } from "@/components/control-plane/RouteCenterPanel";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
@@ -113,7 +111,6 @@ const getInitialApp = (): AppId => {
 const VALID_VIEWS: View[] = [
   "home",
   "services",
-  "strategy",
   "stats",
   "providers",
   "settings",
@@ -220,11 +217,13 @@ function App() {
     isRunning: isProxyRunning,
     takeoverStatus,
     status: proxyStatus,
+    startProxyServer,
+    stopWithRestore,
+    setTakeoverForApp,
+    switchProxyProvider,
+    isPending,
   } = useProxyStatus();
   const isCurrentAppTakeoverActive = takeoverStatus?.[activeApp] || false;
-  const takeoverCount = takeoverStatus
-    ? Object.values(takeoverStatus).filter(Boolean).length
-    : 0;
   const activeProviderId = useMemo(() => {
     const target = proxyStatus?.active_targets?.find(
       (t) => t.app_type === activeApp,
@@ -255,7 +254,6 @@ function App() {
   const isPrimaryView =
     currentView === "home" ||
     currentView === "services" ||
-    currentView === "strategy" ||
     currentView === "stats";
   const isOpenClawView =
     activeApp === "openclaw" &&
@@ -327,12 +325,17 @@ function App() {
       switch (currentView) {
         case "home":
           return (
-            <RouteCenterDashboard
-              status={proxyStatus}
-              isProxyRunning={isProxyRunning}
-              takeoverCount={takeoverCount}
+            <RouteCenterPanel
+              onOpenAdvanced={() => setCurrentView("providers")}
               onOpenUpstreams={() => setCurrentView("services")}
-              onOpenRoutes={() => setCurrentView("strategy")}
+              status={proxyStatus}
+              isRunning={isProxyRunning}
+              takeoverStatus={takeoverStatus}
+              startProxyServer={startProxyServer}
+              stopWithRestore={stopWithRestore}
+              setTakeoverForApp={setTakeoverForApp}
+              switchProxyProvider={switchProxyProvider}
+              isPending={isPending}
             />
           );
         case "services":
@@ -343,13 +346,6 @@ function App() {
                 onOpenAdvanced={() => setCurrentView("providers")}
               />
             </div>
-          );
-        case "strategy":
-          return (
-            <RouteCenterPanel
-              onOpenAdvanced={() => setCurrentView("providers")}
-              onOpenUpstreams={() => setCurrentView("services")}
-            />
           );
         case "stats":
           return (
@@ -872,8 +868,8 @@ function App() {
               {[
                 {
                   view: "home",
-                  label: "概览",
-                  detail: "状态与一键启动",
+                  label: "路由中心",
+                  detail: "统一入口与一键启动",
                   icon: Home,
                 },
                 {
@@ -881,12 +877,6 @@ function App() {
                   label: "上游",
                   detail: "渠道与模型",
                   icon: Boxes,
-                },
-                {
-                  view: "strategy",
-                  label: "路由",
-                  detail: "统一入口与接入状态",
-                  icon: Route,
                 },
                 {
                   view: "stats",

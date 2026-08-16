@@ -16,7 +16,7 @@ export type AppConfirmAction = {
 };
 
 interface UseAppUiStateOptions {
-  setCurrentView: (view: "settings" | "strategy" | "stats") => void;
+  setCurrentView: (view: "settings" | "home" | "stats") => void;
 }
 
 /**
@@ -38,10 +38,7 @@ export function useAppUiState({ setCurrentView }: UseAppUiStateOptions) {
   const effectiveUsageProvider = useLastValidValue(usageProvider);
 
   const openSettingsTab = useCallback(
-    (
-      tab: SettingsTab,
-      view: "settings" | "strategy" | "stats" = "settings",
-    ) => {
+    (tab: SettingsTab, view: "settings" | "home" | "stats" = "settings") => {
       setSettingsDefaultTab(tab);
       setCurrentView(view);
     },
@@ -53,7 +50,7 @@ export function useAppUiState({ setCurrentView }: UseAppUiStateOptions) {
   }, [openSettingsTab]);
 
   const openProxySettings = useCallback(() => {
-    openSettingsTab("proxy", "strategy");
+    openSettingsTab("proxy", "home");
   }, [openSettingsTab]);
 
   const openUsageSettings = useCallback(() => {
