@@ -838,7 +838,10 @@ fn validate_managed_authorization(
         return Err(IngressReject::CapabilityConstraintMismatch);
     }
     let handle_expiry = bundle.requirements.handle_earliest_expiry_millis;
-    if handle_expiry != 0 && (handle_expiry <= now || handle_expiry < claims.expires_at_millis) {
+    if (bundle.requirements.local_handle_required && handle_expiry == 0)
+        || (handle_expiry != 0
+            && (handle_expiry <= now || handle_expiry < claims.expires_at_millis))
+    {
         return Err(IngressReject::AuthorizationBindingMismatch);
     }
     Ok(())

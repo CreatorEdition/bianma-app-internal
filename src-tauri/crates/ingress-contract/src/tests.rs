@@ -301,7 +301,7 @@ fn managed_material(
             client_adapter_version: AdapterVersion::new(30),
             upstream_adapter_revision: AdapterContractRevision::new(3),
             handle_epoch: HandleEpoch::new(4),
-            handle_earliest_expiry_millis: 0,
+            handle_earliest_expiry_millis: EXPIRES + 60_000,
             protocol_frame_revision: ProtocolFrameRevision::new(5),
             continuation: ContinuationConstraint::FullHistoryPortable,
             local_handle_required: true,
@@ -690,6 +690,44 @@ fn managed_scope_and_authorization_mismatches_do_not_consume_nonce() {
             &managed_active(&verifier, IssuerEpoch::new(1)),
         )
         .expect("scope/bundle 错配不得烧毁 nonce");
+}
+
+#[test]
+fn managed_handle_requirement_requires_expiry_binding() {
+    let registry = build_registry();
+    let request = model_request();
+    let one_shot_nonce = nonce(42);
+    let (bundle, claims) = managed_material(&registry, &request, one_shot_nonce, IssuerEpoch::new(1));
+    let verifier = default_verifier(fresh_store());
+
+    let mut missing_expiry = bundle.clone();
+    missing_expiry.requirements.handle_earliest_expiry_millis = 0;
+    let (missing_attestation, missing_bundle_wire) =
+        encode_managed(&missing_expiry, &claims, &MANAGED_KEY);
+    assert_eq!(
+        verifier
+            .verify_managed(
+                signed_from_wires(model_request(), &missing_attestation, &missing_bundle_wire),
+                &managed_connection(&verifier, IssuerEpoch::new(1)),
+                &managed_active(&verifier, IssuerEpoch::new(1)),
+            )
+            .expect_error("要求 local handle 时缺少过期绑定必须拒绝"),
+        IngressReject::AuthorizationBindingMismatch
+    );
+
+    let mut optional_handle = bundle;
+    optional_handle.requirements.local_handle_required = false;
+    optional_handle.requirements.handle_earliest_expiry_millis = 0;
+    let (optional_attestation, optional_bundle_wire) =
+        encode_managed(&optional_handle, &claims, &MANAGED_KEY);
+    let verified = verifier
+        .verify_managed(
+            signed_from_wires(model_request(), &optional_attestation, &optional_bundle_wire),
+            &managed_connection(&verifier, IssuerEpoch::new(1)),
+            &managed_active(&verifier, IssuerEpoch::new(1)),
+        )
+        .expect("非必需 local handle 且无过期绑定应放行");
+    assert!(!verified.local_handle_allowed());
 }
 
 #[test]
