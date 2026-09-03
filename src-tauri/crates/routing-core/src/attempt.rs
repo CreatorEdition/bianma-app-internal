@@ -143,14 +143,26 @@ impl AttemptTracker {
     pub(crate) const fn new() -> Self {
         Self {
             phase: SendPhase::Pending,
-            write: UpstreamWriteState::NoBytesProven,
+            // 默认不假设 writer 已经证明零字节；必须由 writer 显式签发后才可安全重放。
+            write: UpstreamWriteState::Unknown,
             downstream: DownstreamCommitState::NotCommitted,
             cancelled: false,
         }
     }
 
+    /// 计数 writer 报告零字节写出后调用；只允许在 `Pending` 阶段签发。
+    pub(crate) fn zero_bytes_proven(&mut self) -> Result<(), AttemptTransitionError> {
+        if self.phase != SendPhase::Pending {
+            return Err(AttemptTransitionError::InvalidPhase);
+        }
+        self.write = UpstreamWriteState::NoBytesProven;
+        Ok(())
+    }
+
     pub(crate) fn request_write_started(&mut self) -> Result<(), AttemptTransitionError> {
-        if self.phase != SendPhase::Pending || self.write != UpstreamWriteState::NoBytesProven {
+        if self.phase != SendPhase::Pending
+            || self.write == UpstreamWriteState::BytesMayHaveBeenWritten
+        {
             return Err(AttemptTransitionError::InvalidPhase);
         }
         self.phase = SendPhase::RequestWriteStarted;
@@ -219,10 +231,10 @@ impl AttemptTracker {
                 SendPhase::FirstSemanticEventObserved | SendPhase::DownstreamCommitted
             ) {
             DeliveryState::DeliveryUnknown
-        } else if trusted_rejection.is_some() {
-            DeliveryState::PreExecutionRejected
         } else if self.write == UpstreamWriteState::NoBytesProven {
             DeliveryState::NotSent
+        } else if trusted_rejection.is_some() {
+            DeliveryState::PreExecutionRejected
         } else {
             DeliveryState::DeliveryUnknown
         };
@@ -282,14 +294,14 @@ impl AttemptOutcome {
 
     /// 生成唯一重放结论，不决定具体路由动作。
     pub const fn replay_decision(&self) -> ReplayDecision {
+        if matches!(self.downstream, DownstreamCommitState::Committed) {
+            return ReplayDecision::Stop(ReplayStopReason::DownstreamCommitted);
+        }
         if self.cancelled
             || matches!(self.failure, AttemptFailure::Cancelled)
             || matches!(self.phase, SendPhase::Cancelled)
         {
             return ReplayDecision::Stop(ReplayStopReason::Cancelled);
-        }
-        if matches!(self.downstream, DownstreamCommitState::Committed) {
-            return ReplayDecision::Stop(ReplayStopReason::DownstreamCommitted);
         }
         if matches!(self.phase, SendPhase::FirstSemanticEventObserved) {
             return ReplayDecision::Stop(ReplayStopReason::SemanticEventObserved);
@@ -327,8 +339,22 @@ mod tests {
     }
 
     #[test]
-    fn zero_write_proof_permits_a_new_independent_attempt() {
+    fn unproven_initial_write_state_fails_closed() {
         let outcome = AttemptTracker::new().finish(AttemptFailure::Transport, None);
+        assert_eq!(outcome.write_state(), UpstreamWriteState::Unknown);
+        assert_eq!(outcome.delivery(), DeliveryState::DeliveryUnknown);
+        assert_eq!(outcome.charge_state(), ChargeState::Unknown);
+        assert_eq!(
+            outcome.replay_decision(),
+            ReplayDecision::Stop(ReplayStopReason::DeliveryUnknown)
+        );
+    }
+
+    #[test]
+    fn zero_write_proof_permits_a_new_independent_attempt() {
+        let mut tracker = AttemptTracker::new();
+        tracker.zero_bytes_proven().unwrap();
+        let outcome = tracker.finish(AttemptFailure::Transport, None);
         assert_eq!(outcome.delivery(), DeliveryState::NotSent);
         assert_eq!(
             outcome.replay_decision(),
@@ -368,6 +394,20 @@ mod tests {
             ReplayDecision::Stop(ReplayStopReason::SemanticEventObserved)
         );
 
+        let mut committed_after_cancel = AttemptTracker::new();
+        committed_after_cancel.request_write_started().unwrap();
+        committed_after_cancel.upstream_response_observed().unwrap();
+        committed_after_cancel
+            .first_semantic_event_observed()
+            .unwrap();
+        committed_after_cancel.cancel().unwrap();
+        committed_after_cancel.downstream_committed().unwrap();
+        let outcome = committed_after_cancel.finish(AttemptFailure::Cancelled, None);
+        assert_eq!(
+            outcome.replay_decision(),
+            ReplayDecision::Stop(ReplayStopReason::DownstreamCommitted)
+        );
+
         let mut committed = AttemptTracker::new();
         committed.request_write_started().unwrap();
         committed.upstream_response_observed().unwrap();
@@ -376,6 +416,22 @@ mod tests {
         assert_eq!(
             outcome.replay_decision(),
             ReplayDecision::Stop(ReplayStopReason::DownstreamCommitted)
+        );
+    }
+
+    #[test]
+    fn zero_write_proof_takes_precedence_over_trusted_rejection() {
+        let mut tracker = AttemptTracker::new();
+        tracker.zero_bytes_proven().unwrap();
+        let outcome = tracker.finish(
+            AttemptFailure::RateLimited,
+            Some(TrustedPreExecutionRejection::test_only()),
+        );
+        assert_eq!(outcome.delivery(), DeliveryState::NotSent);
+        assert_eq!(outcome.charge_state(), ChargeState::NotCharged);
+        assert_eq!(
+            outcome.replay_decision(),
+            ReplayDecision::Permit(ReplayPermitReason::NotSent)
         );
     }
 
