@@ -697,7 +697,8 @@ fn managed_handle_requirement_requires_expiry_binding() {
     let registry = build_registry();
     let request = model_request();
     let one_shot_nonce = nonce(42);
-    let (bundle, claims) = managed_material(&registry, &request, one_shot_nonce, IssuerEpoch::new(1));
+    let (bundle, claims) =
+        managed_material(&registry, &request, one_shot_nonce, IssuerEpoch::new(1));
     let verifier = default_verifier(fresh_store());
 
     let mut missing_expiry = bundle.clone();
@@ -722,7 +723,11 @@ fn managed_handle_requirement_requires_expiry_binding() {
         encode_managed(&optional_handle, &claims, &MANAGED_KEY);
     let verified = verifier
         .verify_managed(
-            signed_from_wires(model_request(), &optional_attestation, &optional_bundle_wire),
+            signed_from_wires(
+                model_request(),
+                &optional_attestation,
+                &optional_bundle_wire,
+            ),
             &managed_connection(&verifier, IssuerEpoch::new(1)),
             &managed_active(&verifier, IssuerEpoch::new(1)),
         )
