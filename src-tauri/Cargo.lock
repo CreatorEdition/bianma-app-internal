@@ -2570,6 +2570,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingress-contract"
+version = "0.0.1"
+dependencies = [
+ "hmac",
+ "sha2",
+ "thiserror 2.0.18",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

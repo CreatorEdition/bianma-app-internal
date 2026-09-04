@@ -2,9 +2,11 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -32,10 +34,13 @@ jobs:
 
   frontend:
     name: Frontend Checks
+    if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -73,11 +78,14 @@ jobs:
         run: pnpm test:unit
 
   backend:
-    name: Backend Checks
+    name: Legacy Backend Checks
+    if: github.event_name == 'push' || github.base_ref == 'main'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -109,7 +117,7 @@ jobs:
         run: mkdir -p dist
 
       - name: Check Rust formatting
-        run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
+        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
 
       - name: Check routing-core
         run: |
@@ -118,7 +126,52 @@ jobs:
           test "$(cargo tree --manifest-path src-tauri/Cargo.toml -p routing-core --locked --edges normal --prefix none | wc -l)" -eq 1
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked -- -D warnings
 
       - name: Run tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+
+  ingress-contract:
+    name: Ingress Contract Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Clippy ingress-contract
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -p ingress-contract --all-targets --locked -- -D warnings
+
+      - name: Test ingress-contract
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --all-targets --locked
+
+      - name: Run ingress-contract doc tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --doc --locked
+
+  ingress-contract-msrv:
+    name: Ingress Contract MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust 1.85.0
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Test ingress-contract on declared MSRV
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --all-targets --locked
+
+      - name: Run ingress-contract doc tests on declared MSRV
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p ingress-contract --doc --locked
