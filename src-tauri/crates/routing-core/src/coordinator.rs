@@ -228,6 +228,7 @@ mod tests {
             _ => panic!(),
         };
         assert_eq!(tracker.position().index(), 2);
+        tracker.zero_bytes_proven().unwrap();
         match tracker.finish(AttemptFailure::Transport, None).advance() {
             CoordinatorStep::Stop(CoordinatorStopReason::PlanExhausted) => {}
             _ => panic!(),
