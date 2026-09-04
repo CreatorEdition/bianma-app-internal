@@ -1,11 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { homeDir, join } from "@tauri-apps/api/path";
+import { dirname, homeDir, join } from "@tauri-apps/api/path";
 import { settingsApi, type AppId } from "@/lib/api";
 import type { SettingsFormState } from "./useSettingsForm";
 
-type DirectoryKey = "appConfig" | "claude" | "codex" | "gemini" | "opencode";
+type AppDirectoryKey = AppId;
+type DirectoryKey = "appConfig" | AppDirectoryKey;
+type SettingsDirectoryField =
+  | "claudeConfigDir"
+  | "codexConfigDir"
+  | "geminiConfigDir"
+  | "opencodeConfigDir"
+  | "openclawConfigDir";
+
+const DEFAULT_CONFIG_FOLDERS: Record<AppId, string> = {
+  claude: ".claude",
+  codex: ".codex",
+  gemini: ".gemini",
+  opencode: ".config/opencode",
+  openclaw: ".openclaw",
+};
+
+const SETTINGS_DIRECTORY_FIELD_BY_APP: Record<AppId, SettingsDirectoryField> = {
+  claude: "claudeConfigDir",
+  codex: "codexConfigDir",
+  gemini: "geminiConfigDir",
+  opencode: "opencodeConfigDir",
+  openclaw: "openclawConfigDir",
+};
 
 export interface ResolvedDirectories {
   appConfig: string;
@@ -13,6 +36,7 @@ export interface ResolvedDirectories {
   codex: string;
   gemini: string;
   opencode: string;
+  openclaw: string;
 }
 
 const sanitizeDir = (value?: string | null): string | undefined => {
@@ -22,6 +46,13 @@ const sanitizeDir = (value?: string | null): string | undefined => {
 };
 
 const computeDefaultAppConfigDir = async (): Promise<string | undefined> => {
+  try {
+    const appConfigPath = await settingsApi.getAppConfigPath();
+    return await dirname(appConfigPath);
+  } catch {
+    // Rust 端路径解析失败时保留历史目录，确保旧安装与测试环境仍可用。
+  }
+
   try {
     const home = await homeDir();
     return await join(home, ".cc-switch");
@@ -39,15 +70,7 @@ const computeDefaultConfigDir = async (
 ): Promise<string | undefined> => {
   try {
     const home = await homeDir();
-    const folder =
-      app === "claude"
-        ? ".claude"
-        : app === "codex"
-          ? ".codex"
-          : app === "gemini"
-            ? ".gemini"
-            : ".config/opencode";
-    return await join(home, folder);
+    return await join(home, DEFAULT_CONFIG_FOLDERS[app]);
   } catch (error) {
     console.error(
       "[useDirectorySettings] Failed to resolve default config dir",
@@ -78,6 +101,7 @@ export interface UseDirectorySettingsResult {
     codexDir?: string,
     geminiDir?: string,
     opencodeDir?: string,
+    openclawDir?: string,
   ) => void;
 }
 
@@ -105,6 +129,7 @@ export function useDirectorySettings({
     codex: "",
     gemini: "",
     opencode: "",
+    openclaw: "",
   });
   const [isLoading, setIsLoading] = useState(true);
 
@@ -114,6 +139,7 @@ export function useDirectorySettings({
     codex: "",
     gemini: "",
     opencode: "",
+    openclaw: "",
   });
   const initialAppConfigDirRef = useRef<string | undefined>(undefined);
 
@@ -130,22 +156,26 @@ export function useDirectorySettings({
           codexDir,
           geminiDir,
           opencodeDir,
+          openclawDir,
           defaultAppConfig,
           defaultClaudeDir,
           defaultCodexDir,
           defaultGeminiDir,
           defaultOpencodeDir,
+          defaultOpenclawDir,
         ] = await Promise.all([
           settingsApi.getAppConfigDirOverride(),
           settingsApi.getConfigDir("claude"),
           settingsApi.getConfigDir("codex"),
           settingsApi.getConfigDir("gemini"),
           settingsApi.getConfigDir("opencode"),
+          settingsApi.getConfigDir("openclaw"),
           computeDefaultAppConfigDir(),
           computeDefaultConfigDir("claude"),
           computeDefaultConfigDir("codex"),
           computeDefaultConfigDir("gemini"),
           computeDefaultConfigDir("opencode"),
+          computeDefaultConfigDir("openclaw"),
         ]);
 
         if (!active) return;
@@ -158,6 +188,7 @@ export function useDirectorySettings({
           codex: defaultCodexDir ?? "",
           gemini: defaultGeminiDir ?? "",
           opencode: defaultOpencodeDir ?? "",
+          openclaw: defaultOpenclawDir ?? "",
         };
 
         setAppConfigDir(normalizedOverride);
@@ -169,6 +200,7 @@ export function useDirectorySettings({
           codex: codexDir || defaultsRef.current.codex,
           gemini: geminiDir || defaultsRef.current.gemini,
           opencode: opencodeDir || defaultsRef.current.opencode,
+          openclaw: openclawDir || defaultsRef.current.openclaw,
         });
       } catch (error) {
         console.error(
@@ -194,15 +226,10 @@ export function useDirectorySettings({
       if (key === "appConfig") {
         setAppConfigDir(sanitized);
       } else {
-        onUpdateSettings(
-          key === "claude"
-            ? { claudeConfigDir: sanitized }
-            : key === "codex"
-              ? { codexConfigDir: sanitized }
-              : key === "gemini"
-                ? { geminiConfigDir: sanitized }
-                : { opencodeConfigDir: sanitized },
-        );
+        const field = SETTINGS_DIRECTORY_FIELD_BY_APP[key];
+        onUpdateSettings({
+          [field]: sanitized,
+        } as Partial<SettingsFormState>);
       }
 
       setResolvedDirs((prev) => ({
@@ -222,38 +249,16 @@ export function useDirectorySettings({
 
   const updateDirectory = useCallback(
     (app: AppId, value?: string) => {
-      updateDirectoryState(
-        app === "claude"
-          ? "claude"
-          : app === "codex"
-            ? "codex"
-            : app === "gemini"
-              ? "gemini"
-              : "opencode",
-        value,
-      );
+      updateDirectoryState(app, value);
     },
     [updateDirectoryState],
   );
 
   const browseDirectory = useCallback(
     async (app: AppId) => {
-      const key: DirectoryKey =
-        app === "claude"
-          ? "claude"
-          : app === "codex"
-            ? "codex"
-            : app === "gemini"
-              ? "gemini"
-              : "opencode";
-      const currentValue =
-        key === "claude"
-          ? (settings?.claudeConfigDir ?? resolvedDirs.claude)
-          : key === "codex"
-            ? (settings?.codexConfigDir ?? resolvedDirs.codex)
-            : key === "gemini"
-              ? (settings?.geminiConfigDir ?? resolvedDirs.gemini)
-              : (settings?.opencodeConfigDir ?? resolvedDirs.opencode);
+      const key: AppDirectoryKey = app;
+      const field = SETTINGS_DIRECTORY_FIELD_BY_APP[key];
+      const currentValue = settings?.[field] ?? resolvedDirs[key];
 
       try {
         const picked = await settingsApi.selectConfigDirectory(currentValue);
@@ -294,14 +299,7 @@ export function useDirectorySettings({
 
   const resetDirectory = useCallback(
     async (app: AppId) => {
-      const key: DirectoryKey =
-        app === "claude"
-          ? "claude"
-          : app === "codex"
-            ? "codex"
-            : app === "gemini"
-              ? "gemini"
-              : "opencode";
+      const key: AppDirectoryKey = app;
       if (!defaultsRef.current[key]) {
         const fallback = await computeDefaultConfigDir(app);
         if (fallback) {
@@ -335,6 +333,7 @@ export function useDirectorySettings({
       codexDir?: string,
       geminiDir?: string,
       opencodeDir?: string,
+      openclawDir?: string,
     ) => {
       setAppConfigDir(initialAppConfigDirRef.current);
       setResolvedDirs({
@@ -344,6 +343,7 @@ export function useDirectorySettings({
         codex: codexDir ?? defaultsRef.current.codex,
         gemini: geminiDir ?? defaultsRef.current.gemini,
         opencode: opencodeDir ?? defaultsRef.current.opencode,
+        openclaw: openclawDir ?? defaultsRef.current.openclaw,
       });
     },
     [],

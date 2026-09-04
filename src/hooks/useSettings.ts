@@ -2,8 +2,8 @@ import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { providersApi, settingsApi, type AppId } from "@/lib/api";
-import { syncCurrentProvidersLiveSafe } from "@/utils/postChangeSync";
 import { useSettingsQuery, useSaveSettingsMutation } from "@/lib/query";
+import { syncCurrentProvidersLiveSafe } from "@/utils/postChangeSync";
 import type { Settings } from "@/types";
 import { useSettingsForm, type SettingsFormState } from "./useSettingsForm";
 import {
@@ -23,9 +23,13 @@ export interface UseSettingsResult {
   isLoading: boolean;
   isSaving: boolean;
   isPortable: boolean;
+  settingsQueryHasData: boolean;
+  settingsQueryIsError: boolean;
+  settingsQueryError: Error | null;
   appConfigDir?: string;
   resolvedDirs: ResolvedDirectories;
   requiresRestart: boolean;
+  refetchSettings: () => Promise<unknown>;
   updateSettings: (updates: Partial<SettingsFormState>) => void;
   updateDirectory: (app: AppId, value?: string) => void;
   updateAppConfigDir: (value?: string) => void;
@@ -61,8 +65,14 @@ const sanitizeDir = (value?: string | null): string | undefined => {
  */
 export function useSettings(): UseSettingsResult {
   const { t } = useTranslation();
-  const { data } = useSettingsQuery();
+  const settingsQuery = useSettingsQuery();
+  const { data } = settingsQuery;
   const saveMutation = useSaveSettingsMutation();
+
+  const refetchSettings = useCallback(
+    () => settingsQuery.refetch?.() ?? Promise.resolve(null),
+    [settingsQuery],
+  );
 
   // 1️⃣ 表单状态管理
   const {
@@ -110,6 +120,7 @@ export function useSettings(): UseSettingsResult {
       sanitizeDir(data?.codexConfigDir),
       sanitizeDir(data?.geminiConfigDir),
       sanitizeDir(data?.opencodeConfigDir),
+      sanitizeDir(data?.openclawConfigDir),
     );
     setRequiresRestart(false);
   }, [
@@ -135,6 +146,9 @@ export function useSettings(): UseSettingsResult {
         const sanitizedOpencodeDir = sanitizeDir(
           mergedSettings.opencodeConfigDir,
         );
+        const sanitizedOpenclawDir = sanitizeDir(
+          mergedSettings.openclawConfigDir,
+        );
         const { webdavSync: _ignoredWebdavSync, ...restSettings } =
           mergedSettings;
 
@@ -144,6 +158,7 @@ export function useSettings(): UseSettingsResult {
           codexConfigDir: sanitizedCodexDir,
           geminiConfigDir: sanitizedGeminiDir,
           opencodeConfigDir: sanitizedOpencodeDir,
+          openclawConfigDir: sanitizedOpenclawDir,
           language: mergedSettings.language,
         };
 
@@ -248,11 +263,16 @@ export function useSettings(): UseSettingsResult {
         const sanitizedOpencodeDir = sanitizeDir(
           mergedSettings.opencodeConfigDir,
         );
+        const sanitizedOpenclawDir = sanitizeDir(
+          mergedSettings.openclawConfigDir,
+        );
         const previousAppDir = initialAppConfigDir;
-        const previousClaudeDir = sanitizeDir(data?.claudeConfigDir);
-        const previousCodexDir = sanitizeDir(data?.codexConfigDir);
-        const previousGeminiDir = sanitizeDir(data?.geminiConfigDir);
-        const previousOpencodeDir = sanitizeDir(data?.opencodeConfigDir);
+        const providerDirsChanged =
+          sanitizedClaudeDir !== sanitizeDir(data?.claudeConfigDir) ||
+          sanitizedCodexDir !== sanitizeDir(data?.codexConfigDir) ||
+          sanitizedGeminiDir !== sanitizeDir(data?.geminiConfigDir) ||
+          sanitizedOpencodeDir !== sanitizeDir(data?.opencodeConfigDir) ||
+          sanitizedOpenclawDir !== sanitizeDir(data?.openclawConfigDir);
         const { webdavSync: _ignoredWebdavSync, ...restSettings } =
           mergedSettings;
 
@@ -262,10 +282,28 @@ export function useSettings(): UseSettingsResult {
           codexConfigDir: sanitizedCodexDir,
           geminiConfigDir: sanitizedGeminiDir,
           opencodeConfigDir: sanitizedOpencodeDir,
+          openclawConfigDir: sanitizedOpenclawDir,
           language: mergedSettings.language,
         };
 
         await saveMutation.mutateAsync(payload);
+
+        // 目录覆盖保存成功后，将当前供应商同步到新的 live 配置目录。
+        // 同步失败不回滚已保存的设置，只提示用户稍后重试。
+        if (providerDirsChanged) {
+          const syncResult = await syncCurrentProvidersLiveSafe();
+          if (!syncResult.ok) {
+            console.warn(
+              "[useSettings] Failed to sync current providers after directory change",
+              syncResult.error,
+            );
+            toast.error(
+              t("notifications.providerDirectorySyncFailed", {
+                defaultValue: "设置已保存，但当前供应商未能同步到新的配置目录",
+              }),
+            );
+          }
+        }
 
         await settingsApi.setAppConfigDirOverride(sanitizedAppDir ?? null);
 
@@ -358,26 +396,6 @@ export function useSettings(): UseSettingsResult {
           console.warn("[useSettings] Failed to refresh tray menu", error);
         }
 
-        // 如果 Claude/Codex/Gemini/OpenCode 的目录覆盖发生变化，则立即将"当前使用的供应商"写回对应应用的 live 配置
-        const claudeDirChanged = sanitizedClaudeDir !== previousClaudeDir;
-        const codexDirChanged = sanitizedCodexDir !== previousCodexDir;
-        const geminiDirChanged = sanitizedGeminiDir !== previousGeminiDir;
-        const opencodeDirChanged = sanitizedOpencodeDir !== previousOpencodeDir;
-        if (
-          claudeDirChanged ||
-          codexDirChanged ||
-          geminiDirChanged ||
-          opencodeDirChanged
-        ) {
-          const syncResult = await syncCurrentProvidersLiveSafe();
-          if (!syncResult.ok) {
-            console.warn(
-              "[useSettings] Failed to sync current providers after directory change",
-              syncResult.error,
-            );
-          }
-        }
-
         const appDirChanged = sanitizedAppDir !== (previousAppDir ?? undefined);
         setRequiresRestart(appDirChanged);
 
@@ -423,9 +441,13 @@ export function useSettings(): UseSettingsResult {
     isLoading,
     isSaving: saveMutation.isPending,
     isPortable,
+    settingsQueryHasData: data !== undefined,
+    settingsQueryIsError: Boolean(settingsQuery.isError),
+    settingsQueryError: settingsQuery.error ?? null,
     appConfigDir,
     resolvedDirs,
     requiresRestart,
+    refetchSettings,
     updateSettings,
     updateDirectory,
     updateAppConfigDir,

@@ -19,7 +19,7 @@
 
 - 公開ブランド: `bianma-app`
 - 公開主プロトコル: `bianma://`
-- 旧 `ccswitch://`: 移行と後方互換のみ
+- 移行互換の詳細: [移行互換ガイド（ZH）](../zh/5-faq/5.5-migration-compatibility.md) を参照
 
 ## 主要リンク
 
@@ -84,5 +84,5 @@
 
 ## コントリビュート
 
-- [GitHub Issues](https://github.com/CreatorEdition/bianma-app/issues)
-- [GitHub Repository](https://github.com/CreatorEdition/bianma-app)
+- [GitHub Issues](https://github.com/CreatorEdition/bianma-app-internal/issues)
+- [GitHub Repository](https://github.com/CreatorEdition/bianma-app-internal)

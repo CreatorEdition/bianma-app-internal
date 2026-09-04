@@ -269,6 +269,9 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 18. Provider Latency Results 表（最近一次批量测速缓存）
+        Self::create_provider_latency_results_table(conn)?;
+
         // 尝试添加 live_takeover_active 列到 proxy_config 表
         let _ = conn.execute(
             "ALTER TABLE proxy_config ADD COLUMN live_takeover_active INTEGER NOT NULL DEFAULT 0",
@@ -392,6 +395,11 @@ impl Database {
                         log::info!("迁移数据库从 v5 到 v6（使用量聚合表 + Copilot 模板类型统一）");
                         Self::migrate_v5_to_v6(conn)?;
                         Self::set_user_version(conn, 6)?;
+                    }
+                    6 => {
+                        log::info!("迁移数据库从 v6 到 v7（Provider 批量测速缓存）");
+                        Self::migrate_v6_to_v7(conn)?;
+                        Self::set_user_version(conn, 7)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1042,6 +1050,46 @@ impl Database {
         }
 
         log::info!("v5 -> v6 迁移完成：已添加使用量日聚合表，统一 copilot 模板类型");
+        Ok(())
+    }
+
+    /// v6 -> v7 迁移：添加 Provider 批量测速缓存表。
+    fn migrate_v6_to_v7(conn: &Connection) -> Result<(), AppError> {
+        Self::create_provider_latency_results_table(conn)?;
+        log::info!("v6 -> v7 迁移完成：已添加 provider_latency_results 表");
+        Ok(())
+    }
+
+    fn create_provider_latency_results_table(conn: &Connection) -> Result<(), AppError> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS provider_latency_results (
+                provider_id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                latency_ms INTEGER,
+                status INTEGER,
+                error TEXT,
+                tested_at INTEGER NOT NULL,
+                PRIMARY KEY (provider_id, app_type),
+                FOREIGN KEY (provider_id, app_type) REFERENCES providers(id, app_type) ON DELETE CASCADE
+            )",
+            [],
+        )
+        .map_err(|e| {
+            AppError::Database(format!("创建 provider_latency_results 表失败: {e}"))
+        })?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_provider_latency_results_tested_at
+             ON provider_latency_results(tested_at DESC)",
+            [],
+        )
+        .map_err(|e| {
+            AppError::Database(format!(
+                "创建 provider_latency_results tested_at 索引失败: {e}"
+            ))
+        })?;
+
         Ok(())
     }
 

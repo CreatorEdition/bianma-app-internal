@@ -1,6 +1,7 @@
 mod app_config;
 mod app_store;
 mod auto_launch;
+mod brand;
 mod claude_mcp;
 mod claude_plugin;
 mod codex_config;
@@ -94,7 +95,38 @@ fn redact_url_for_log(url_str: &str) -> String {
 }
 
 fn is_supported_deeplink_url(url_str: &str) -> bool {
-    url_str.starts_with("bianma://") || url_str.starts_with("ccswitch://")
+    let lower = url_str.to_ascii_lowercase();
+    let primary_prefix = format!("{}://", crate::brand::PRIMARY_DEEPLINK_SCHEME);
+    let legacy_prefix = format!("{}://", crate::brand::LEGACY_DEEPLINK_SCHEME);
+    if !lower.starts_with(&primary_prefix) && !lower.starts_with(&legacy_prefix) {
+        return false;
+    }
+
+    match url::Url::parse(url_str) {
+        Ok(url) => crate::brand::is_supported_deeplink_scheme(url.scheme()),
+        Err(_) => true,
+    }
+}
+
+#[cfg(test)]
+mod deeplink_support_tests {
+    use super::is_supported_deeplink_url;
+
+    #[test]
+    fn deeplink_support_requires_scheme_separator() {
+        assert!(is_supported_deeplink_url(
+            "bianma://v1/import?resource=provider"
+        ));
+        assert!(is_supported_deeplink_url(
+            "ccswitch://v1/import?resource=provider"
+        ));
+        assert!(!is_supported_deeplink_url(
+            "bianma:v1/import?resource=provider"
+        ));
+        assert!(!is_supported_deeplink_url(
+            "ccswitch:v1/import?resource=provider"
+        ));
+    }
 }
 
 /// 统一处理 `bianma://` 主协议和 `ccswitch://` 兼容深链接 URL
@@ -917,8 +949,11 @@ pub fn run() {
             commands::get_current_prompt_file_content,
             // model list fetch (OpenAI-compatible /v1/models)
             commands::fetch_models_for_config,
+            commands::fetch_provider_models,
             // ours: endpoint speed test + custom endpoint management
             commands::test_api_endpoints,
+            commands::test_providers_latency,
+            commands::get_cached_latency_results,
             commands::get_custom_endpoints,
             commands::add_custom_endpoint,
             commands::remove_custom_endpoint,

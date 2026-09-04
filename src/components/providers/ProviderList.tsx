@@ -64,6 +64,7 @@ interface ProviderListProps {
   isProxyTakeover?: boolean; // 代理接管模式（Live配置已被接管）
   activeProviderId?: string; // 代理当前实际使用的供应商 ID（用于故障转移模式下标注绿色边框）
   onSetAsDefault?: (provider: Provider) => void; // OpenClaw: set as default model
+  displayMode?: "full" | "single";
 }
 
 export function ProviderList({
@@ -86,8 +87,10 @@ export function ProviderList({
   isProxyTakeover = false,
   activeProviderId,
   onSetAsDefault,
+  displayMode = "full",
 }: ProviderListProps) {
   const { t } = useTranslation();
+  const isSingleMode = displayMode === "single";
   const { checkProvider, isChecking } = useStreamCheck(appId);
   const { sortedProviders, sensors, handleDragEnd } = useDragSort(
     providers,
@@ -245,6 +248,10 @@ export function ProviderList({
   });
 
   useEffect(() => {
+    if (isSingleMode) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
       if ((event.metaKey || event.ctrlKey) && key === "f") {
@@ -260,9 +267,13 @@ export function ProviderList({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [isSingleMode]);
 
   useEffect(() => {
+    if (isSingleMode) {
+      return;
+    }
+
     if (isSearchOpen) {
       const frame = requestAnimationFrame(() => {
         searchInputRef.current?.focus();
@@ -270,9 +281,13 @@ export function ProviderList({
       });
       return () => cancelAnimationFrame(frame);
     }
-  }, [isSearchOpen]);
+  }, [isSearchOpen, isSingleMode]);
 
   const filteredProviders = useMemo(() => {
+    if (isSingleMode) {
+      return sortedProviders;
+    }
+
     const keyword = searchTerm.trim().toLowerCase();
     if (!keyword) return sortedProviders;
     return sortedProviders.filter((provider) => {
@@ -281,7 +296,7 @@ export function ProviderList({
         field?.toString().toLowerCase().includes(keyword),
       );
     });
-  }, [searchTerm, sortedProviders]);
+  }, [isSingleMode, searchTerm, sortedProviders]);
 
   if (isLoading) {
     return (
@@ -306,141 +321,162 @@ export function ProviderList({
     );
   }
 
-  const renderProviderList = () => (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragEnd={handleDragEnd}
-    >
-      <SortableContext
-        items={filteredProviders.map((provider) => provider.id)}
-        strategy={verticalListSortingStrategy}
-      >
+  const renderProviderCard = (provider: Provider, sortable: boolean) => {
+    const isOmo = provider.category === "omo";
+    const isOmoSlim = provider.category === "omo-slim";
+    const isOmoCurrent = isOmo && provider.id === (currentOmoId || "");
+    const isOmoSlimCurrent =
+      isOmoSlim && provider.id === (currentOmoSlimId || "");
+    const isCurrent = isOmo
+      ? isOmoCurrent
+      : isOmoSlim
+        ? isOmoSlimCurrent
+        : provider.id === currentProviderId;
+    const sharedProps = {
+      provider,
+      isCurrent,
+      appId,
+      isInConfig: isProviderInConfig(provider.id),
+      isOmo,
+      isOmoSlim,
+      onSwitch,
+      onEdit,
+      onDelete,
+      onRemoveFromConfig,
+      onDisableOmo,
+      onDisableOmoSlim,
+      onDuplicate,
+      onConfigureUsage: onConfigureUsage ?? (() => undefined),
+      onOpenWebsite,
+      onOpenTerminal,
+      onTest:
+        appId !== "opencode" && appId !== "openclaw" ? handleTest : undefined,
+      isTesting: isChecking(provider.id),
+      isProxyRunning,
+      isProxyTakeover,
+      isAutoFailoverEnabled: isFailoverModeActive,
+      failoverPriority: getFailoverPriority(provider.id),
+      isInFailoverQueue: isInFailoverQueue(provider.id),
+      onToggleFailover: (enabled: boolean) =>
+        handleToggleFailover(provider.id, enabled),
+      activeProviderId,
+      isDefaultModel: isProviderDefaultModel(provider.id),
+      onSetAsDefault: onSetAsDefault
+        ? () => onSetAsDefault(provider)
+        : undefined,
+    };
+
+    if (sortable) {
+      return <SortableProviderCard key={provider.id} {...sharedProps} />;
+    }
+
+    return (
+      <ProviderCard
+        key={provider.id}
+        {...sharedProps}
+        dragHandleProps={undefined}
+      />
+    );
+  };
+
+  const renderProviderList = () => {
+    if (isSingleMode) {
+      return (
         <div className="space-y-3">
-          {filteredProviders.map((provider) => {
-            const isOmo = provider.category === "omo";
-            const isOmoSlim = provider.category === "omo-slim";
-            const isOmoCurrent = isOmo && provider.id === (currentOmoId || "");
-            const isOmoSlimCurrent =
-              isOmoSlim && provider.id === (currentOmoSlimId || "");
-            return (
-              <SortableProviderCard
-                key={provider.id}
-                provider={provider}
-                isCurrent={
-                  isOmo
-                    ? isOmoCurrent
-                    : isOmoSlim
-                      ? isOmoSlimCurrent
-                      : provider.id === currentProviderId
-                }
-                appId={appId}
-                isInConfig={isProviderInConfig(provider.id)}
-                isOmo={isOmo}
-                isOmoSlim={isOmoSlim}
-                onSwitch={onSwitch}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                onRemoveFromConfig={onRemoveFromConfig}
-                onDisableOmo={onDisableOmo}
-                onDisableOmoSlim={onDisableOmoSlim}
-                onDuplicate={onDuplicate}
-                onConfigureUsage={onConfigureUsage}
-                onOpenWebsite={onOpenWebsite}
-                onOpenTerminal={onOpenTerminal}
-                onTest={
-                  appId !== "opencode" && appId !== "openclaw"
-                    ? handleTest
-                    : undefined
-                }
-                isTesting={isChecking(provider.id)}
-                isProxyRunning={isProxyRunning}
-                isProxyTakeover={isProxyTakeover}
-                isAutoFailoverEnabled={isFailoverModeActive}
-                failoverPriority={getFailoverPriority(provider.id)}
-                isInFailoverQueue={isInFailoverQueue(provider.id)}
-                onToggleFailover={(enabled) =>
-                  handleToggleFailover(provider.id, enabled)
-                }
-                activeProviderId={activeProviderId}
-                // OpenClaw: default model
-                isDefaultModel={isProviderDefaultModel(provider.id)}
-                onSetAsDefault={
-                  onSetAsDefault ? () => onSetAsDefault(provider) : undefined
-                }
-              />
-            );
-          })}
+          {filteredProviders.map((provider) =>
+            renderProviderCard(provider, false),
+          )}
         </div>
-      </SortableContext>
-    </DndContext>
-  );
+      );
+    }
+
+    return (
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext
+          items={filteredProviders.map((provider) => provider.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className="space-y-3">
+            {filteredProviders.map((provider) =>
+              renderProviderCard(provider, true),
+            )}
+          </div>
+        </SortableContext>
+      </DndContext>
+    );
+  };
 
   return (
-    <div className="mt-4 space-y-4">
-      <AnimatePresence>
-        {isSearchOpen && (
-          <motion.div
-            key="provider-search"
-            initial={{ opacity: 0, y: -8, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.98 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-            className="fixed left-1/2 top-[6.5rem] z-40 w-[min(90vw,26rem)] -translate-x-1/2 sm:right-6 sm:left-auto sm:translate-x-0"
-          >
-            <div className="p-4 space-y-3 border shadow-md rounded-2xl border-white/10 bg-background/95 shadow-black/20 backdrop-blur-md">
-              <div className="relative flex items-center gap-2">
-                <Search className="absolute w-4 h-4 -translate-y-1/2 pointer-events-none left-3 top-1/2 text-muted-foreground" />
-                <Input
-                  ref={searchInputRef}
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder={t("provider.searchPlaceholder", {
-                    defaultValue: "Search name, notes, or URL...",
-                  })}
-                  aria-label={t("provider.searchAriaLabel", {
-                    defaultValue: "Search providers",
-                  })}
-                  className="pr-16 pl-9"
-                />
-                {searchTerm && (
+    <div className={isSingleMode ? "space-y-4" : "mt-4 space-y-4"}>
+      {!isSingleMode && (
+        <AnimatePresence>
+          {isSearchOpen && (
+            <motion.div
+              key="provider-search"
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="fixed left-1/2 top-[6.5rem] z-40 w-[min(90vw,26rem)] -translate-x-1/2 sm:right-6 sm:left-auto sm:translate-x-0"
+            >
+              <div className="p-4 space-y-3 border shadow-md rounded-2xl border-white/10 bg-background/95 shadow-black/20 backdrop-blur-md">
+                <div className="relative flex items-center gap-2">
+                  <Search className="absolute w-4 h-4 -translate-y-1/2 pointer-events-none left-3 top-1/2 text-muted-foreground" />
+                  <Input
+                    ref={searchInputRef}
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                    placeholder={t("provider.searchPlaceholder", {
+                      defaultValue: "Search name, notes, or URL...",
+                    })}
+                    aria-label={t("provider.searchAriaLabel", {
+                      defaultValue: "Search providers",
+                    })}
+                    className="pr-16 pl-9"
+                  />
+                  {searchTerm && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="absolute text-xs -translate-y-1/2 right-11 top-1/2"
+                      onClick={() => setSearchTerm("")}
+                    >
+                      {t("common.clear", { defaultValue: "Clear" })}
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="absolute text-xs -translate-y-1/2 right-11 top-1/2"
-                    onClick={() => setSearchTerm("")}
+                    size="icon"
+                    className="ml-auto"
+                    onClick={() => setIsSearchOpen(false)}
+                    aria-label={t("provider.searchCloseAriaLabel", {
+                      defaultValue: "Close provider search",
+                    })}
                   >
-                    {t("common.clear", { defaultValue: "Clear" })}
+                    <X className="w-4 h-4" />
                   </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="ml-auto"
-                  onClick={() => setIsSearchOpen(false)}
-                  aria-label={t("provider.searchCloseAriaLabel", {
-                    defaultValue: "Close provider search",
-                  })}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                  <span>
+                    {t("provider.searchScopeHint", {
+                      defaultValue: "Matches provider name, notes, and URL.",
+                    })}
+                  </span>
+                  <span>
+                    {t("provider.searchCloseHint", {
+                      defaultValue: "Press Esc to close",
+                    })}
+                  </span>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                <span>
-                  {t("provider.searchScopeHint", {
-                    defaultValue: "Matches provider name, notes, and URL.",
-                  })}
-                </span>
-                <span>
-                  {t("provider.searchCloseHint", {
-                    defaultValue: "Press Esc to close",
-                  })}
-                </span>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      )}
 
       {filteredProviders.length === 0 ? (
         <div className="px-6 py-8 text-sm text-center border border-dashed rounded-lg border-border text-muted-foreground">

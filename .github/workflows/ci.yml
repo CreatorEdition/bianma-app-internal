@@ -11,6 +11,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-boundary:
+    name: Public Release Boundary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Audit public release boundary
+        run: node scripts/audit-public-release-preflight.mjs
+
   frontend:
     name: Frontend Checks
     runs-on: ubuntu-latest

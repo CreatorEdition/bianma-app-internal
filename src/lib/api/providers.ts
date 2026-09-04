@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  DiscoveredModel,
   Provider,
+  ProviderProtocolHint,
   UniversalProvider,
   UniversalProvidersMap,
 } from "@/types";
+import { modelFetchApi } from "./model-fetch";
 import type { AppId } from "./types";
 
 export interface ProviderSortUpdate {
@@ -17,12 +20,40 @@ export interface ProviderSwitchEvent {
   providerId: string;
 }
 
+export interface UniversalProviderSyncedEvent {
+  id?: string;
+  appType?: AppId;
+}
+
 export interface SwitchResult {
   warnings: string[];
 }
 
 export interface OpenTerminalOptions {
   cwd?: string;
+}
+
+export interface ProviderLatencyResult {
+  providerId: string;
+  providerName: string;
+  baseUrl: string;
+  latencyMs: number | null;
+  status: number | null;
+  error: string | null;
+  testedAt: number;
+}
+
+export interface TestProvidersLatencyResponse {
+  results: ProviderLatencyResult[];
+  total: number;
+  success: number;
+  failed: number;
+}
+
+export interface DiscoverProviderModelsOptions {
+  baseUrl: string;
+  apiKey?: string;
+  protocolHint?: ProviderProtocolHint;
 }
 
 export const providersApi = {
@@ -94,6 +125,15 @@ export const providersApi = {
     });
   },
 
+  async onUniversalProviderSynced(
+    handler: (event: UniversalProviderSyncedEvent) => void | Promise<void>,
+  ): Promise<UnlistenFn> {
+    return await listen("universal-provider-synced", (event) => {
+      const payload = (event.payload ?? {}) as UniversalProviderSyncedEvent;
+      void handler(payload);
+    });
+  },
+
   /**
    * 打开指定提供商的终端
    * 任何提供商都可以打开终端，不受是否为当前激活提供商的限制
@@ -142,6 +182,41 @@ export const providersApi = {
    */
   async importOpenClawFromLive(): Promise<number> {
     return await invoke("import_openclaw_providers_from_live");
+  },
+
+  /**
+   * 批量测试 Provider 延迟，并缓存最近一次结果。
+   */
+  async testProvidersLatency(
+    appType: AppId,
+    providerIds?: string[],
+    timeoutSecs?: number,
+  ): Promise<TestProvidersLatencyResponse> {
+    return await invoke("test_providers_latency", {
+      request: {
+        appType,
+        providerIds,
+        timeoutSecs,
+      },
+    });
+  },
+
+  /**
+   * 获取最近一次 Provider 延迟测速缓存。
+   */
+  async getCachedLatencyResults(
+    appType: AppId,
+  ): Promise<ProviderLatencyResult[]> {
+    return await invoke("get_cached_latency_results", { appType });
+  },
+
+  /**
+   * 通用模型发现包装，供后续 Provider Workspace 使用。
+   */
+  async discoverModels(
+    options: DiscoverProviderModelsOptions,
+  ): Promise<DiscoveredModel[]> {
+    return await modelFetchApi.fetchProviderModels(options);
   },
 };
 

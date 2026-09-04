@@ -1,7 +1,7 @@
 import { Suspense, type ComponentType } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { providersApi } from "@/lib/api/providers";
 import {
   resetProviderState,
@@ -13,6 +13,7 @@ import { emitTauriEvent } from "../msw/tauriMocks";
 
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
+let App: ComponentType;
 
 vi.mock("sonner", () => ({
   toast: {
@@ -51,6 +52,41 @@ vi.mock("@/components/providers/ProviderList", () => ({
       <button onClick={() => onCreate?.()}>create</button>
     </div>
   ),
+}));
+
+vi.mock("@/components/providers/ProviderWorkspacePanel", () => ({
+  ProviderWorkspacePanel: ({
+    providers,
+    currentProviderId,
+    onSwitch,
+    onEdit,
+    onDuplicate,
+    onConfigureUsage,
+    onOpenWebsite,
+    onCreate,
+  }: any) => {
+    const provider =
+      providers[currentProviderId] ?? Object.values(providers)[0] ?? null;
+
+    return (
+      <div>
+        <div data-testid="provider-list">{JSON.stringify(providers)}</div>
+        <div data-testid="current-provider">{currentProviderId}</div>
+        <button onClick={() => provider && onSwitch(provider)}>switch</button>
+        <button onClick={() => provider && onEdit(provider)}>edit</button>
+        <button onClick={() => provider && onDuplicate(provider)}>
+          duplicate
+        </button>
+        <button onClick={() => provider && onConfigureUsage(provider)}>
+          usage
+        </button>
+        <button onClick={() => onOpenWebsite("https://example.com")}>
+          open-website
+        </button>
+        <button onClick={() => onCreate?.()}>create</button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/providers/AddProviderDialog", () => ({
@@ -134,6 +170,16 @@ vi.mock("@/components/UpdateBadge", () => ({
   ),
 }));
 
+vi.mock("@/components/settings/SettingsPage", () => ({
+  SettingsPage: ({ strategyOnly }: { strategyOnly?: boolean }) => (
+    <div data-testid={strategyOnly ? "strategy-page" : "settings-page"} />
+  ),
+}));
+
+vi.mock("@/components/usage/UsageDashboard", () => ({
+  UsageDashboard: () => <div data-testid="stats-page" />,
+}));
+
 vi.mock("@/components/mcp/McpPanel", () => ({
   default: ({ open, onOpenChange }: any) =>
     open ? (
@@ -156,16 +202,73 @@ const renderApp = (AppComponent: ComponentType) => {
   );
 };
 
+const openServices = () => {
+  fireEvent.click(screen.getByTestId("primary-nav-services"));
+};
+
+const APP_IMPORT_TIMEOUT_MS = 20000;
+
 describe("App integration with MSW", () => {
+  beforeAll(async () => {
+    App = (await import("@/App")).default;
+  }, APP_IMPORT_TIMEOUT_MS);
+
   beforeEach(() => {
     resetProviderState();
+    localStorage.clear();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
   });
 
-  it("covers basic provider flows via real hooks", async () => {
-    const { default: App } = await import("@/App");
+  it("migrates legacy last app and view keys on startup", () => {
+    localStorage.setItem("cc-switch-last-app", "codex");
+    localStorage.setItem("cc-switch-last-view", "providers");
+
     renderApp(App);
+
+    expect(localStorage.getItem("bianma-last-app")).toBe("codex");
+    expect(localStorage.getItem("cc-switch-last-app")).toBeNull();
+    expect(localStorage.getItem("bianma-last-view")).toBe("services");
+    expect(localStorage.getItem("cc-switch-last-view")).toBeNull();
+  });
+
+  it("exposes the alpha primary path as real views", async () => {
+    renderApp(App);
+
+    expect(screen.getByTestId("primary-nav-home")).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    openServices();
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "claude-1",
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("primary-nav-strategy"));
+    await waitFor(() =>
+      expect(screen.getByTestId("strategy-page")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByTestId("primary-nav-stats"));
+    await waitFor(() =>
+      expect(screen.getByTestId("stats-page")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByTestId("primary-nav-home"));
+    await waitFor(() =>
+      expect(screen.getByTestId("primary-nav-home")).toHaveAttribute(
+        "aria-current",
+        "page",
+      ),
+    );
+  });
+
+  it("covers basic provider flows via real hooks", async () => {
+    renderApp(App);
+    openServices();
 
     await waitFor(() =>
       expect(screen.getByTestId("provider-list").textContent).toContain(
@@ -221,8 +324,8 @@ describe("App integration with MSW", () => {
   });
 
   it("shows toast when auto sync fails in background", async () => {
-    const { default: App } = await import("@/App");
     renderApp(App);
+    openServices();
 
     await waitFor(() =>
       expect(screen.getByTestId("provider-list").textContent).toContain(
@@ -260,8 +363,8 @@ describe("App integration with MSW", () => {
     setCurrentProviderId("openclaw", "deepseek");
     setLiveProviderIds("openclaw", ["deepseek-copy"]);
 
-    const { default: App } = await import("@/App");
     renderApp(App);
+    openServices();
 
     fireEvent.click(screen.getByText("switch-openclaw"));
 
@@ -306,8 +409,8 @@ describe("App integration with MSW", () => {
       .spyOn(providersApi, "getOpenClawLiveProviderIds")
       .mockRejectedValueOnce(new Error("broken config"));
 
-    const { default: App } = await import("@/App");
     renderApp(App);
+    openServices();
 
     fireEvent.click(screen.getByText("switch-openclaw"));
 

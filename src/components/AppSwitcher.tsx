@@ -2,6 +2,11 @@ import type { AppId } from "@/lib/api";
 import type { VisibleApps } from "@/types";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { cn } from "@/lib/utils";
+import { writeCompatibleStorage } from "@/lib/storageCompat";
+import {
+  LAST_APP_LEGACY_STORAGE_KEYS,
+  LAST_APP_STORAGE_KEY,
+} from "@/lib/storageKeys";
 
 interface AppSwitcherProps {
   activeApp: AppId;
@@ -11,8 +16,6 @@ interface AppSwitcherProps {
 }
 
 const ALL_APPS: AppId[] = ["claude", "codex", "gemini", "opencode", "openclaw"];
-const STORAGE_KEY = "cc-switch-last-app";
-
 export function AppSwitcher({
   activeApp,
   onSwitch,
@@ -21,7 +24,9 @@ export function AppSwitcher({
 }: AppSwitcherProps) {
   const handleSwitch = (app: AppId) => {
     if (app === activeApp) return;
-    localStorage.setItem(STORAGE_KEY, app);
+    writeCompatibleStorage(LAST_APP_STORAGE_KEY, app, [
+      ...LAST_APP_LEGACY_STORAGE_KEYS,
+    ]);
     onSwitch(app);
   };
   const iconSize = 20;

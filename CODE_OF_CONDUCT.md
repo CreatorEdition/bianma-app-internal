@@ -38,7 +38,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at **farion1231@gmail.com**. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported privately using a contact method listed on the maintainers' [GitHub profile](https://github.com/CreatorEdition). If no private method is available, open a GitHub Discussion asking for a private contact channel without including sensitive details. Do not post conduct complaints or sensitive details in public GitHub Discussions. Security vulnerabilities should use the GitHub Security Advisories process described in [SECURITY.md](SECURITY.md). All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 
@@ -128,7 +128,7 @@ For answers to common questions about this code of conduct, see the FAQ at [http
 
 ## 监督
 
-辱骂、骚扰或其他不可接受的行为可通过 **farion1231@gmail.com** 向负责监督的社区领袖报告。所有投诉都将得到及时和公平的审查和调查。
+辱骂、骚扰或其他不可接受的行为，请使用维护者 [GitHub 个人资料](https://github.com/CreatorEdition)中列出的私密联系方式进行报告。若没有可用的私密方式，只能在 GitHub Discussions 发起不含敏感细节的请求，以获取私密联系渠道。请勿在公开 GitHub Discussions 中提交行为投诉或敏感细节。安全漏洞请遵循 [SECURITY.md](SECURITY.md) 中说明的 GitHub 安全公告流程。所有投诉都将得到及时和公平的审查和调查。
 
 所有社区领袖都有义务尊重任何事件报告者的隐私和安全。
 

@@ -127,8 +127,11 @@ mod tests {
 
     #[test]
     fn test_masked_key_long() {
-        let auth = AuthInfo::new("sk-1234567890abcdef".to_string(), AuthStrategy::Bearer);
-        assert_eq!(auth.masked_key(), "sk-1...cdef");
+        let auth = AuthInfo::new(
+            "placeholder-api-key-value".to_string(),
+            AuthStrategy::Bearer,
+        );
+        assert_eq!(auth.masked_key(), "plac...alue");
     }
 
     #[test]

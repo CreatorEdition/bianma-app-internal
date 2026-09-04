@@ -30,6 +30,13 @@ export interface Provider {
   inFailoverQueue?: boolean;
 }
 
+export type ProviderAppId =
+  | "claude"
+  | "codex"
+  | "gemini"
+  | "opencode"
+  | "openclaw";
+
 export interface AppConfig {
   providers: Record<string, Provider>;
   current: string;
@@ -133,6 +140,18 @@ export interface AuthBinding {
   accountId?: string;
 }
 
+// 模型发现协议提示
+export type ProviderProtocolHint = "openai" | "anthropic";
+
+// 通用模型发现结果
+export interface DiscoveredModel {
+  id: string;
+  name: string;
+  provider?: string;
+  contextWindow?: number;
+  ownedBy?: string;
+}
+
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息
@@ -172,6 +191,12 @@ export interface ProviderMeta {
   providerType?: string;
   // GitHub Copilot 关联账号 ID（旧字段，保留兼容读取）
   githubAccountId?: string;
+  // 是否收藏该服务商
+  favoriteProvider?: boolean;
+  // 按应用维度记录收藏模型
+  favoriteModelsByApp?: Partial<Record<ProviderAppId, string[]>>;
+  // 模型发现协议偏好
+  modelDiscoveryProtocol?: ProviderProtocolHint;
 }
 
 // Skill 同步方式
@@ -205,6 +230,12 @@ export interface WebDavSyncStatus {
   lastRemoteManifestHash?: string | null;
 }
 
+export interface WebDavSyncScope {
+  providers: boolean;
+  mcp: boolean;
+  prompts: boolean;
+}
+
 // WebDAV 同步配置
 export interface WebDavSyncSettings {
   enabled?: boolean;
@@ -214,6 +245,7 @@ export interface WebDavSyncSettings {
   password?: string;
   remoteRoot?: string;
   profile?: string;
+  scope?: WebDavSyncScope;
   status?: WebDavSyncStatus;
 }
 
@@ -288,6 +320,10 @@ export interface Settings {
   currentProviderCodex?: string;
   // 当前 Gemini 供应商 ID（优先于数据库 is_current）
   currentProviderGemini?: string;
+  // 当前 OpenCode 供应商 ID（优先于数据库 is_current）
+  currentProviderOpencode?: string;
+  // 当前 OpenClaw 供应商 ID（优先于数据库 is_current）
+  currentProviderOpenclaw?: string;
 
   // ===== Skill 同步设置 =====
   // Skill 同步方式：auto（默认，优先 symlink）、symlink、copy

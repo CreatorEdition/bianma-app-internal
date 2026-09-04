@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
@@ -88,6 +87,31 @@ fn default_profile() -> String {
     "default".to_string()
 }
 
+fn default_sync_scope_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebDavSyncScope {
+    #[serde(default = "default_sync_scope_enabled")]
+    pub providers: bool,
+    #[serde(default = "default_sync_scope_enabled")]
+    pub mcp: bool,
+    #[serde(default = "default_sync_scope_enabled")]
+    pub prompts: bool,
+}
+
+impl Default for WebDavSyncScope {
+    fn default() -> Self {
+        Self {
+            providers: true,
+            mcp: true,
+            prompts: true,
+        }
+    }
+}
+
 /// WebDAV 同步设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,6 +131,8 @@ pub struct WebDavSyncSettings {
     #[serde(default = "default_profile")]
     pub profile: String,
     #[serde(default)]
+    pub scope: WebDavSyncScope,
+    #[serde(default)]
     pub status: WebDavSyncStatus,
 }
 
@@ -120,6 +146,7 @@ impl Default for WebDavSyncSettings {
             password: String::new(),
             remote_root: default_remote_root(),
             profile: default_profile(),
+            scope: WebDavSyncScope::default(),
             status: WebDavSyncStatus::default(),
         }
     }
@@ -418,6 +445,7 @@ fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
     #[cfg(unix)]
     {
         use std::fs::OpenOptions;
+        use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
 
         let mut file = OpenOptions::new()
@@ -704,4 +732,36 @@ pub fn update_webdav_sync_status(status: WebDavSyncStatus) -> Result<(), AppErro
             sync.status = status;
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WebDavSyncScope, WebDavSyncSettings};
+
+    #[test]
+    fn webdav_scope_defaults_to_all_enabled_when_missing() {
+        let settings: WebDavSyncSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "autoSync": true,
+            "baseUrl": "https://dav.example.com/dav/",
+            "username": "alice"
+        }))
+        .expect("legacy webdav sync settings should deserialize");
+
+        assert!(settings.scope.providers);
+        assert!(settings.scope.mcp);
+        assert!(settings.scope.prompts);
+    }
+
+    #[test]
+    fn webdav_scope_defaults_missing_fields_to_enabled() {
+        let scope: WebDavSyncScope = serde_json::from_value(serde_json::json!({
+            "providers": false
+        }))
+        .expect("partial webdav sync scope should deserialize");
+
+        assert!(!scope.providers);
+        assert!(scope.mcp);
+        assert!(scope.prompts);
+    }
 }

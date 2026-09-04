@@ -2,9 +2,22 @@
 
 This directory contains the Flatpak manifest for `bianma-app`, used to convert the generated `.deb` artifact into an installable `.flatpak` package via CI or local builds.
 
-> Public brand: `bianma-app`. The `com.ccswitch.desktop`, `cc-switch.deb`, and `CC-Switch-Linux.flatpak` identifiers documented below are retained only for Flatpak compatibility and existing tooling continuity.
+This document is a packaging and compatibility note for maintainers. It is not the current public installation guide or the current formal distribution entry for desktop users.
 
-The manifest and app ID still use the legacy `com.ccswitch.desktop` names so existing Flatpak tooling stays compatible, even though the runtime it installs is bianma-app.
+If you are looking for end-user install guidance, use the public README and user manual instead of this file.
+
+## Compatibility Identifiers
+
+The installed runtime is `bianma-app`, but the current Flatpak packaging pipeline still keeps these legacy identifiers for tooling continuity:
+
+- App ID: `com.ccswitch.desktop`
+- Desktop file: `com.ccswitch.desktop.desktop`
+- Desktop Exec / binary: `bianma-app` (the Cargo package binary)
+- Intermediate deb name: `cc-switch.deb`
+- Exported bundle name: `CC-Switch-Linux.flatpak`
+- Deep-link schemes: `bianma`, `ccswitch`
+
+User-facing Flatpak metadata now uses `bianma.ai` and links to `CreatorEdition/bianma-app-internal`. The legacy app id, desktop filename, intermediate deb filename, and exported bundle name remain compatibility handles for existing tooling and package consumers; the installed executable is the `bianma-app` binary produced by Cargo. The desktop entry registers both `bianma://` and legacy `ccswitch://` handlers so old import links keep working after Flatpak installation.
 
 ## Dependencies
 
@@ -22,26 +35,26 @@ flatpak install -y --user flathub org.gnome.Platform//46 org.gnome.Sdk//46
 
 ## Local Build (Generate .flatpak from .deb)
 
-1) Build the deb on Linux first:
+1. Build the deb on Linux first:
 
 ```bash
 pnpm tauri build -- --bundles deb
 ```
 
-2) Copy the generated deb to this directory. The pipeline still expects a `cc-switch.deb` filename so keep that legacy name on disk before packaging:
+2. Copy the generated deb into this directory using the compatibility filename required by the current pipeline:
 
 ```bash
 cp "$(find src-tauri/target/release/bundle -name '*.deb' | head -n 1)" flatpak/cc-switch.deb
 ```
 
-3) Build the local Flatpak repository and export the `.flatpak`. The repository and bundle names remain the older `cc-switch` identifiers and the output bundle is kept as `CC-Switch-Linux.flatpak` for continuity:
+3. Build the local Flatpak repository and export the bundle using the compatibility identifiers above:
 
 ```bash
 flatpak-builder --force-clean --user --disable-cache --repo flatpak-repo flatpak-build flatpak/com.ccswitch.desktop.yml
 flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo flatpak-repo CC-Switch-Linux.flatpak com.ccswitch.desktop
 ```
 
-4) Install and run the Flatpak bundle using the historic identifiers:
+4. Install and run the Flatpak bundle:
 
 ```bash
 flatpak install --user ./CC-Switch-Linux.flatpak
@@ -50,11 +63,12 @@ flatpak run com.ccswitch.desktop
 
 ## Permissions Note
 
-The current manifest uses `--filesystem=home` by default for “download and run” convenience, allowing the app to directly read/write CLI configuration files and app data on the host (and supporting the “directory override” feature). Legacy paths like `~/.cc-switch` are kept in the manifest so existing installations still function; the live CLI is bianma-app.
+The current manifest uses `--filesystem=home` by default for “download and run” convenience, allowing the app to directly read/write CLI configuration files and app data on the host (and supporting the “directory override” feature). Legacy paths such as `~/.cc-switch` remain in the manifest for compatibility with existing installations; the installed app is still bianma-app.
 
 If you prefer minimal permissions (e.g., for Flathub submission or security concerns), you can replace `--filesystem=home` in `flatpak/com.ccswitch.desktop.yml` with more precise grants:
 
 ```yaml
+finish-args:
   - --filesystem=~/.cc-switch:create
   - --filesystem=~/.claude:create
   - --filesystem=~/.claude.json

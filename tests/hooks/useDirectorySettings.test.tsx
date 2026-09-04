@@ -4,10 +4,14 @@ import { useDirectorySettings } from "@/hooks/useDirectorySettings";
 import type { SettingsFormState } from "@/hooks/useSettingsForm";
 
 const getAppConfigDirOverrideMock = vi.hoisted(() => vi.fn());
+const getAppConfigPathMock = vi.hoisted(() => vi.fn());
 const getConfigDirMock = vi.hoisted(() => vi.fn());
 const selectConfigDirectoryMock = vi.hoisted(() => vi.fn());
 const setAppConfigDirOverrideMock = vi.hoisted(() => vi.fn());
 const homeDirMock = vi.hoisted(() => vi.fn<() => Promise<string>>());
+const dirnameMock = vi.hoisted(() =>
+  vi.fn(async (path: string) => path.split("/").slice(0, -1).join("/")),
+);
 const joinMock = vi.hoisted(() =>
   vi.fn(async (...segments: string[]) => segments.join("/")),
 );
@@ -16,6 +20,7 @@ const toastErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({
   settingsApi: {
     getAppConfigDirOverride: getAppConfigDirOverrideMock,
+    getAppConfigPath: getAppConfigPathMock,
     getConfigDir: getConfigDirMock,
     selectConfigDirectory: selectConfigDirectoryMock,
     setAppConfigDirOverride: setAppConfigDirOverrideMock,
@@ -23,6 +28,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@tauri-apps/api/path", () => ({
+  dirname: dirnameMock,
   homeDir: homeDirMock,
   join: joinMock,
 }));
@@ -48,6 +54,9 @@ const createSettings = (
   enableClaudePluginIntegration: false,
   claudeConfigDir: "/claude/custom",
   codexConfigDir: "/codex/custom",
+  geminiConfigDir: "/gemini/custom",
+  opencodeConfigDir: "/opencode/custom",
+  openclawConfigDir: "/openclaw/custom",
   language: "zh",
   ...overrides,
 });
@@ -59,6 +68,12 @@ describe("useDirectorySettings", () => {
     vi.clearAllMocks();
 
     homeDirMock.mockResolvedValue("/home/mock");
+    getAppConfigPathMock.mockResolvedValue(
+      "/home/mock/.config/bianma/config.json",
+    );
+    dirnameMock.mockImplementation(async (path: string) =>
+      path.split("/").slice(0, -1).join("/"),
+    );
     joinMock.mockImplementation(async (...segments: string[]) =>
       segments.join("/"),
     );
@@ -68,7 +83,8 @@ describe("useDirectorySettings", () => {
       if (app === "claude") return "/remote/claude";
       if (app === "codex") return "/remote/codex";
       if (app === "gemini") return "/remote/gemini";
-      return "/remote/opencode";
+      if (app === "opencode") return "/remote/opencode";
+      return "/remote/openclaw";
     });
     selectConfigDirectoryMock.mockReset();
   });
@@ -89,8 +105,50 @@ describe("useDirectorySettings", () => {
       codex: "/remote/codex",
       gemini: "/remote/gemini",
       opencode: "/remote/opencode",
+      openclaw: "/remote/openclaw",
     });
   });
+
+  it("uses dirname of app config path as default app config directory", async () => {
+    const { result } = renderHook(() =>
+      useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(getAppConfigPathMock).toHaveBeenCalledTimes(1);
+    expect(dirnameMock).toHaveBeenCalledWith(
+      "/home/mock/.config/bianma/config.json",
+    );
+    expect(joinMock).not.toHaveBeenCalledWith("/home/mock", ".cc-switch");
+    expect(result.current.resolvedDirs.appConfig).toBe(
+      "/home/mock/.config/bianma",
+    );
+  });
+
+  it.each([
+    [
+      "getAppConfigPath",
+      () => getAppConfigPathMock.mockRejectedValueOnce(new Error("missing")),
+    ],
+    ["dirname", () => dirnameMock.mockRejectedValueOnce(new Error("bad path"))],
+  ])(
+    "falls back to legacy app config directory when %s fails",
+    async (_, setupFailure) => {
+      setupFailure();
+
+      const { result } = renderHook(() =>
+        useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
+      );
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      expect(result.current.resolvedDirs.appConfig).toBe(
+        "/home/mock/.cc-switch",
+      );
+      expect(joinMock).toHaveBeenCalledWith("/home/mock", ".cc-switch");
+    },
+  );
 
   it("updates claude directory when browsing succeeds", async () => {
     selectConfigDirectoryMock.mockResolvedValue("/picked/claude");
@@ -113,6 +171,46 @@ describe("useDirectorySettings", () => {
       claudeConfigDir: "/picked/claude",
     });
     expect(result.current.resolvedDirs.claude).toBe("/picked/claude");
+  });
+
+  it("updates openclaw directory when browsing succeeds", async () => {
+    selectConfigDirectoryMock.mockResolvedValue("  /picked/openclaw  ");
+
+    const { result } = renderHook(() =>
+      useDirectorySettings({
+        settings: createSettings({ openclawConfigDir: undefined }),
+        onUpdateSettings,
+      }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.browseDirectory("openclaw");
+    });
+
+    expect(selectConfigDirectoryMock).toHaveBeenCalledWith("/remote/openclaw");
+    expect(onUpdateSettings).toHaveBeenCalledWith({
+      openclawConfigDir: "/picked/openclaw",
+    });
+    expect(result.current.resolvedDirs.openclaw).toBe("/picked/openclaw");
+  });
+
+  it("updates openclaw directory directly", async () => {
+    const { result } = renderHook(() =>
+      useDirectorySettings({ settings: createSettings(), onUpdateSettings }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      result.current.updateDirectory("openclaw", "  /manual/openclaw  ");
+    });
+
+    expect(onUpdateSettings).toHaveBeenCalledWith({
+      openclawConfigDir: "/manual/openclaw",
+    });
+    expect(result.current.resolvedDirs.openclaw).toBe("/manual/openclaw");
   });
 
   it("reports error when directory selection fails", async () => {
@@ -178,7 +276,7 @@ describe("useDirectorySettings", () => {
 
     expect(result.current.appConfigDir).toBe("/new/app");
     expect(selectConfigDirectoryMock).toHaveBeenCalledWith(
-      "/home/mock/.cc-switch",
+      "/home/mock/.config/bianma",
     );
   });
 
@@ -188,6 +286,7 @@ describe("useDirectorySettings", () => {
         settings: createSettings({
           claudeConfigDir: "/custom/claude",
           codexConfigDir: "/custom/codex",
+          openclawConfigDir: "/custom/openclaw",
         }),
         onUpdateSettings,
       }),
@@ -197,6 +296,7 @@ describe("useDirectorySettings", () => {
     await act(async () => {
       await result.current.resetDirectory("claude");
       await result.current.resetDirectory("codex");
+      await result.current.resetDirectory("openclaw");
       await result.current.resetAppConfigDir();
     });
 
@@ -206,9 +306,15 @@ describe("useDirectorySettings", () => {
     expect(onUpdateSettings).toHaveBeenCalledWith({
       codexConfigDir: undefined,
     });
+    expect(onUpdateSettings).toHaveBeenCalledWith({
+      openclawConfigDir: undefined,
+    });
     expect(result.current.resolvedDirs.claude).toBe("/home/mock/.claude");
     expect(result.current.resolvedDirs.codex).toBe("/home/mock/.codex");
-    expect(result.current.resolvedDirs.appConfig).toBe("/home/mock/.cc-switch");
+    expect(result.current.resolvedDirs.openclaw).toBe("/home/mock/.openclaw");
+    expect(result.current.resolvedDirs.appConfig).toBe(
+      "/home/mock/.config/bianma",
+    );
   });
 
   it("resetAllDirectories applies provided resolved values", async () => {
@@ -223,6 +329,7 @@ describe("useDirectorySettings", () => {
         "/server/codex",
         "/server/gemini",
         "/server/opencode",
+        "/server/openclaw",
       );
     });
 
@@ -230,5 +337,6 @@ describe("useDirectorySettings", () => {
     expect(result.current.resolvedDirs.codex).toBe("/server/codex");
     expect(result.current.resolvedDirs.gemini).toBe("/server/gemini");
     expect(result.current.resolvedDirs.opencode).toBe("/server/opencode");
+    expect(result.current.resolvedDirs.openclaw).toBe("/server/openclaw");
   });
 });

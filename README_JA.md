@@ -33,4 +33,4 @@ CLI から直接複数のモデルや URI を切り替え、統一された設�
 - `pnpm test:unit`
 
 ## Contributing
-Issue や Pull Request を通じて貢献できます。まず [Issue](https://github.com/CreatorEdition/bianma-app/issues) で相談し、PR を作成してください。
+Issue や Pull Request を通じて貢献できます。まず [Issue](https://github.com/CreatorEdition/bianma-app-internal/issues) で相談し、PR を作成してください。

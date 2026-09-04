@@ -2,6 +2,7 @@
 
 import type { TemplateValueConfig } from "../config/claudeProviderPresets";
 import { normalizeTomlText } from "@/utils/textNormalization";
+import type { Provider, ProviderAppId, ProviderProtocolHint } from "@/types";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 const isPlainObject = (value: unknown): value is Record<string, any> => {
@@ -660,6 +661,126 @@ export const getCodexBaseUrl = (
   } catch {
     return undefined;
   }
+};
+
+export interface ProviderConnectionDetails {
+  baseUrl?: string;
+  apiKey?: string;
+  protocolHint?: ProviderProtocolHint;
+}
+
+const getProviderBaseUrlByApp = (
+  provider: Provider,
+  appId: ProviderAppId,
+): string | undefined => {
+  const settingsConfig = provider.settingsConfig ?? {};
+
+  if (appId === "claude") {
+    const env = settingsConfig.env as Record<string, unknown> | undefined;
+    return typeof env?.ANTHROPIC_BASE_URL === "string"
+      ? env.ANTHROPIC_BASE_URL
+      : undefined;
+  }
+
+  if (appId === "codex") {
+    return getCodexBaseUrl(provider);
+  }
+
+  if (appId === "gemini") {
+    const env = settingsConfig.env as Record<string, unknown> | undefined;
+    return typeof env?.GOOGLE_GEMINI_BASE_URL === "string"
+      ? env.GOOGLE_GEMINI_BASE_URL
+      : undefined;
+  }
+
+  return undefined;
+};
+
+export const inferProviderProtocolHint = (
+  provider: Provider,
+  appId: ProviderAppId,
+): ProviderProtocolHint | undefined => {
+  if (provider.meta?.modelDiscoveryProtocol) {
+    return provider.meta.modelDiscoveryProtocol;
+  }
+
+  if (provider.meta?.apiFormat === "anthropic") {
+    return "anthropic";
+  }
+
+  if (
+    provider.meta?.apiFormat === "openai_chat" ||
+    provider.meta?.apiFormat === "openai_responses"
+  ) {
+    return "openai";
+  }
+
+  const baseUrl = getProviderBaseUrlByApp(provider, appId);
+  if (baseUrl?.toLowerCase().includes("anthropic")) {
+    return "anthropic";
+  }
+
+  if (appId === "claude") {
+    return "anthropic";
+  }
+
+  if (appId === "codex" || appId === "gemini") {
+    return "openai";
+  }
+
+  return undefined;
+};
+
+export const getProviderConnectionDetails = (
+  provider: Provider,
+  appId: ProviderAppId,
+): ProviderConnectionDetails => {
+  const settingsConfig = provider.settingsConfig ?? {};
+
+  if (appId === "claude") {
+    const env = settingsConfig.env as Record<string, unknown> | undefined;
+    return {
+      baseUrl: getProviderBaseUrlByApp(provider, appId),
+      apiKey:
+        typeof env?.ANTHROPIC_AUTH_TOKEN === "string"
+          ? env.ANTHROPIC_AUTH_TOKEN
+          : typeof env?.ANTHROPIC_API_KEY === "string"
+            ? env.ANTHROPIC_API_KEY
+            : undefined,
+      protocolHint: inferProviderProtocolHint(provider, appId),
+    };
+  }
+
+  if (appId === "codex") {
+    const auth = settingsConfig.auth as Record<string, unknown> | undefined;
+    const env = settingsConfig.env as Record<string, unknown> | undefined;
+    return {
+      baseUrl: getProviderBaseUrlByApp(provider, appId),
+      apiKey:
+        typeof auth?.OPENAI_API_KEY === "string"
+          ? auth.OPENAI_API_KEY
+          : typeof env?.CODEX_API_KEY === "string"
+            ? env.CODEX_API_KEY
+            : undefined,
+      protocolHint: inferProviderProtocolHint(provider, appId),
+    };
+  }
+
+  if (appId === "gemini") {
+    const env = settingsConfig.env as Record<string, unknown> | undefined;
+    return {
+      baseUrl: getProviderBaseUrlByApp(provider, appId),
+      apiKey:
+        typeof env?.GEMINI_API_KEY === "string"
+          ? env.GEMINI_API_KEY
+          : undefined,
+      protocolHint: inferProviderProtocolHint(provider, appId),
+    };
+  }
+
+  return {
+    protocolHint: inferProviderProtocolHint(provider, appId),
+  };
 };
 
 // 在 Codex 的 TOML 配置文本中写入或更新 base_url 字段

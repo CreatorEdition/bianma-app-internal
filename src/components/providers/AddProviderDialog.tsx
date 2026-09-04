@@ -53,7 +53,16 @@ export function AddProviderDialog({
   const handleUniversalProviderSave = useCallback(
     async (provider: UniversalProvider) => {
       try {
-        await universalProvidersApi.upsert(provider);
+        const saved = await universalProvidersApi.upsert(provider);
+        if (!saved) {
+          throw new Error("Universal provider was not saved");
+        }
+
+        const synced = await universalProvidersApi.sync(provider.id);
+        if (!synced) {
+          throw new Error("Universal provider sync failed");
+        }
+
         toast.success(
           t("universalProvider.addSuccess", {
             defaultValue: "统一供应商添加成功",
@@ -307,7 +316,7 @@ export function AddProviderDialog({
           </TabsContent>
 
           <TabsContent value="universal" className="mt-0">
-            <UniversalProviderPanel />
+            <UniversalProviderPanel showAddButton={false} />
           </TabsContent>
         </Tabs>
       ) : (

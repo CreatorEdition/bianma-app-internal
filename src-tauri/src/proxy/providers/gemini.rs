@@ -280,12 +280,12 @@ mod tests {
         let adapter = GeminiAdapter::new();
         let provider = create_provider(json!({
             "env": {
-                "GEMINI_API_KEY": "AIza-test-key-12345678"
+                "GEMINI_API_KEY": "gemini-api-key-placeholder"
             }
         }));
 
         let auth = adapter.extract_auth(&provider).unwrap();
-        assert_eq!(auth.api_key, "AIza-test-key-12345678");
+        assert_eq!(auth.api_key, "gemini-api-key-placeholder");
         assert_eq!(auth.strategy, AuthStrategy::Google);
         assert!(auth.access_token.is_none());
     }
@@ -364,12 +364,12 @@ mod tests {
         let adapter = GeminiAdapter::new();
         let provider = create_provider(json!({
             "env": {
-                "GEMINI_API_KEY": "AIza-fallback-key"
+                "GEMINI_API_KEY": "gemini-fallback-api-key"
             }
         }));
 
         let auth = adapter.extract_auth(&provider).unwrap();
-        assert_eq!(auth.api_key, "AIza-fallback-key");
+        assert_eq!(auth.api_key, "gemini-fallback-api-key");
     }
 
     #[test]

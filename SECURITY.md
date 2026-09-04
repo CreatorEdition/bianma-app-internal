@@ -17,9 +17,9 @@ Only the latest release of bianma-app receives security updates.
 
 **请不要通过公开的 GitHub Issue 报告安全漏洞。**
 
-Instead, please report them through [GitHub Security Advisories](https://github.com/CreatorEdition/bianma-app/security/advisories/new).
+Instead, please report them through [GitHub Security Advisories](https://github.com/CreatorEdition/bianma-app-internal/security/advisories/new).
 
-请通过 [GitHub 安全公告](https://github.com/CreatorEdition/bianma-app/security/advisories/new) 进行报告。
+请通过 [GitHub 安全公告](https://github.com/CreatorEdition/bianma-app-internal/security/advisories/new) 进行报告。
 
 When reporting, please include:
 
@@ -53,6 +53,6 @@ Reporters will be credited in the release notes unless they prefer to remain ano
 
 ## Security Updates / 安全更新
 
-Security fixes are released as patch versions and announced via [GitHub Releases](https://github.com/CreatorEdition/bianma-app/releases). We recommend always updating to the latest version.
+Security fixes are delivered as patch updates. Please follow the current approved distribution channel used by your team or operator and keep your installation updated to the latest supported version.
 
-安全修复通过补丁版本发布，并通过 [GitHub Releases](https://github.com/CreatorEdition/bianma-app/releases) 通知。建议始终更新到最新版本。
+安全修复通过补丁更新交付。请遵循你当前团队或运营侧使用的正式分发渠道，并始终更新到最新受支持版本。

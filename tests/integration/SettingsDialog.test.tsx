@@ -123,7 +123,11 @@ vi.mock("@/components/settings/AboutSection", () => ({
 const renderDialog = (
   props?: Partial<React.ComponentProps<typeof SettingsPage>>,
 ) => {
-  const client = new QueryClient();
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
   return render(
     <QueryClientProvider client={client}>
       <Suspense fallback={<div data-testid="loading">loading</div>}>
@@ -156,6 +160,37 @@ describe("SettingsPage integration", () => {
       "settings.browsePlaceholderApp",
     );
     expect((appInput as HTMLInputElement).value).toBe("/home/mock/.cc-switch");
+  });
+
+  it("shows readable settings load error and retries after Tauri invoke runtime failure", async () => {
+    let getSettingsAttempts = 0;
+    server.use(
+      http.post("http://tauri.local/get_settings", () => {
+        getSettingsAttempts += 1;
+        if (getSettingsAttempts === 1) {
+          return new HttpResponse("__TAURI_INTERNALS__ is not defined", {
+            status: 500,
+          });
+        }
+        return HttpResponse.json(getSettings());
+      }),
+    );
+
+    renderDialog();
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("设置加载失败"),
+    );
+    expect(
+      screen.getByText(/无法连接桌面运行时.*__TAURI_INTERNALS__/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+    );
+    expect(getSettingsAttempts).toBe(2);
   });
 
   it("imports configuration and triggers success callback", async () => {

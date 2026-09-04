@@ -233,6 +233,10 @@ export const handlers = [
     success(getAppConfigDirOverride()),
   ),
 
+  http.post(`${TAURI_ENDPOINT}/get_app_config_path`, () =>
+    success("/home/mock/.cc-switch/config.json"),
+  ),
+
   http.post(
     `${TAURI_ENDPOINT}/apply_claude_plugin_config`,
     async ({ request }) => {
@@ -252,7 +256,14 @@ export const handlers = [
 
   http.post(`${TAURI_ENDPOINT}/get_config_dir`, async ({ request }) => {
     const { app } = await withJson<{ app: AppId }>(request);
-    return success(app === "claude" ? "/default/claude" : "/default/codex");
+    const configDirs: Record<AppId, string> = {
+      claude: "/default/claude",
+      codex: "/default/codex",
+      gemini: "/default/gemini",
+      opencode: "/default/opencode",
+      openclaw: "/default/openclaw",
+    };
+    return success(configDirs[app] ?? "/default/codex");
   }),
 
   http.post(`${TAURI_ENDPOINT}/is_portable_mode`, () => success(false)),

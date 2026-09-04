@@ -3,13 +3,69 @@
  * @param error 错误对象
  * @returns 提取的错误信息字符串
  */
+export interface StructuredBackendError {
+  code?: string;
+  message?: string;
+  context?: Record<string, unknown>;
+  rawMessage: string;
+}
+
+/**
+ * 解析后端返回的 JSON 字符串错误
+ */
+export const parseStructuredError = (
+  error: unknown,
+): StructuredBackendError | null => {
+  if (!error) return null;
+
+  const rawMessage =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : typeof error === "object" && error !== null
+          ? String(
+              (error as Record<string, unknown>).message ??
+                (error as Record<string, unknown>).error ??
+                "",
+            )
+          : "";
+
+  const trimmed = rawMessage.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      code?: string;
+      message?: string;
+      context?: Record<string, unknown>;
+    };
+
+    return {
+      code: typeof parsed.code === "string" ? parsed.code : undefined,
+      message: typeof parsed.message === "string" ? parsed.message : undefined,
+      context:
+        parsed.context && typeof parsed.context === "object"
+          ? parsed.context
+          : undefined,
+      rawMessage,
+    };
+  } catch {
+    return null;
+  }
+};
+
 export const extractErrorMessage = (error: unknown): string => {
   if (!error) return "";
   if (typeof error === "string") {
-    return error;
+    const parsed = parseStructuredError(error);
+    return parsed?.message || error;
   }
   if (error instanceof Error && error.message.trim()) {
-    return error.message;
+    const parsed = parseStructuredError(error);
+    return parsed?.message || error.message;
   }
 
   if (typeof error === "object") {

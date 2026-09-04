@@ -6,7 +6,6 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
 import { providersApi, type AppId } from "@/lib/api";
 import type {
@@ -17,34 +16,11 @@ import type {
   ClaudeApiFormat,
   ClaudeApiKeyField,
 } from "@/types";
-import {
-  providerPresets,
-  type ProviderPreset,
-} from "@/config/claudeProviderPresets";
-import {
-  codexProviderPresets,
-  type CodexProviderPreset,
-} from "@/config/codexProviderPresets";
-import {
-  geminiProviderPresets,
-  type GeminiProviderPreset,
-} from "@/config/geminiProviderPresets";
-import {
-  opencodeProviderPresets,
-  type OpenCodeProviderPreset,
-} from "@/config/opencodeProviderPresets";
-import {
-  openclawProviderPresets,
-  type OpenClawProviderPreset,
-  type OpenClawSuggestedDefaults,
-} from "@/config/openclawProviderPresets";
+import type { OpenClawSuggestedDefaults } from "@/config/openclawProviderPresets";
 import { OpenCodeFormFields } from "./OpenCodeFormFields";
 import { OpenClawFormFields } from "./OpenClawFormFields";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
-import {
-  applyTemplateValues,
-  hasApiKeyField,
-} from "@/utils/providerConfigUtils";
+import { hasApiKeyField } from "@/utils/providerConfigUtils";
 import { mergeProviderMeta } from "@/utils/providerMetaUtils";
 import { getCodexCustomTemplate } from "@/config/codexTemplates";
 import CodexConfigEditor from "./CodexConfigEditor";
@@ -53,12 +29,29 @@ import GeminiConfigEditor from "./GeminiConfigEditor";
 import JsonEditor from "@/components/JsonEditor";
 import { Label } from "@/components/ui/label";
 import { ProviderPresetSelector } from "./ProviderPresetSelector";
+import { ProviderKeyField } from "./ProviderKeyField";
+import {
+  getPresetCategoryKeys,
+  getPresetCategoryLabels,
+  getPresetEntriesByApp,
+  groupPresetEntries,
+} from "./providerPresetUtils";
+import {
+  getCustomPresetResetPlan,
+  resolvePresetSelection,
+  type PresetSelectionResult,
+} from "./providerPresetApplyUtils";
+import {
+  isGithubCopilotProvider,
+  resolveSubmitSettingsConfig,
+  validateNonOfficialCredentials,
+  validateProviderSpecificFields,
+} from "./providerSubmitUtils";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
 import { CodexFormFields } from "./CodexFormFields";
 import { GeminiFormFields } from "./GeminiFormFields";
 import { OmoFormFields } from "./OmoFormFields";
-import { parseOmoOtherFieldsObject } from "@/types/omo";
 import {
   ProviderAdvancedConfig,
   type PricingModelSourceOption,
@@ -93,16 +86,6 @@ import {
 } from "./helpers/opencodeFormUtils";
 import { resolveManagedAccountId } from "@/lib/authBinding";
 import { useOpenClawLiveProviderIds } from "@/hooks/useOpenClaw";
-
-type PresetEntry = {
-  id: string;
-  preset:
-    | ProviderPreset
-    | CodexProviderPreset
-    | GeminiProviderPreset
-    | OpenCodeProviderPreset
-    | OpenClawProviderPreset;
-};
 
 interface ProviderFormProps {
   appId: AppId;
@@ -388,54 +371,9 @@ export function ProviderForm({
     form.reset(defaultValues);
   }, [defaultValues, form]);
 
-  const presetCategoryLabels: Record<string, string> = useMemo(
-    () => ({
-      official: t("providerForm.categoryOfficial", {
-        defaultValue: "官方",
-      }),
-      cn_official: t("providerForm.categoryCnOfficial", {
-        defaultValue: "国内官方",
-      }),
-      aggregator: t("providerForm.categoryAggregation", {
-        defaultValue: "聚合服务",
-      }),
-      third_party: t("providerForm.categoryThirdParty", {
-        defaultValue: "第三方",
-      }),
-      omo: "OMO",
-    }),
-    [t],
-  );
+  const presetCategoryLabels = useMemo(() => getPresetCategoryLabels(t), [t]);
 
-  const presetEntries = useMemo(() => {
-    if (appId === "codex") {
-      return codexProviderPresets.map<PresetEntry>((preset, index) => ({
-        id: `codex-${index}`,
-        preset,
-      }));
-    } else if (appId === "gemini") {
-      return geminiProviderPresets.map<PresetEntry>((preset, index) => ({
-        id: `gemini-${index}`,
-        preset,
-      }));
-    } else if (appId === "opencode") {
-      return opencodeProviderPresets.map<PresetEntry>((preset, index) => ({
-        id: `opencode-${index}`,
-        preset,
-      }));
-    } else if (appId === "openclaw") {
-      return openclawProviderPresets.map<PresetEntry>((preset, index) => ({
-        id: `openclaw-${index}`,
-        preset,
-      }));
-    }
-    return providerPresets
-      .filter((p) => !p.hidden)
-      .map<PresetEntry>((preset, index) => ({
-        id: `claude-${index}`,
-        preset,
-      }));
-  }, [appId]);
+  const presetEntries = useMemo(() => getPresetEntriesByApp(appId), [appId]);
 
   const {
     templateValues,
@@ -448,6 +386,12 @@ export function ProviderForm({
     presetEntries: appId === "claude" ? presetEntries : [],
     settingsConfig: form.getValues("settingsConfig"),
     onConfigChange: handleSettingsConfigChange,
+  });
+
+  const isCopilotProvider = isGithubCopilotProvider({
+    templateProviderType: templatePreset?.providerType,
+    initialProviderType: initialData?.meta?.providerType,
+    baseUrl,
   });
 
   const {
@@ -716,212 +660,67 @@ export function ProviderForm({
       return;
     }
 
-    if (appId === "opencode" && !isAnyOmoCategory) {
-      const keyPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-      if (!opencodeForm.opencodeProviderKey.trim()) {
-        toast.error(t("opencode.providerKeyRequired"));
-        return;
-      }
-      if (!keyPattern.test(opencodeForm.opencodeProviderKey)) {
-        toast.error(t("opencode.providerKeyInvalid"));
-        return;
-      }
-      if (isProviderKeyLockStateLoading) {
-        toast.error(
-          t("providerForm.providerKeyStatusLoading", {
-            defaultValue: "正在加载供应商标识状态，请稍后再试",
-          }),
-        );
-        return;
-      }
-      if (
-        !isProviderKeyLocked &&
-        additiveExistingProviderKeys.includes(opencodeForm.opencodeProviderKey)
-      ) {
-        toast.error(t("opencode.providerKeyDuplicate"));
-        return;
-      }
-      if (Object.keys(opencodeForm.opencodeModels).length === 0) {
-        toast.error(t("opencode.modelsRequired"));
-        return;
-      }
-    }
-
-    // OpenClaw: validate provider key
-    if (appId === "openclaw") {
-      const keyPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-      if (!openclawForm.openclawProviderKey.trim()) {
-        toast.error(t("openclaw.providerKeyRequired"));
-        return;
-      }
-      if (!keyPattern.test(openclawForm.openclawProviderKey)) {
-        toast.error(t("openclaw.providerKeyInvalid"));
-        return;
-      }
-      if (isProviderKeyLockStateLoading) {
-        toast.error(
-          t("providerForm.providerKeyStatusLoading", {
-            defaultValue: "正在加载供应商标识状态，请稍后再试",
-          }),
-        );
-        return;
-      }
-      if (
-        !isProviderKeyLocked &&
-        additiveExistingProviderKeys.includes(openclawForm.openclawProviderKey)
-      ) {
-        toast.error(t("openclaw.providerKeyDuplicate"));
-        return;
-      }
+    const providerSpecificError = validateProviderSpecificFields({
+      appId,
+      isAnyOmoCategory,
+      isProviderKeyLockStateLoading,
+      isProviderKeyLocked,
+      opencodeProviderKey: opencodeForm.opencodeProviderKey,
+      openclawProviderKey: openclawForm.openclawProviderKey,
+      additiveExistingProviderKeys,
+      opencodeModels: opencodeForm.opencodeModels,
+      t,
+    });
+    if (providerSpecificError) {
+      toast.error(providerSpecificError);
+      return;
     }
 
     // 非官方供应商必填校验：端点和 API Key
     // cloud_provider（如 Bedrock）通过模板变量处理认证，跳过通用校验
     // GitHub Copilot 使用 OAuth 认证，不需要 API Key
-    const isCopilotProvider =
-      templatePreset?.providerType === "github_copilot" ||
-      initialData?.meta?.providerType === "github_copilot" ||
-      baseUrl.includes("githubcopilot.com");
-    // GitHub Copilot 必须先登录才能添加
-    if (isCopilotProvider && !isCopilotAuthenticated) {
-      toast.error(
-        t("copilot.loginRequired", {
-          defaultValue: "请先登录 GitHub Copilot",
-        }),
-      );
+    const credentialError = validateNonOfficialCredentials({
+      appId,
+      category,
+      isCopilotProvider,
+      isCopilotAuthenticated,
+      baseUrl,
+      apiKey,
+      codexBaseUrl,
+      codexApiKey,
+      geminiBaseUrl,
+      geminiApiKey,
+      t,
+    });
+    if (credentialError) {
+      toast.error(credentialError);
       return;
     }
 
-    if (category !== "official" && category !== "cloud_provider") {
-      if (appId === "claude") {
-        if (!baseUrl.trim()) {
-          toast.error(
-            t("providerForm.endpointRequired", {
-              defaultValue: "非官方供应商请填写 API 端点",
-            }),
-          );
-          return;
-        }
-        if (!isCopilotProvider && !apiKey.trim()) {
-          toast.error(
-            t("providerForm.apiKeyRequired", {
-              defaultValue: "非官方供应商请填写 API Key",
-            }),
-          );
-          return;
-        }
-      } else if (appId === "codex") {
-        if (!codexBaseUrl.trim()) {
-          toast.error(
-            t("providerForm.endpointRequired", {
-              defaultValue: "非官方供应商请填写 API 端点",
-            }),
-          );
-          return;
-        }
-        if (!codexApiKey.trim()) {
-          toast.error(
-            t("providerForm.apiKeyRequired", {
-              defaultValue: "非官方供应商请填写 API Key",
-            }),
-          );
-          return;
-        }
-      } else if (appId === "gemini") {
-        if (!geminiBaseUrl.trim()) {
-          toast.error(
-            t("providerForm.endpointRequired", {
-              defaultValue: "非官方供应商请填写 API 端点",
-            }),
-          );
-          return;
-        }
-        if (!geminiApiKey.trim()) {
-          toast.error(
-            t("providerForm.apiKeyRequired", {
-              defaultValue: "非官方供应商请填写 API Key",
-            }),
-          );
-          return;
-        }
-      }
-    }
-
-    let settingsConfig: string;
-
-    if (appId === "codex") {
-      try {
-        const authJson = JSON.parse(codexAuth);
-        const configObj = {
-          auth: authJson,
-          config: codexConfig ?? "",
-        };
-        settingsConfig = JSON.stringify(configObj);
-      } catch (err) {
-        settingsConfig = values.settingsConfig.trim();
-      }
-    } else if (appId === "gemini") {
-      try {
-        const envObj = envStringToObj(geminiEnv);
-        const configObj = geminiConfig.trim() ? JSON.parse(geminiConfig) : {};
-        const combined = {
-          env: envObj,
-          config: configObj,
-        };
-        settingsConfig = JSON.stringify(combined);
-      } catch (err) {
-        settingsConfig = values.settingsConfig.trim();
-      }
-    } else if (
-      appId === "opencode" &&
-      (category === "omo" || category === "omo-slim")
-    ) {
-      const omoConfig: Record<string, unknown> = {};
-      if (Object.keys(omoDraft.omoAgents).length > 0) {
-        omoConfig.agents = omoDraft.omoAgents;
-      }
-      if (
-        category === "omo" &&
-        Object.keys(omoDraft.omoCategories).length > 0
-      ) {
-        omoConfig.categories = omoDraft.omoCategories;
-      }
-      if (omoDraft.omoOtherFieldsStr.trim()) {
-        try {
-          const otherFields = parseOmoOtherFieldsObject(
-            omoDraft.omoOtherFieldsStr,
-          );
-          if (!otherFields) {
-            toast.error(
-              t("omo.jsonMustBeObject", {
-                field: t("omo.otherFields", {
-                  defaultValue: "Other Config",
-                }),
-                defaultValue: "{{field}} must be a JSON object",
-              }),
-            );
-            return;
-          }
-          omoConfig.otherFields = otherFields;
-        } catch {
-          toast.error(
-            t("omo.invalidJson", {
-              defaultValue: "Other Fields contains invalid JSON",
-            }),
-          );
-          return;
-        }
-      }
-      settingsConfig = JSON.stringify(omoConfig);
-    } else {
-      settingsConfig = values.settingsConfig.trim();
+    const settingsConfigResult = resolveSubmitSettingsConfig({
+      appId,
+      category,
+      rawSettingsConfig: values.settingsConfig,
+      codexAuth,
+      codexConfig,
+      geminiEnv,
+      geminiConfig,
+      envStringToObj,
+      omoAgents: omoDraft.omoAgents,
+      omoCategories: omoDraft.omoCategories,
+      omoOtherFieldsStr: omoDraft.omoOtherFieldsStr,
+      t,
+    });
+    if (!settingsConfigResult.ok) {
+      toast.error(settingsConfigResult.errorMessage);
+      return;
     }
 
     const payload: ProviderFormValues = {
       ...values,
       name: values.name.trim(),
       websiteUrl: values.websiteUrl?.trim() ?? "",
-      settingsConfig,
+      settingsConfig: settingsConfigResult.settingsConfig,
     };
 
     if (appId === "opencode") {
@@ -1057,22 +856,15 @@ export function ProviderForm({
     await onSubmit(payload);
   };
 
-  const groupedPresets = useMemo(() => {
-    return presetEntries.reduce<Record<string, PresetEntry[]>>((acc, entry) => {
-      const category = entry.preset.category ?? "others";
-      if (!acc[category]) {
-        acc[category] = [];
-      }
-      acc[category].push(entry);
-      return acc;
-    }, {});
-  }, [presetEntries]);
+  const groupedPresets = useMemo(
+    () => groupPresetEntries(presetEntries),
+    [presetEntries],
+  );
 
-  const categoryKeys = useMemo(() => {
-    return Object.keys(groupedPresets).filter(
-      (key) => key !== "custom" && groupedPresets[key]?.length,
-    );
-  }, [groupedPresets]);
+  const categoryKeys = useMemo(
+    () => getPresetCategoryKeys(groupedPresets),
+    [groupedPresets],
+  );
 
   const shouldShowSpeedTest =
     category !== "official" && category !== "cloud_provider";
@@ -1153,25 +945,82 @@ export function ProviderForm({
     initialData,
   });
 
+  const applyPresetSelection = useCallback(
+    (selection: PresetSelectionResult) => {
+      if (selection.appId === "codex") {
+        resetCodexConfig(selection.codexAuth, selection.codexConfig);
+        form.reset(selection.formValues);
+        return;
+      }
+
+      if (selection.appId === "gemini") {
+        resetGeminiConfig(selection.geminiEnv, selection.geminiConfig);
+        form.reset(selection.formValues);
+        return;
+      }
+
+      if (selection.appId === "opencode") {
+        if (selection.isOmoPreset) {
+          omoDraft.resetOmoDraftState();
+        } else {
+          opencodeForm.resetOpencodeState(selection.opencodeConfig);
+        }
+        form.reset(selection.formValues);
+        return;
+      }
+
+      if (selection.appId === "openclaw") {
+        openclawForm.resetOpenclawState(selection.openclawConfig);
+        form.reset(selection.formValues);
+        return;
+      }
+
+      setLocalApiFormat(selection.apiFormat);
+      setLocalApiKeyField(selection.apiKeyField);
+      setLocalIsFullUrl(selection.isFullUrl);
+      form.reset(selection.formValues);
+    },
+    [
+      form,
+      omoDraft,
+      openclawForm,
+      opencodeForm,
+      resetCodexConfig,
+      resetGeminiConfig,
+      setLocalApiFormat,
+      setLocalApiKeyField,
+      setLocalIsFullUrl,
+    ],
+  );
+
   const handlePresetChange = (value: string) => {
     setSelectedPresetId(value);
     if (value === "custom") {
       setActivePreset(null);
+      if (appId === "claude") {
+        setLocalApiFormat("anthropic");
+        setLocalApiKeyField("ANTHROPIC_AUTH_TOKEN");
+        setLocalIsFullUrl(false);
+      }
       form.reset(defaultValues);
 
-      if (appId === "codex") {
-        const template = getCodexCustomTemplate();
-        resetCodexConfig(template.auth, template.config);
+      const customPresetResetPlan = getCustomPresetResetPlan(appId);
+      if (customPresetResetPlan.codex) {
+        resetCodexConfig(
+          customPresetResetPlan.codex.auth,
+          customPresetResetPlan.codex.config,
+        );
       }
-      if (appId === "gemini") {
+      if (customPresetResetPlan.shouldResetGemini) {
         resetGeminiConfig({}, {});
       }
-      if (appId === "opencode") {
+      if (customPresetResetPlan.shouldResetOpencode) {
         opencodeForm.resetOpencodeState();
+      }
+      if (customPresetResetPlan.shouldResetOmoDraft) {
         omoDraft.resetOmoDraftState();
       }
-      // OpenClaw 自定义模式：重置为空配置
-      if (appId === "openclaw") {
+      if (customPresetResetPlan.shouldResetOpenclaw) {
         openclawForm.resetOpenclawState();
       }
       return;
@@ -1182,124 +1031,15 @@ export function ProviderForm({
       return;
     }
 
-    setActivePreset({
-      id: value,
-      category: entry.preset.category,
-      isPartner: entry.preset.isPartner,
-      partnerPromotionKey: entry.preset.partnerPromotionKey,
+    const selection = resolvePresetSelection({
+      appId,
+      presetId: value,
+      entry,
+      t,
     });
 
-    if (appId === "codex") {
-      const preset = entry.preset as CodexProviderPreset;
-      const auth = preset.auth ?? {};
-      const config = preset.config ?? "";
-
-      resetCodexConfig(auth, config);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify({ auth, config }, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    if (appId === "gemini") {
-      const preset = entry.preset as GeminiProviderPreset;
-      const env = (preset.settingsConfig as any)?.env ?? {};
-      const config = (preset.settingsConfig as any)?.config ?? {};
-
-      resetGeminiConfig(env, config);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(preset.settingsConfig, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    if (appId === "opencode") {
-      const preset = entry.preset as OpenCodeProviderPreset;
-      const config = preset.settingsConfig;
-
-      if (preset.category === "omo" || preset.category === "omo-slim") {
-        omoDraft.resetOmoDraftState();
-        form.reset({
-          name: preset.category === "omo" ? "OMO" : "OMO Slim",
-          websiteUrl: preset.websiteUrl ?? "",
-          settingsConfig: JSON.stringify({}, null, 2),
-          icon: preset.icon ?? "",
-          iconColor: preset.iconColor ?? "",
-        });
-        return;
-      }
-
-      opencodeForm.resetOpencodeState(config);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(config, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    // OpenClaw preset handling
-    if (appId === "openclaw") {
-      const preset = entry.preset as OpenClawProviderPreset;
-      const config = preset.settingsConfig;
-
-      // Update activePreset with suggestedDefaults for OpenClaw
-      setActivePreset({
-        id: value,
-        category: preset.category,
-        isPartner: preset.isPartner,
-        partnerPromotionKey: preset.partnerPromotionKey,
-        suggestedDefaults: preset.suggestedDefaults,
-      });
-
-      openclawForm.resetOpenclawState(config);
-
-      // Update form fields
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(config, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    const preset = entry.preset as ProviderPreset;
-    const config = applyTemplateValues(
-      preset.settingsConfig,
-      preset.templateValues,
-    );
-
-    if (preset.apiFormat) {
-      setLocalApiFormat(preset.apiFormat);
-    } else {
-      setLocalApiFormat("anthropic");
-    }
-
-    setLocalApiKeyField(preset.apiKeyField ?? "ANTHROPIC_AUTH_TOKEN");
-    setLocalIsFullUrl(false);
-
-    form.reset({
-      name: preset.nameKey ? t(preset.nameKey) : preset.name,
-      websiteUrl: preset.websiteUrl ?? "",
-      settingsConfig: JSON.stringify(config, null, 2),
-      icon: preset.icon ?? "",
-      iconColor: preset.iconColor ?? "",
-    });
+    setActivePreset(selection.activePreset);
+    applyPresetSelection(selection);
   };
 
   const settingsConfigErrorField = (
@@ -1338,137 +1078,49 @@ export function ProviderForm({
           form={form}
           beforeNameSlot={
             appId === "opencode" && !isAnyOmoCategory ? (
-              <div className="space-y-2">
-                <Label htmlFor="opencode-key">
-                  {t("opencode.providerKey")}
-                  <span className="text-destructive ml-1">*</span>
-                </Label>
-                <Input
-                  id="opencode-key"
-                  value={opencodeForm.opencodeProviderKey}
-                  onChange={(e) =>
-                    opencodeForm.setOpencodeProviderKey(
-                      e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
-                    )
-                  }
-                  placeholder={t("opencode.providerKeyPlaceholder")}
-                  disabled={
-                    isProviderKeyLocked || isProviderKeyLockStateLoading
-                  }
-                  className={
-                    (additiveExistingProviderKeys.includes(
-                      opencodeForm.opencodeProviderKey,
-                    ) &&
-                      !isProviderKeyLocked) ||
-                    (opencodeForm.opencodeProviderKey.trim() !== "" &&
-                      !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                        opencodeForm.opencodeProviderKey,
-                      ))
-                      ? "border-destructive"
-                      : ""
-                  }
-                />
-                {additiveExistingProviderKeys.includes(
-                  opencodeForm.opencodeProviderKey,
-                ) &&
-                  !isProviderKeyLocked && (
-                    <p className="text-xs text-destructive">
-                      {t("opencode.providerKeyDuplicate")}
-                    </p>
-                  )}
-                {opencodeForm.opencodeProviderKey.trim() !== "" &&
-                  !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                    opencodeForm.opencodeProviderKey,
-                  ) && (
-                    <p className="text-xs text-destructive">
-                      {t("opencode.providerKeyInvalid")}
-                    </p>
-                  )}
-                {!(
-                  additiveExistingProviderKeys.includes(
-                    opencodeForm.opencodeProviderKey,
-                  ) && !isProviderKeyLocked
-                ) &&
-                  (opencodeForm.opencodeProviderKey.trim() === "" ||
-                    /^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                      opencodeForm.opencodeProviderKey,
-                    )) && (
-                    <p className="text-xs text-muted-foreground">
-                      {isProviderKeyLocked
-                        ? t("opencode.providerKeyLockedHint", {
-                            defaultValue:
-                              "该供应商已添加到应用配置中，供应商标识不可修改",
-                          })
-                        : t("opencode.providerKeyHint")}
-                    </p>
-                  )}
-              </div>
+              <ProviderKeyField
+                inputId="opencode-key"
+                label={t("opencode.providerKey")}
+                value={opencodeForm.opencodeProviderKey}
+                placeholder={t("opencode.providerKeyPlaceholder")}
+                existingKeys={additiveExistingProviderKeys}
+                isEditMode={isEditMode}
+                isLocked={isProviderKeyLocked}
+                isLoading={isProviderKeyLockStateLoading}
+                duplicateMessage={t("opencode.providerKeyDuplicate")}
+                invalidMessage={t("opencode.providerKeyInvalid")}
+                hintMessage={t("opencode.providerKeyHint")}
+                lockedHintMessage={t("opencode.providerKeyLockedHint", {
+                  defaultValue:
+                    "该供应商已添加到应用配置中，供应商标识不可修改",
+                })}
+                loadingMessage={t("providerForm.providerKeyStatusLoading", {
+                  defaultValue: "正在加载供应商标识状态，请稍后再试",
+                })}
+                onChange={opencodeForm.setOpencodeProviderKey}
+              />
             ) : appId === "openclaw" ? (
-              <div className="space-y-2">
-                <Label htmlFor="openclaw-key">
-                  {t("openclaw.providerKey")}
-                  <span className="text-destructive ml-1">*</span>
-                </Label>
-                <Input
-                  id="openclaw-key"
-                  value={openclawForm.openclawProviderKey}
-                  onChange={(e) =>
-                    openclawForm.setOpenclawProviderKey(
-                      e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
-                    )
-                  }
-                  placeholder={t("openclaw.providerKeyPlaceholder")}
-                  disabled={
-                    isProviderKeyLocked || isProviderKeyLockStateLoading
-                  }
-                  className={
-                    (additiveExistingProviderKeys.includes(
-                      openclawForm.openclawProviderKey,
-                    ) &&
-                      !isProviderKeyLocked) ||
-                    (openclawForm.openclawProviderKey.trim() !== "" &&
-                      !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                        openclawForm.openclawProviderKey,
-                      ))
-                      ? "border-destructive"
-                      : ""
-                  }
-                />
-                {additiveExistingProviderKeys.includes(
-                  openclawForm.openclawProviderKey,
-                ) &&
-                  !isProviderKeyLocked && (
-                    <p className="text-xs text-destructive">
-                      {t("openclaw.providerKeyDuplicate")}
-                    </p>
-                  )}
-                {openclawForm.openclawProviderKey.trim() !== "" &&
-                  !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                    openclawForm.openclawProviderKey,
-                  ) && (
-                    <p className="text-xs text-destructive">
-                      {t("openclaw.providerKeyInvalid")}
-                    </p>
-                  )}
-                {!(
-                  additiveExistingProviderKeys.includes(
-                    openclawForm.openclawProviderKey,
-                  ) && !isProviderKeyLocked
-                ) &&
-                  (openclawForm.openclawProviderKey.trim() === "" ||
-                    /^[a-z0-9]+(-[a-z0-9]+)*$/.test(
-                      openclawForm.openclawProviderKey,
-                    )) && (
-                    <p className="text-xs text-muted-foreground">
-                      {isProviderKeyLocked
-                        ? t("openclaw.providerKeyLockedHint", {
-                            defaultValue:
-                              "该供应商已添加到应用配置中，供应商标识不可修改",
-                          })
-                        : t("openclaw.providerKeyHint")}
-                    </p>
-                  )}
-              </div>
+              <ProviderKeyField
+                inputId="openclaw-key"
+                label={t("openclaw.providerKey")}
+                value={openclawForm.openclawProviderKey}
+                placeholder={t("openclaw.providerKeyPlaceholder")}
+                existingKeys={additiveExistingProviderKeys}
+                isEditMode={isEditMode}
+                isLocked={isProviderKeyLocked}
+                isLoading={isProviderKeyLockStateLoading}
+                duplicateMessage={t("openclaw.providerKeyDuplicate")}
+                invalidMessage={t("openclaw.providerKeyInvalid")}
+                hintMessage={t("openclaw.providerKeyHint")}
+                lockedHintMessage={t("openclaw.providerKeyLockedHint", {
+                  defaultValue:
+                    "该供应商已添加到应用配置中，供应商标识不可修改",
+                })}
+                loadingMessage={t("providerForm.providerKeyStatusLoading", {
+                  defaultValue: "正在加载供应商标识状态，请稍后再试",
+                })}
+                onChange={openclawForm.setOpenclawProviderKey}
+              />
             ) : undefined
           }
         />
@@ -1488,16 +1140,9 @@ export function ProviderForm({
             websiteUrl={claudeWebsiteUrl}
             isPartner={isClaudePartner}
             partnerPromotionKey={claudePartnerPromotionKey}
-            isCopilotPreset={
-              templatePreset?.providerType === "github_copilot" ||
-              initialData?.meta?.providerType === "github_copilot" ||
-              baseUrl.includes("githubcopilot.com")
-            }
+            isCopilotPreset={isCopilotProvider}
             usesOAuth={
-              templatePreset?.requiresOAuth === true ||
-              templatePreset?.providerType === "github_copilot" ||
-              initialData?.meta?.providerType === "github_copilot" ||
-              baseUrl.includes("githubcopilot.com")
+              templatePreset?.requiresOAuth === true || isCopilotProvider
             }
             isCopilotAuthenticated={isCopilotAuthenticated}
             selectedGitHubAccountId={selectedGitHubAccountId}

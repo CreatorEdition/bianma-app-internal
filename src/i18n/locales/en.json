@@ -1,7 +1,7 @@
 {
   "app": {
-    "title": "CC Switch",
-    "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
+    "title": "bianma.ai",
+    "description": "Local AI coding control plane for Claude Code, Codex, Gemini CLI, OpenCode and OpenClaw"
   },
   "common": {
     "add": "Add",
@@ -41,6 +41,25 @@
     "auto": "Auto",
     "enabled": "Enabled",
     "notSet": "Not Set"
+  },
+  "navigation": {
+    "label": "Primary navigation",
+    "home": "Home",
+    "services": "Services",
+    "strategy": "Strategy",
+    "stats": "Stats"
+  },
+  "home": {
+    "title": "Local coding control plane",
+    "description": "Start with services, runtime strategy, and usage to confirm that your coding workflow is ready.",
+    "currentProvider": "Current service: {{name}}",
+    "providerCount": "{{count}} configured services",
+    "proxyReady": "Local proxy is taking over",
+    "proxyNotReady": "Local proxy is not taking over",
+    "servicesDescription": "Review, switch, and configure model services for the current app.",
+    "strategyDescription": "Manage local proxy, takeover, and failover behavior.",
+    "statsDescription": "Review recent requests, usage, and cost trends.",
+    "statsDetail": "Open usage statistics"
   },
   "apiKeyInput": {
     "placeholder": "Enter API Key",
@@ -124,6 +143,11 @@
     "openTerminal": "Open Terminal",
     "terminalOpened": "Terminal opened",
     "terminalOpenFailed": "Failed to open terminal",
+    "latencyNotTested": "Not tested",
+    "latencyFailed": "Failed",
+    "latencyNoResponse": "No response",
+    "badgeUsageScript": "Usage script",
+    "badgeFavorited": "Favorite",
     "name": "Provider Name",
     "namePlaceholder": "e.g., Claude Official",
     "websiteUrl": "Website URL",
@@ -157,6 +181,7 @@
     "switchSuccess": "Switch successful!",
     "addToConfigSuccess": "Added to config",
     "removeFromConfigSuccess": "Removed from config",
+    "removeFromConfigFailed": "Failed to remove from config",
     "switchFailedTitle": "Switch failed",
     "switchFailed": "Switch failed: {{error}}",
     "autoImported": "Default provider created from existing configuration",
@@ -174,6 +199,7 @@
     "deleteFailed": "Failed to delete provider: {{error}}",
     "settingsSaved": "Settings saved",
     "settingsSaveFailed": "Failed to save settings: {{error}}",
+    "providerDirectorySyncFailed": "Settings were saved, but current providers could not be synced to the new configuration directory",
     "proxyRequiredForSwitch": "This provider {{reason}}, requires the proxy service to work properly. Start the proxy first.",
     "proxyReasonCopilot": "uses GitHub Copilot as a Claude provider",
     "proxyReasonOpenAIChat": "uses OpenAI Chat API format",
@@ -192,7 +218,7 @@
     "deleteProvider": "Delete Provider",
     "deleteProviderMessage": "Are you sure you want to delete provider \"{{name}}\"? This action cannot be undone.",
     "removeProvider": "Remove Provider",
-    "removeProviderMessage": "Are you sure you want to remove provider \"{{name}}\" from the configuration?\n\nAfter removal, this provider will no longer be active, but the configuration data will be retained in CC Switch. You can re-add it at any time.",
+    "removeProviderMessage": "Are you sure you want to remove provider \"{{name}}\" from the configuration?\n\nAfter removal, this provider will no longer be active, but the configuration data will be retained in bianma.ai. You can re-add it at any time.",
     "proxy": {
       "title": "Enable Local Proxy",
       "message": "Local proxy is an advanced feature. Please make sure you understand how it works before enabling.\n\nWe recommend consulting the relevant documentation or your provider for proper configuration.",
@@ -215,7 +241,7 @@
     },
     "autoSync": {
       "title": "Enable Auto Sync",
-      "message": "When auto sync is enabled, every database change will be automatically uploaded to the WebDAV server.\n\nThis may result in significant network traffic. Please ensure your network and WebDAV service can handle frequent data transfers.",
+      "message": "When auto sync is enabled, changes in the selected scopes will be automatically uploaded to the WebDAV server. Changes outside the selected scopes will not trigger an automatic upload.\n\nThis may result in significant network traffic. Please ensure your network and WebDAV service can handle frequent data transfers.",
       "confirm": "I understand, enable"
     }
   },
@@ -228,7 +254,7 @@
     "advanced": {
       "configDir": {
         "title": "Configuration Directory",
-        "description": "Manage storage paths for Claude, Codex and Gemini configurations"
+        "description": "Manage storage paths for Claude, Codex, Gemini, OpenCode and OpenClaw configurations"
       },
       "proxy": {
         "title": "Local Proxy",
@@ -254,7 +280,7 @@
       },
       "globalProxy": {
         "title": "Global Outbound Proxy",
-        "description": "Configure proxy for CC Switch to access external APIs"
+        "description": "Configure proxy for bianma.ai to access external APIs"
       },
       "data": {
         "title": "Data Management",
@@ -324,7 +350,7 @@
     "themeDark": "Dark",
     "themeSystem": "System",
     "importExport": "SQL Import/Export",
-    "importExportHint": "Import or export database SQL backups for migration or restore (import supports only backups exported by CC Switch).",
+    "importExportHint": "Import or export database SQL backups for migration or restore (import supports backups exported by bianma.ai, with legacy CC Switch exports still compatible).",
     "exportConfig": "Export SQL Backup",
     "selectConfigFile": "Select SQL File",
     "noFileSelected": "No configuration file selected.",
@@ -383,7 +409,26 @@
       "remoteRoot": "Remote Root Directory",
       "profile": "Sync Profile Name",
       "autoSync": "Auto Sync",
-      "autoSyncHint": "When enabled, each database change triggers an automatic WebDAV upload.",
+      "autoSyncHint": "When enabled, changes in the selected scopes trigger automatic WebDAV uploads.",
+      "scope": {
+        "title": "Auto Sync Scope",
+        "description": "Controls which data changes trigger automatic uploads. Once triggered, auto upload still writes a full snapshot.",
+        "options": {
+          "providers": {
+            "label": "Providers",
+            "hint": "Auto-upload when providers or endpoint config changes."
+          },
+          "mcp": {
+            "label": "MCP",
+            "hint": "Auto-upload when MCP server config changes."
+          },
+          "prompts": {
+            "label": "Prompts",
+            "hint": "Auto-upload when prompt config changes."
+          }
+        },
+        "snapshotNotice": "Auto sync scope only affects triggers. It does not trim auto or manual snapshot contents."
+      },
       "test": "Test Connection",
       "testing": "Testing...",
       "testSuccess": "Connection successful",
@@ -424,6 +469,7 @@
       "saved": "Saved",
       "unsavedChanges": "Please save config first",
       "saveBeforeSync": "Save configuration first to enable upload/download.",
+      "manualSnapshotNotice": "Manual upload/download still syncs the full database and skills archive for backup and restore.",
       "fetchingRemote": "Fetching remote info...",
       "fetchRemoteFailed": "Failed to fetch remote info. Please check configuration and network.",
       "confirmDownload": {
@@ -434,6 +480,7 @@
         "dbCompat": "DB compatibility",
         "artifacts": "Contents",
         "legacyNotice": "A legacy remote path was detected. After restoring, the next upload will write to the new v2/db-v6 path.",
+        "scopeNotice": "Auto sync scope does not limit this manual restore; it restores the full snapshot.",
         "warning": "This will overwrite all local data and skill configurations",
         "confirm": "Confirm Restore"
       },
@@ -442,6 +489,7 @@
         "content": "The following will be synced to the WebDAV server:",
         "dbItem": "Database (all provider configs and data)",
         "skillsItem": "Skills (all custom skills)",
+        "scopeNotice": "Auto sync scope does not limit this manual upload; it writes a full snapshot.",
         "targetPath": "Target path",
         "existingData": "Existing cloud data",
         "deviceName": "Uploaded by",
@@ -460,7 +508,7 @@
     "windowBehavior": "Window Behavior",
     "windowBehaviorHint": "Configure window minimize and Claude plugin integration policies.",
     "launchOnStartup": "Launch on Startup",
-    "launchOnStartupDescription": "Automatically run CC Switch when system starts",
+    "launchOnStartupDescription": "Automatically run bianma.ai when system starts",
     "silentStartup": "Silent Startup",
     "silentStartupDescription": "Start in background mode without showing main window",
     "autoLaunchFailed": "Failed to set auto-launch",
@@ -514,9 +562,9 @@
       }
     },
     "configDirectoryOverride": "Configuration Directory Override (Advanced)",
-    "configDirectoryDescription": "When using Claude Code or Codex in environments like WSL, you can manually specify the configuration directory to the one in WSL to keep provider data consistent with the main environment.",
-    "appConfigDir": "CC Switch Configuration Directory",
-    "appConfigDirDescription": "Customize the storage location for CC Switch configuration (point to cloud sync folder to enable config sync)",
+    "configDirectoryDescription": "When using Claude Code, Codex, Gemini, OpenCode or OpenClaw in environments like WSL, you can manually specify the configuration directory to the one in WSL to keep provider data consistent with the main environment.",
+    "appConfigDir": "bianma.ai Configuration Directory",
+    "appConfigDirDescription": "Customize the storage location for bianma.ai configuration (point to cloud sync folder to enable config sync)",
     "browsePlaceholderApp": "e.g., C:\\Users\\Administrator\\.cc-switch",
     "claudeConfigDir": "Claude Code Configuration Directory",
     "claudeConfigDirDescription": "Override Claude configuration directory (settings.json) and keep claude.json (MCP) alongside it.",
@@ -526,10 +574,13 @@
     "geminiConfigDirDescription": "Override Gemini configuration directory (.env).",
     "opencodeConfigDir": "OpenCode Configuration Directory",
     "opencodeConfigDirDescription": "Override OpenCode configuration directory (opencode.json).",
+    "openclawConfigDir": "OpenClaw Configuration Directory",
+    "openclawConfigDirDescription": "Override OpenClaw configuration directory.",
     "browsePlaceholderClaude": "e.g., /home/<your-username>/.claude",
     "browsePlaceholderCodex": "e.g., /home/<your-username>/.codex",
     "browsePlaceholderGemini": "e.g., /home/<your-username>/.gemini",
     "browsePlaceholderOpencode": "e.g., /home/<your-username>/.config/opencode",
+    "browsePlaceholderOpenclaw": "e.g., /home/<your-username>/.openclaw",
     "browseDirectory": "Browse Directory",
     "resetDefault": "Reset to default directory (takes effect after saving)",
     "checkForUpdates": "Check for Updates",
@@ -563,7 +614,7 @@
     "importFailedError": "Import config failed: {{message}}",
     "exportFailedError": "Export config failed:",
     "restartRequired": "Restart Required",
-    "restartRequiredMessage": "Modifying the CC Switch configuration directory requires restarting the application to take effect. Restart now?",
+    "restartRequiredMessage": "Modifying the bianma.ai configuration directory requires restarting the application to take effect. Restart now?",
     "restartNow": "Restart Now",
     "restartLater": "Restart Later",
     "restartFailed": "Application restart failed, please manually close and reopen.",
@@ -888,7 +939,7 @@
   },
   "codexConfig": {
     "authJson": "auth.json (JSON) *",
-    "authJsonPlaceholder": "{\n  \"OPENAI_API_KEY\": \"sk-your-api-key-here\"\n}",
+    "authJsonPlaceholder": "{\n  \"OPENAI_API_KEY\": \"OPENAI_API_KEY_PLACEHOLDER\"\n}",
     "authJsonHint": "Codex auth.json configuration content",
     "configToml": "config.toml (TOML)",
     "configTomlHint": "Codex config.toml configuration content",
@@ -1181,7 +1232,7 @@
       "deleteConfirm": "Are you sure you want to delete server \"{{id}}\"? This action cannot be undone.",
       "noServers": "No servers yet",
       "enabledApps": "Enabled Apps",
-      "noImportFound": "No MCP servers to import found. All servers are already managed by CC Switch.",
+      "noImportFound": "No MCP servers to import found. All servers are already managed by bianma.ai.",
       "importSuccess": "Successfully imported {{count}} MCP servers",
       "apps": {
         "claude": "Claude",
@@ -1637,10 +1688,10 @@
     "noInstalledDescription": "Discover and install skills from repositories, or import existing skills",
     "discover": "Discover Skills",
     "import": "Import Existing",
-    "importDescription": "Select skills to import into CC Switch unified management",
+    "importDescription": "Select skills to import into bianma.ai unified management",
     "importSuccess": "Successfully imported {{count}} skills",
     "importSelected": "Import Selected ({{count}})",
-    "noUnmanagedFound": "No skills to import found. All skills are already managed by CC Switch.",
+    "noUnmanagedFound": "No skills to import found. All skills are already managed by bianma.ai.",
     "foundIn": "Found in",
     "local": "Local",
     "uninstallConfirm": "Are you sure you want to uninstall \"{{name}}\"? This will remove the skill from all apps and create a local backup first.",
@@ -1771,6 +1822,7 @@
     "label": "Icon",
     "colorLabel": "Icon Color",
     "selectIcon": "Select Icon",
+    "selectIconDescription": "Select a provider icon. Selecting one applies it immediately and closes the dialog.",
     "preview": "Preview",
     "clickToChange": "Click to change icon",
     "clickToSelect": "Click to select icon",

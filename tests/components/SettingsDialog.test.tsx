@@ -15,7 +15,10 @@ vi.mock("sonner", () => ({
   },
 }));
 
-const tMock = vi.fn((key: string) => key);
+const tMock = vi.fn(
+  (key: string, options?: { defaultValue?: string }) =>
+    options?.defaultValue ?? key,
+);
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: tMock }),
 }));
@@ -42,9 +45,13 @@ interface SettingsMock {
   isLoading: boolean;
   isSaving: boolean;
   isPortable: boolean;
+  settingsQueryHasData: boolean;
+  settingsQueryIsError: boolean;
+  settingsQueryError: Error | null;
   appConfigDir?: string;
   resolvedDirs: Record<string, string>;
   requiresRestart: boolean;
+  refetchSettings: ReturnType<typeof vi.fn>;
   updateSettings: ReturnType<typeof vi.fn>;
   updateDirectory: ReturnType<typeof vi.fn>;
   updateAppConfigDir: ReturnType<typeof vi.fn>;
@@ -71,12 +78,16 @@ const createSettingsMock = (overrides: Partial<SettingsMock> = {}) => {
     isLoading: false,
     isSaving: false,
     isPortable: false,
+    settingsQueryHasData: true,
+    settingsQueryIsError: false,
+    settingsQueryError: null,
     appConfigDir: "/app-config",
     resolvedDirs: {
       claude: "/claude",
       codex: "/codex",
     },
     requiresRestart: false,
+    refetchSettings: vi.fn().mockResolvedValue({}),
     updateSettings: vi.fn(),
     updateDirectory: vi.fn(),
     updateAppConfigDir: vi.fn(),
@@ -262,7 +273,10 @@ const renderSettingsPage = (
 
 describe("SettingsPage Component", () => {
   beforeEach(async () => {
-    tMock.mockImplementation((key: string) => key);
+    tMock.mockImplementation(
+      (key: string, options?: { defaultValue?: string }) =>
+        options?.defaultValue ?? key,
+    );
     settingsMock = createSettingsMock();
     importExportMock = createImportExportMock();
     useImportExportSpy.mockReset();
@@ -291,6 +305,39 @@ describe("SettingsPage Component", () => {
     expect(screen.queryByText("language:zh")).not.toBeInTheDocument();
     // 加载状态下显示 spinner 而不是表单内容
     expect(document.querySelector(".animate-spin")).toBeInTheDocument();
+  });
+
+  it("should show readable settings load error and retry without blank content", () => {
+    settingsMock = createSettingsMock({
+      settings: null,
+      isLoading: false,
+      settingsQueryHasData: false,
+      settingsQueryIsError: true,
+      settingsQueryError: new Error("无法连接桌面运行时，原始错误：__TAURI__"),
+    });
+
+    renderSettingsPage();
+
+    expect(screen.getByRole("alert")).toHaveTextContent("设置加载失败");
+    expect(
+      screen.getByText(/无法连接桌面运行时.*__TAURI__/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(settingsMock.refetchSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("should keep existing settings form when a background settings refetch fails", () => {
+    settingsMock = createSettingsMock({
+      settingsQueryHasData: true,
+      settingsQueryIsError: true,
+      settingsQueryError: new Error("background refetch failed"),
+    });
+
+    renderSettingsPage();
+
+    expect(screen.getByText("language:zh")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("should reset import/export status when dialog transitions to open", () => {

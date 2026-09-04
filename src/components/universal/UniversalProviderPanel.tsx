@@ -1,14 +1,31 @@
 import { useState, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Layers } from "lucide-react";
+import { Layers, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { UniversalProviderCard } from "./UniversalProviderCard";
+import { Button } from "@/components/ui/button";
+import {
+  UniversalProviderCard,
+  type UniversalProviderSyncStatus,
+} from "./UniversalProviderCard";
 import { UniversalProviderFormModal } from "./UniversalProviderFormModal";
 import { universalProvidersApi } from "@/lib/api";
 import type { UniversalProvider, UniversalProvidersMap } from "@/types";
 
-export function UniversalProviderPanel() {
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return "Unknown error";
+};
+
+interface UniversalProviderPanelProps {
+  showAddButton?: boolean;
+}
+
+export function UniversalProviderPanel({
+  showAddButton = true,
+}: UniversalProviderPanelProps = {}) {
   const { t } = useTranslation();
 
   // 状态
@@ -27,6 +44,13 @@ export function UniversalProviderPanel() {
     id: string;
     name: string;
   }>({ open: false, id: "", name: "" });
+  const [selectedProviderIds, setSelectedProviderIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [isBatchSyncing, setIsBatchSyncing] = useState(false);
+  const [syncStatusById, setSyncStatusById] = useState<
+    Record<string, UniversalProviderSyncStatus>
+  >({});
 
   // 加载数据
   const loadProviders = useCallback(async () => {
@@ -50,6 +74,63 @@ export function UniversalProviderPanel() {
     loadProviders();
   }, [loadProviders]);
 
+  useEffect(() => {
+    const activeIds = new Set(Object.keys(providers));
+    setSelectedProviderIds((current) => {
+      const next = new Set<string>();
+      let changed = false;
+      current.forEach((id) => {
+        if (activeIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+    setSyncStatusById((current) => {
+      const next: Record<string, UniversalProviderSyncStatus> = {};
+      let changed = false;
+      Object.entries(current).forEach(([id, status]) => {
+        if (activeIds.has(id)) {
+          next[id] = status;
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+  }, [providers]);
+
+  const updateSyncStatus = useCallback(
+    (id: string, status: "success" | "error", errorMessage?: string) => {
+      setSyncStatusById((current) => ({
+        ...current,
+        [id]: {
+          status,
+          lastSyncedAt: Date.now(),
+          errorMessage,
+        },
+      }));
+    },
+    [],
+  );
+
+  const syncProviderById = useCallback(
+    async (id: string): Promise<boolean> => {
+      try {
+        await universalProvidersApi.sync(id);
+        updateSyncStatus(id, "success");
+        return true;
+      } catch (error) {
+        console.error("Failed to sync universal provider:", error);
+        updateSyncStatus(id, "error", getErrorMessage(error));
+        return false;
+      }
+    },
+    [updateSyncStatus],
+  );
+
   // 添加/编辑供应商
   const handleSave = useCallback(
     async (provider: UniversalProvider) => {
@@ -58,7 +139,10 @@ export function UniversalProviderPanel() {
 
         // 新建模式下自动同步到各应用
         if (!editingProvider) {
-          await universalProvidersApi.sync(provider.id);
+          const syncOk = await syncProviderById(provider.id);
+          if (!syncOk) {
+            throw new Error("Sync failed");
+          }
         }
 
         toast.success(
@@ -74,6 +158,9 @@ export function UniversalProviderPanel() {
         setEditingProvider(null);
       } catch (error) {
         console.error("Failed to save universal provider:", error);
+        if (!editingProvider) {
+          updateSyncStatus(provider.id, "error", getErrorMessage(error));
+        }
         toast.error(
           t("universalProvider.saveError", {
             defaultValue: "保存统一供应商失败",
@@ -81,7 +168,7 @@ export function UniversalProviderPanel() {
         );
       }
     },
-    [editingProvider, loadProviders, t],
+    [editingProvider, loadProviders, syncProviderById, t, updateSyncStatus],
   );
 
   // 保存并同步供应商
@@ -89,7 +176,10 @@ export function UniversalProviderPanel() {
     async (provider: UniversalProvider) => {
       try {
         await universalProvidersApi.upsert(provider);
-        await universalProvidersApi.sync(provider.id);
+        const syncOk = await syncProviderById(provider.id);
+        if (!syncOk) {
+          throw new Error("Sync failed");
+        }
         toast.success(
           t("universalProvider.savedAndSynced", {
             defaultValue: "已保存并同步到所有应用",
@@ -106,7 +196,7 @@ export function UniversalProviderPanel() {
         );
       }
     },
-    [loadProviders, t],
+    [loadProviders, syncProviderById, t],
   );
 
   // 删除供应商
@@ -135,22 +225,89 @@ export function UniversalProviderPanel() {
   const handleSync = useCallback(async () => {
     if (!syncConfirm.id) return;
 
-    try {
-      await universalProvidersApi.sync(syncConfirm.id);
+    const syncOk = await syncProviderById(syncConfirm.id);
+    if (syncOk) {
       toast.success(
         t("universalProvider.synced", { defaultValue: "已同步到所有应用" }),
       );
-    } catch (error) {
-      console.error("Failed to sync universal provider:", error);
+    } else {
       toast.error(
         t("universalProvider.syncError", {
           defaultValue: "同步统一供应商失败",
         }),
       );
-    } finally {
-      setSyncConfirm({ open: false, id: "", name: "" });
     }
-  }, [syncConfirm.id, t]);
+
+    setSyncConfirm({ open: false, id: "", name: "" });
+  }, [syncConfirm.id, syncProviderById, t]);
+
+  const handleProviderSelectionChange = useCallback(
+    (id: string, selected: boolean) => {
+      setSelectedProviderIds((current) => {
+        const next = new Set(current);
+        if (selected) {
+          next.add(id);
+        } else {
+          next.delete(id);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const providerIds = Object.keys(providers);
+  const selectedCount = selectedProviderIds.size;
+  const allSelected =
+    providerIds.length > 0 && selectedCount === providerIds.length;
+
+  const handleToggleSelectAll = useCallback(() => {
+    setSelectedProviderIds((current) => {
+      if (current.size === providerIds.length) {
+        return new Set();
+      }
+      return new Set(providerIds);
+    });
+  }, [providerIds]);
+
+  const handleBatchSync = useCallback(async () => {
+    const ids = Array.from(selectedProviderIds);
+    if (ids.length === 0) {
+      toast.error(
+        t("universalProvider.batchSyncSelectRequired", {
+          defaultValue: "请先选择至少一个统一供应商",
+        }),
+      );
+      return;
+    }
+
+    setIsBatchSyncing(true);
+    try {
+      const results = await Promise.all(ids.map((id) => syncProviderById(id)));
+      const successCount = results.filter(Boolean).length;
+      const failedCount = ids.length - successCount;
+
+      if (failedCount === 0) {
+        toast.success(
+          t("universalProvider.batchSyncSuccess", {
+            defaultValue: `批量同步完成（${successCount}/${ids.length}）`,
+            successCount,
+            total: ids.length,
+          }),
+        );
+      } else {
+        toast.error(
+          t("universalProvider.batchSyncPartial", {
+            defaultValue: `批量同步完成，成功 ${successCount}，失败 ${failedCount}`,
+            successCount,
+            failedCount,
+          }),
+        );
+      }
+    } finally {
+      setIsBatchSyncing(false);
+    }
+  }, [selectedProviderIds, syncProviderById, t]);
 
   // 打开同步确认
   const handleSyncClick = useCallback(
@@ -187,16 +344,33 @@ export function UniversalProviderPanel() {
   const providerList = Object.values(providers);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-testid="universal-provider-panel">
       {/* 头部 */}
-      <div className="flex items-center gap-2">
-        <Layers className="h-5 w-5 text-primary" />
-        <h2 className="text-lg font-semibold">
-          {t("universalProvider.title", { defaultValue: "统一供应商" })}
-        </h2>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-          {providerList.length}
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Layers className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-semibold">
+            {t("universalProvider.title", { defaultValue: "统一供应商" })}
+          </h2>
+          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+            {providerList.length}
+          </span>
+        </div>
+        {showAddButton ? (
+          <Button
+            size="sm"
+            onClick={() => {
+              setEditingProvider(null);
+              setIsFormOpen(true);
+            }}
+            className="rounded-lg bg-orange-500 text-white hover:bg-orange-600 dark:bg-orange-500 dark:hover:bg-orange-600"
+          >
+            <Plus className="mr-1.5 h-4 w-4" />
+            {t("universalProvider.addButton", {
+              defaultValue: "添加统一供应商",
+            })}
+          </Button>
+        ) : null}
       </div>
 
       {/* 描述 */}
@@ -206,6 +380,54 @@ export function UniversalProviderPanel() {
             "统一供应商可以同时管理 Claude、Codex 和 Gemini 的配置。修改后会自动同步到所有启用的应用。",
         })}
       </p>
+
+      {providerList.length > 0 ? (
+        <div
+          className="rounded-xl border border-border/60 bg-muted/20 p-3"
+          data-testid="batch-actions-bar"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleToggleSelectAll}
+              disabled={isBatchSyncing}
+              data-testid="toggle-select-all"
+            >
+              {allSelected
+                ? t("universalProvider.clearSelection", {
+                    defaultValue: "清空选择",
+                  })
+                : t("universalProvider.selectAll", {
+                    defaultValue: "全选",
+                  })}
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleBatchSync}
+              disabled={isBatchSyncing || selectedCount === 0}
+              data-testid="batch-sync-button"
+            >
+              {isBatchSyncing
+                ? t("universalProvider.batchSyncing", {
+                    defaultValue: "批量同步中...",
+                  })
+                : t("universalProvider.batchSync", {
+                    defaultValue: "批量同步",
+                  })}
+            </Button>
+            <span
+              className="text-xs text-muted-foreground"
+              data-testid="selected-count"
+            >
+              {t("universalProvider.selectedCount", {
+                defaultValue: `已选择 ${selectedCount} 项`,
+                count: selectedCount,
+              })}
+            </span>
+          </div>
+        </div>
+      ) : null}
 
       {/* 供应商列表 */}
       {loading ? (
@@ -235,6 +457,10 @@ export function UniversalProviderPanel() {
               onEdit={handleEdit}
               onDelete={handleDeleteClick}
               onSync={handleSyncClick}
+              selected={selectedProviderIds.has(provider.id)}
+              onSelectChange={handleProviderSelectionChange}
+              syncStatus={syncStatusById[provider.id]}
+              selectionDisabled={isBatchSyncing}
             />
           ))}
         </div>

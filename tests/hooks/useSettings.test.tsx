@@ -5,11 +5,12 @@ import type { Settings } from "@/types";
 
 const mutateAsyncMock = vi.fn();
 const useSettingsQueryMock = vi.fn();
+const refetchSettingsMock = vi.fn();
 const setAppConfigDirOverrideMock = vi.fn();
 const applyClaudePluginConfigMock = vi.fn();
 const applyClaudeOnboardingSkipMock = vi.fn();
 const clearClaudeOnboardingSkipMock = vi.fn();
-const syncCurrentProvidersLiveMock = vi.fn();
+const syncCurrentProvidersLiveSafeMock = vi.fn();
 const updateTrayMenuMock = vi.fn();
 const toastErrorMock = vi.fn();
 const toastSuccessMock = vi.fn();
@@ -46,6 +47,11 @@ vi.mock("@/lib/query", () => ({
   }),
 }));
 
+vi.mock("@/utils/postChangeSync", () => ({
+  syncCurrentProvidersLiveSafe: (...args: unknown[]) =>
+    syncCurrentProvidersLiveSafeMock(...args),
+}));
+
 vi.mock("@/lib/api", () => ({
   settingsApi: {
     setAppConfigDirOverride: (...args: unknown[]) =>
@@ -56,8 +62,6 @@ vi.mock("@/lib/api", () => ({
       applyClaudeOnboardingSkipMock(...args),
     clearClaudeOnboardingSkip: (...args: unknown[]) =>
       clearClaudeOnboardingSkipMock(...args),
-    syncCurrentProvidersLive: (...args: unknown[]) =>
-      syncCurrentProvidersLiveMock(...args),
   },
   providersApi: {
     updateTrayMenu: (...args: unknown[]) => updateTrayMenuMock(...args),
@@ -72,6 +76,7 @@ const createSettingsFormMock = (overrides: Record<string, unknown> = {}) => ({
     skipClaudeOnboarding: true,
     claudeConfigDir: "/claude",
     codexConfigDir: "/codex",
+    openclawConfigDir: "/openclaw",
     language: "zh",
   },
   isLoading: false,
@@ -90,6 +95,9 @@ const createDirectorySettingsMock = (
     appConfig: "/home/mock/.cc-switch",
     claude: "/default/claude",
     codex: "/default/codex",
+    gemini: "/default/gemini",
+    opencode: "/default/opencode",
+    openclaw: "/default/openclaw",
   },
   isLoading: false,
   initialAppConfigDir: undefined,
@@ -116,11 +124,13 @@ describe("useSettings hook", () => {
   beforeEach(() => {
     mutateAsyncMock.mockReset();
     useSettingsQueryMock.mockReset();
+    refetchSettingsMock.mockReset();
     setAppConfigDirOverrideMock.mockReset();
     applyClaudePluginConfigMock.mockReset();
     applyClaudeOnboardingSkipMock.mockReset();
     clearClaudeOnboardingSkipMock.mockReset();
-    syncCurrentProvidersLiveMock.mockReset();
+    syncCurrentProvidersLiveSafeMock.mockReset();
+    updateTrayMenuMock.mockReset();
     toastErrorMock.mockReset();
     toastSuccessMock.mockReset();
     window.localStorage.clear();
@@ -132,12 +142,16 @@ describe("useSettings hook", () => {
       skipClaudeOnboarding: true,
       claudeConfigDir: "/server/claude",
       codexConfigDir: "/server/codex",
+      openclawConfigDir: "/server/openclaw",
       language: "zh",
     };
 
     useSettingsQueryMock.mockReturnValue({
       data: serverSettings,
       isLoading: false,
+      isError: false,
+      error: null,
+      refetch: refetchSettingsMock,
     });
 
     settingsFormMock = createSettingsFormMock({
@@ -154,6 +168,36 @@ describe("useSettings hook", () => {
     applyClaudePluginConfigMock.mockResolvedValue(true);
     applyClaudeOnboardingSkipMock.mockResolvedValue(true);
     clearClaudeOnboardingSkipMock.mockResolvedValue(true);
+    syncCurrentProvidersLiveSafeMock.mockResolvedValue({ ok: true });
+    updateTrayMenuMock.mockResolvedValue(true);
+    refetchSettingsMock.mockResolvedValue({});
+  });
+
+  it("exposes settings query error state and refetch handler", async () => {
+    const queryError = new Error("无法连接桌面运行时");
+    useSettingsQueryMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: queryError,
+      refetch: refetchSettingsMock,
+    });
+    settingsFormMock = createSettingsFormMock({
+      settings: null,
+      isLoading: false,
+    });
+
+    const { result } = renderHook(() => useSettings());
+
+    expect(result.current.settingsQueryHasData).toBe(false);
+    expect(result.current.settingsQueryIsError).toBe(true);
+    expect(result.current.settingsQueryError).toBe(queryError);
+
+    await act(async () => {
+      await result.current.refetchSettings();
+    });
+
+    expect(refetchSettingsMock).toHaveBeenCalledTimes(1);
   });
 
   it("auto-saves and applies Claude onboarding skip when toggled on", async () => {
@@ -212,6 +256,26 @@ describe("useSettings hook", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
+  it("auto-saves sanitized openclaw directory override in payload", async () => {
+    settingsFormMock = createSettingsFormMock({
+      settings: {
+        ...serverSettings,
+        language: "zh",
+        openclawConfigDir: "  /custom/openclaw  ",
+      },
+    });
+
+    const { result } = renderHook(() => useSettings());
+
+    await act(async () => {
+      await result.current.autoSaveSettings({ showInTray: false });
+    });
+
+    expect(mutateAsyncMock).toHaveBeenCalledTimes(1);
+    const payload = mutateAsyncMock.mock.calls[0][0] as Settings;
+    expect(payload.openclawConfigDir).toBe("/custom/openclaw");
+  });
+
   it("saves settings and flags restart when app config directory changes", async () => {
     serverSettings = {
       ...serverSettings,
@@ -262,8 +326,7 @@ describe("useSettings hook", () => {
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(true);
     expect(window.localStorage.getItem("language")).toBe("en");
     expect(toastErrorMock).not.toHaveBeenCalled();
-    // 目录有变化，应触发一次同步当前供应商到 live
-    expect(syncCurrentProvidersLiveMock).toHaveBeenCalledTimes(1);
+    expect(updateTrayMenuMock).toHaveBeenCalledTimes(1);
   });
 
   it("saves settings without restart when directory unchanged", async () => {
@@ -304,9 +367,105 @@ describe("useSettings hook", () => {
     expect(setAppConfigDirOverrideMock).toHaveBeenCalledWith(null);
     // 状态未改变，不应调用 API
     expect(applyClaudePluginConfigMock).not.toHaveBeenCalled();
+    expect(syncCurrentProvidersLiveSafeMock).not.toHaveBeenCalled();
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(false);
-    // 目录未变化，不应触发同步
-    expect(syncCurrentProvidersLiveMock).not.toHaveBeenCalled();
+  });
+
+  it("saves provider directory overrides without unrelated write side effects", async () => {
+    serverSettings = {
+      ...serverSettings,
+      enableClaudePluginIntegration: false,
+      skipClaudeOnboarding: true,
+      claudeConfigDir: "/server/claude",
+      codexConfigDir: "/server/codex",
+      geminiConfigDir: "/server/gemini",
+      opencodeConfigDir: "/server/opencode",
+      openclawConfigDir: "/server/openclaw",
+      language: "zh",
+    };
+    useSettingsQueryMock.mockReturnValue({
+      data: serverSettings,
+      isLoading: false,
+    });
+
+    settingsFormMock = createSettingsFormMock({
+      settings: {
+        ...serverSettings,
+        claudeConfigDir: "  /custom/claude  ",
+        codexConfigDir: "  /custom/codex  ",
+        geminiConfigDir: "  /custom/gemini  ",
+        opencodeConfigDir: "  /custom/opencode  ",
+        openclawConfigDir: "  /custom/openclaw  ",
+        enableClaudePluginIntegration: false,
+        skipClaudeOnboarding: true,
+        language: "zh",
+      },
+      initialLanguage: "zh",
+    });
+
+    directorySettingsMock = createDirectorySettingsMock({
+      appConfigDir: undefined,
+      initialAppConfigDir: undefined,
+    });
+
+    const { result } = renderHook(() => useSettings());
+
+    let saveResult: { requiresRestart: boolean } | null = null;
+    await act(async () => {
+      saveResult = await result.current.saveSettings();
+    });
+
+    expect(saveResult).toEqual({ requiresRestart: false });
+    expect(mutateAsyncMock).toHaveBeenCalledTimes(1);
+    const payload = mutateAsyncMock.mock.calls[0][0] as Settings;
+    expect(payload.claudeConfigDir).toBe("/custom/claude");
+    expect(payload.codexConfigDir).toBe("/custom/codex");
+    expect(payload.geminiConfigDir).toBe("/custom/gemini");
+    expect(payload.opencodeConfigDir).toBe("/custom/opencode");
+    expect(payload.openclawConfigDir).toBe("/custom/openclaw");
+    expect(setAppConfigDirOverrideMock).toHaveBeenCalledWith(null);
+    expect(updateTrayMenuMock).toHaveBeenCalledTimes(1);
+    expect(applyClaudePluginConfigMock).not.toHaveBeenCalled();
+    expect(applyClaudeOnboardingSkipMock).not.toHaveBeenCalled();
+    expect(clearClaudeOnboardingSkipMock).not.toHaveBeenCalled();
+    expect(syncCurrentProvidersLiveSafeMock).toHaveBeenCalledTimes(1);
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps saved settings when provider directory sync fails", async () => {
+    serverSettings = {
+      ...serverSettings,
+      claudeConfigDir: "/server/claude",
+    };
+    useSettingsQueryMock.mockReturnValue({
+      data: serverSettings,
+      isLoading: false,
+    });
+    settingsFormMock = createSettingsFormMock({
+      settings: {
+        ...serverSettings,
+        claudeConfigDir: "/custom/claude",
+      },
+    });
+    syncCurrentProvidersLiveSafeMock.mockResolvedValueOnce({
+      ok: false,
+      error: new Error("live sync failed"),
+    });
+
+    const { result } = renderHook(() => useSettings());
+
+    let saveResult: { requiresRestart: boolean } | null = null;
+    await act(async () => {
+      saveResult = await result.current.saveSettings();
+    });
+
+    expect(saveResult).toEqual({ requiresRestart: false });
+    expect(mutateAsyncMock).toHaveBeenCalledTimes(1);
+    expect(setAppConfigDirOverrideMock).toHaveBeenCalledWith(null);
+    expect(updateTrayMenuMock).toHaveBeenCalledTimes(1);
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "设置已保存，但当前供应商未能同步到新的配置目录",
+    );
   });
 
   it("shows toast when Claude plugin sync fails but continues flow", async () => {
@@ -351,6 +510,7 @@ describe("useSettings hook", () => {
       ...serverSettings,
       claudeConfigDir: "  /server/claude  ",
       codexConfigDir: "   ",
+      openclawConfigDir: "  /server/openclaw  ",
       language: "zh",
     };
     useSettingsQueryMock.mockReturnValue({
@@ -382,6 +542,7 @@ describe("useSettings hook", () => {
       undefined,
       undefined, // geminiConfigDir
       undefined, // opencodeConfigDir
+      "/server/openclaw",
     );
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(false);
   });
