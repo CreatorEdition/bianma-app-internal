@@ -143,6 +143,8 @@ mod tests {
     impl TestCredentialEntry for FakeCredentialEntry {
         fn write_canary(&mut self, canary: &[u8]) -> Result<(), VaultCapabilityError> {
             if self.fail_write {
+                // 模拟底层写入已落盘但调用仍返回错误的部分成功场景。
+                self.stored = Some(canary.to_vec());
                 return Err(VaultCapabilityError::Unavailable);
             }
             self.stored = Some(canary.to_vec());
@@ -214,7 +216,10 @@ mod tests {
             verify_round_trip(&mut entry, canary.as_bytes()),
             Err(VaultCapabilityError::Unavailable)
         );
-        assert!(entry.stored.is_none());
+        assert!(
+            entry.stored.is_none(),
+            "写入部分成功后仍必须清理 canary 残留"
+        );
         assert_eq!(entry.delete_count, 1);
     }
 
