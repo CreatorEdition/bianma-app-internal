@@ -90,9 +90,7 @@ pub fn disable_auto_launch() -> Result<(), AppError> {
         log::warn!("禁用历史开机自启项失败: {error}");
     }
 
-    if let Err(error) = current_result {
-        return Err(error);
-    }
+    current_result?;
 
     log::info!("已禁用开机自启");
     Ok(())

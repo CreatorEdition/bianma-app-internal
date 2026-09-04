@@ -8,10 +8,7 @@ import {
   X,
   CheckSquare,
 } from "lucide-react";
-import {
-  useSessionMessagesQuery,
-  useSessionsQuery,
-} from "@/lib/query";
+import { useSessionMessagesQuery, useSessionsQuery } from "@/lib/query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -40,10 +37,7 @@ import {
   type ProviderFilter,
 } from "./hooks/useSessionListState";
 import { useSessionSelectionState } from "./hooks/useSessionSelectionState";
-import {
-  getProviderIconName,
-  getSessionKey,
-} from "./utils";
+import { getProviderIconName, getSessionKey } from "./utils";
 
 export function SessionManagerPage({ appId }: { appId: string }) {
   const { t } = useTranslation();

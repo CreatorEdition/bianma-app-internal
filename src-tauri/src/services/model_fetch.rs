@@ -285,6 +285,13 @@ fn parse_base_url(raw: &str) -> Result<Url, String> {
             .with_detail(e.to_string())
             .into_error()
     })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(
+            ModelFetchFailure::new(ERROR_INVALID_URL, "baseUrl must use http or https")
+                .with_detail(format!("unsupported URL scheme: {}", parsed.scheme()))
+                .into_error(),
+        );
+    }
     parsed.set_query(None);
     parsed.set_fragment(None);
     Ok(parsed)
@@ -557,6 +564,21 @@ mod tests {
             payload.get("code").and_then(Value::as_str),
             Some(ERROR_MISSING_ENDPOINT)
         );
+    }
+
+    #[test]
+    fn test_parse_base_url_rejects_non_http_scheme() {
+        let error = parse_base_url("file:///tmp/models").expect_err("file URL should fail");
+        let payload: Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(
+            payload.get("code").and_then(Value::as_str),
+            Some(ERROR_INVALID_URL)
+        );
+        assert!(payload
+            .get("context")
+            .and_then(|context| context.get("detail"))
+            .and_then(Value::as_str)
+            .is_some_and(|detail| detail.contains("unsupported URL scheme: file")));
     }
 
     #[test]

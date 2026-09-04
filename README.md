@@ -4,7 +4,7 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 
 ## 仓库状态
 
-`bianma-app` 现在是 Bianma 的唯一正式开源主仓。后续源码、公开协作、Release、Updater 与二进制分发默认都以本仓为准；历史 `bianma-app-product` 仅作为迁移源与待归档目录。
+`bianma-app-internal` 现在是 Bianma 的唯一正式开源主仓（应用品牌仍为 `bianma-app`）。后续源码、公开协作、Release、Updater 与二进制分发默认都以本仓为准；历史 `bianma-app-product` 仅作为迁移源与待归档目录。
 
 ## 快速开始
 

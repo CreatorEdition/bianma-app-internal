@@ -2,7 +2,7 @@
 Type=Application
 Name=bianma.ai
 Comment=Local AI coding control plane for Claude Code, Codex, Gemini CLI, OpenCode and OpenClaw
-Exec=cc-switch
+Exec=bianma-app
 Icon=com.ccswitch.desktop
 Terminal=false
 MimeType=x-scheme-handler/bianma;x-scheme-handler/ccswitch;

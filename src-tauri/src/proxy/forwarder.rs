@@ -96,6 +96,7 @@ impl RequestForwarder {
     /// * `body` - 请求体
     /// * `headers` - 请求头
     /// * `providers` - 已选择的 Provider 列表（由 RequestContext 提供，避免重复调用 select_providers）
+    #[allow(clippy::result_large_err)]
     pub async fn forward_with_retry(
         &self,
         app_type: &AppType,
