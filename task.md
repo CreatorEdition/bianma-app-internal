@@ -2,6 +2,7 @@
 
 ## 当前完成
 
+- ✅ 已完成（2026-08-13）：收口旧 Proxy 的接流前安全门禁，并通过 Terra 三轮独立安全复审（0 个剩余 BLOCKING）。代理配置在前端、Tauri 命令、服务、DAO 与最终 bind 五层只允许本机回环地址，模型路由统一拒绝带 `Origin` 的浏览器请求；传输一旦可能写出请求就转为 `DeliveryUnknown`，已经收到任何上游 HTTP 响应也不得切换 Provider 重放。本切片不新增鉴权系统、后台线程、轮询、依赖或 routing-core 功能；可信 429 回执与受控 A→B 留给 routing-core v2。旧 Forwarder 的同 Provider thinking 整流重试作为后续 Attempt 合同审计项，不在本切片扩展。
 - ✅ 已完成（2026-08-17）：最终收口 RT-002 默认路径为“路由中心 → 上游 → 用量”。首页直接执行统一上游准备、启动本地入口和支持客户端接入，不再用一个说明型概览页跳转到第二个路由页；简易上游只保存 API 地址、API Key 与默认模型，逐客户端兼容同步统一延后到首页的一键启动。简易模式维护一个明确的当前上游，按稳定顺序回退，且只有完整覆盖 Claude/Codex/Gemini 的配置才有资格成为全局上游。启动时遵守兼容层契约，先接管并同步旧 Live Token，再热切换到选定统一上游；首页同时核验 takeover 与 `active_targets`，只有三端目标一致才显示“统一路由已接入”，失败不会虚报 3/3。当前上游准备失败时不启动代理、不接管客户端；备用候选失败只降级提示。简易表单不再渲染客户端开关和逐客户端模型映射，高级入口降为首页齿轮按钮。本切片删除重复首页组件，未新增依赖、额外轮询、后台任务、routing-core 或旧 Forwarder 逻辑；69 个前端测试文件 / 403 项、TypeScript、本次修改文件的 Prettier、diff check 与 renderer 生产构建通过。另补充 Rust 凭据顺序回归测试；`cargo fmt --check` 通过，focused test 在本机编译至链接阶段后因缺少 MSVC `link.exe` 未能执行。
 - ✅ 已完成（2026-08-13）：首次上游表单默认只显示 API 地址、API Key 与默认模型；客户端切换、逐客户端模型映射、Header 与兼容参数默认隐藏，仅在“客户端例外配置”高级入口中出现。
 - ⚠️ 能力边界：当前 `UniversalProvider` 仍是向 Claude、Codex、Gemini 客户端配置同步的兼容层；多账户/多 API Key 池、JWT 屏蔽、模型级故障链与统一 Header/User-Agent 策略继续由 routing-core v2 实现。

@@ -86,6 +86,13 @@ pub async fn update_global_proxy_config(
     state: tauri::State<'_, AppState>,
     config: GlobalProxyConfig,
 ) -> Result<(), String> {
+    let Some(listen_address) = normalized_loopback_listen_address(&config.listen_address) else {
+        return Err("代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string());
+    };
+    let config = GlobalProxyConfig {
+        listen_address: listen_address.to_string(),
+        ..config
+    };
     let db = &state.db;
     db.update_global_proxy_config(config)
         .await

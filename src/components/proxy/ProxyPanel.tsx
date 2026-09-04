@@ -119,17 +119,12 @@ export function ProxyPanel({
   const handleSaveBasicConfig = async () => {
     if (!globalConfig) return;
 
-    // 校验地址格式（简单的 IP 地址或 localhost 校验）
+    // 代理只绑定本机回环地址，避免未鉴权的上游凭据暴露到局域网。
     const addressTrimmed = listenAddress.trim();
-    const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
     const isValidAddress =
       addressTrimmed === "localhost" ||
-      addressTrimmed === "0.0.0.0" ||
-      (ipv4Regex.test(addressTrimmed) &&
-        addressTrimmed.split(".").every((n) => {
-          const num = parseInt(n);
-          return num >= 0 && num <= 255;
-        }));
+      addressTrimmed === "127.0.0.1" ||
+      addressTrimmed === "::1";
     if (!isValidAddress) {
       toast.error(
         t("proxy.settings.invalidAddress", {

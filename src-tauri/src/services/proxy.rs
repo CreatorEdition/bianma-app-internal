@@ -176,6 +176,12 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取代理配置失败: {e}"))?;
 
+        if !is_loopback_listen_address(&config.listen_address) {
+            return Err(
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+            );
+        }
+
         // 3. 若已在运行：确保持久化状态（如需要）并返回当前信息
         if let Some(server) = self.server.read().await.as_ref() {
             let status = server.get_status().await;
@@ -870,7 +876,7 @@ impl ProxyService {
         Ok(())
     }
 
-    /// 构造写入 Live 的代理地址（处理 0.0.0.0 / IPv6 等特殊情况）
+    /// 构造写入 Live 的代理地址。
     async fn build_proxy_urls(&self) -> Result<(String, String), String> {
         let config = self
             .db
@@ -878,13 +884,16 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取代理配置失败: {e}"))?;
 
-        // listen_address 可能是 0.0.0.0（用于监听所有网卡），但客户端无法用 0.0.0.0 连接；
-        // 因此写回到各应用配置时，优先使用本机回环地址。
-        let connect_host = match config.listen_address.as_str() {
-            "0.0.0.0" => "127.0.0.1".to_string(),
-            "::" => "::1".to_string(),
-            _ => config.listen_address.clone(),
-        };
+        if !is_loopback_listen_address(&config.listen_address) {
+            return Err(
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+            );
+        }
+        let connect_host = normalized_loopback_listen_address(&config.listen_address)
+            .ok_or_else(|| {
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string()
+            })?
+            .to_string();
         let connect_host_for_url = if connect_host.contains(':') && !connect_host.starts_with('[') {
             format!("[{connect_host}]")
         } else {
@@ -1817,6 +1826,12 @@ impl ProxyService {
 
     /// 更新代理配置
     pub async fn update_config(&self, config: &ProxyConfig) -> Result<(), String> {
+        let Some(listen_address) = normalized_loopback_listen_address(&config.listen_address)
+        else {
+            return Err(
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+            );
+        };
         // 记录旧配置用于判定是否需要重启
         let previous = self
             .db
@@ -1826,6 +1841,7 @@ impl ProxyService {
 
         // 保存到数据库（保持 live_takeover_active 状态不变）
         let mut new_config = config.clone();
+        new_config.listen_address = listen_address.to_string();
         new_config.live_takeover_active = previous.live_takeover_active;
 
         self.db
