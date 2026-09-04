@@ -2065,7 +2065,7 @@ mod tests {
                 first_resolved,
                 registered_rate_limit_contract(
                     SiteId::new(2).expect("测试 Site ID 非零"),
-                    CooldownProjection::Health(RateLimitScope::Unknown),
+                    CooldownProjection::from_rate_limit_scope(RateLimitScope::Unknown),
                 ),
             ),
             Err(HandoffRateLimitReporterError::Contract(
@@ -2077,23 +2077,24 @@ mod tests {
                 first_resolved,
                 registered_rate_limit_contract(
                     SiteId::new(1).expect("测试 Site ID 非零"),
-                    CooldownProjection::Health(RateLimitScope::Unknown),
+                    CooldownProjection::from_rate_limit_scope(RateLimitScope::Unknown),
                 ),
             )
             .expect("Site 错配不能消耗正确 reporter")
-            .report(
+            .report_conservative_unknown(
+                HealthTick::new(5),
                 HealthTick::new(10),
                 HealthTick::new(1),
                 &mut unknown_health,
                 &mut unknown_resources,
             )
-            .expect("受信 Unknown 合同可记录 Site 冷却");
+            .expect("受信 Unknown 合同必须记录复合冷却");
         assert_eq!(
             unknown_resources
                 .filter(base, HealthTick::new(1))
-                .expect("Unknown 不应缩窄为资源级冷却")
+                .expect("Unknown 复合冷却资源过滤有效")
                 .member_mask(),
-            0b111
+            0b100
         );
         let unknown_eligibility =
             unknown_health.eligibility_for(compiled.routing(), HealthTick::new(1));
@@ -2111,7 +2112,7 @@ mod tests {
                 first_resolved,
                 registered_rate_limit_contract(
                     SiteId::new(1).expect("测试 Site ID 非零"),
-                    CooldownProjection::Health(RateLimitScope::Unknown),
+                    CooldownProjection::from_rate_limit_scope(RateLimitScope::Unknown),
                 ),
             ),
             Err(HandoffRateLimitReporterError::Attempt(

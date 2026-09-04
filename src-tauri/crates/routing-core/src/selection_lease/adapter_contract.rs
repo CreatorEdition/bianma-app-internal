@@ -37,8 +37,10 @@ pub(super) enum AdapterRateLimitKind {
 /// QuotaGroup 的资源冷却，再记录短时 Site 冷却；两个截止时间都由未来宿主完成换算。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CooldownProjection {
-    /// 更新 Target 的 Deployment / Site 健康冷却。
-    Health(RateLimitScope),
+    /// 更新当前 Target 的 ModelDeployment 健康冷却。
+    HealthDeployment,
+    /// 更新当前 Target 所属 Site 的健康冷却。
+    HealthSite,
     /// 更新当前实际 Lease 派生的资源冷却。
     Resource(ResourceCooldownScope),
     /// 对未知额度归因作保守复合冷却。
@@ -46,6 +48,17 @@ pub(super) enum CooldownProjection {
     /// 资源截止时间通常应长于 Site 截止时间：前者在 Site 恢复后继续阻止同 Key 或共享额度
     /// 组轮换，后者则短暂避免整站 429 风暴。此类型不接受资源 ID，也不改变当前 Attempt。
     ConservativeUnknown,
+}
+
+impl CooldownProjection {
+    /// 将低层限流范围映射到 adapter 合同；未知范围只能走保守复合投影。
+    pub(super) const fn from_rate_limit_scope(scope: RateLimitScope) -> Self {
+        match scope {
+            RateLimitScope::Deployment => Self::HealthDeployment,
+            RateLimitScope::Site => Self::HealthSite,
+            RateLimitScope::Unknown => Self::ConservativeUnknown,
+        }
+    }
 }
 
 /// 已由受审站点注册表验证的一次限流合同。
@@ -156,8 +169,16 @@ impl<'handoff, 'registry, 'snapshot, 'config>
             projection,
         } = self;
         match projection {
-            CooldownProjection::Health(scope) => {
-                health.record_rate_limit(health_reporter.report(scope, deadline), now);
+            CooldownProjection::HealthDeployment => {
+                health.record_rate_limit(
+                    health_reporter.report(RateLimitScope::Deployment, deadline),
+                    now,
+                );
+                Ok(())
+            }
+            CooldownProjection::HealthSite => {
+                health
+                    .record_rate_limit(health_reporter.report(RateLimitScope::Site, deadline), now);
                 Ok(())
             }
             CooldownProjection::Resource(scope) => {
@@ -287,7 +308,7 @@ mod tests {
                 1,
                 1,
                 AdapterRateLimitKind::Transient,
-                CooldownProjection::Health(RateLimitScope::Site),
+                CooldownProjection::HealthSite,
             ),
             Err(VerifiedRateLimitContractError::InvalidMetadata)
         ));
@@ -299,7 +320,7 @@ mod tests {
             1,
             1,
             AdapterRateLimitKind::Transient,
-            CooldownProjection::Health(RateLimitScope::Site),
+            CooldownProjection::HealthSite,
         )
         .expect("完整 fixture 可模拟已登记合同");
         assert_eq!(
@@ -314,9 +335,9 @@ mod tests {
             CooldownProjection::Resource(ResourceCooldownScope::Credential),
             CooldownProjection::Resource(ResourceCooldownScope::Account),
             CooldownProjection::Resource(ResourceCooldownScope::CurrentQuotaGroups),
-            CooldownProjection::Health(RateLimitScope::Deployment),
-            CooldownProjection::Health(RateLimitScope::Site),
-            CooldownProjection::Health(RateLimitScope::Unknown),
+            CooldownProjection::HealthDeployment,
+            CooldownProjection::HealthSite,
+            CooldownProjection::ConservativeUnknown,
         ];
 
         for projection in projections {
@@ -332,5 +353,21 @@ mod tests {
             .expect("完整 fixture 可模拟已登记合同");
             assert_eq!(contract.into_projection_for(site(1)), Ok(projection));
         }
+    }
+
+    #[test]
+    fn unknown_scope_maps_only_to_conservative_composite_projection() {
+        assert_eq!(
+            CooldownProjection::from_rate_limit_scope(RateLimitScope::Unknown),
+            CooldownProjection::ConservativeUnknown
+        );
+        assert_eq!(
+            CooldownProjection::from_rate_limit_scope(RateLimitScope::Deployment),
+            CooldownProjection::HealthDeployment
+        );
+        assert_eq!(
+            CooldownProjection::from_rate_limit_scope(RateLimitScope::Site),
+            CooldownProjection::HealthSite
+        );
     }
 }
