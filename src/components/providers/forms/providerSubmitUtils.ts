@@ -27,10 +27,17 @@ export function isGithubCopilotProvider({
   initialProviderType,
   baseUrl,
 }: IsGithubCopilotProviderParams): boolean {
+  let isCopilotHost = false;
+  try {
+    isCopilotHost = new URL(baseUrl).hostname === "api.githubcopilot.com";
+  } catch {
+    // Invalid or empty endpoints cannot identify a Copilot provider.
+  }
+
   return (
     templateProviderType === "github_copilot" ||
     initialProviderType === "github_copilot" ||
-    baseUrl.includes("githubcopilot.com")
+    isCopilotHost
   );
 }
 

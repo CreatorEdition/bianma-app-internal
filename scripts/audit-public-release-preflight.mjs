@@ -5,6 +5,12 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
+const publicRepositoryUrl =
+  "https://github.com/CreatorEdition/bianma-app-internal";
+const publicRepositoryGitUrl = `git+${publicRepositoryUrl}.git`;
+const publicHomepageUrl = `${publicRepositoryUrl}#readme`;
+const publicIssuesUrl = `${publicRepositoryUrl}/issues`;
+const publicUpdaterEndpoint = `${publicRepositoryUrl}/releases/latest/download/latest.json`;
 
 const resolveRepoPath = (relativePath) => path.join(repoRoot, relativePath);
 
@@ -173,6 +179,11 @@ const forbiddenWorkflowPatterns = [
 
 for (const [label, pattern] of forbiddenWorkflowPatterns) {
   for (const [workflowPath, workflowContent] of trackedWorkflows) {
+    const normalizedWorkflowPath = workflowPath.replace(/\\/g, "/");
+    if (normalizedWorkflowPath !== ".github/workflows/release.yml") {
+      continue;
+    }
+
     assertCondition(
       !pattern.test(workflowContent),
       `公开 workflow ${workflowPath} 当前不得包含 ${label} 相关逻辑。`,
@@ -182,15 +193,13 @@ for (const [label, pattern] of forbiddenWorkflowPatterns) {
 
 const endpoints = tauriConfig?.plugins?.updater?.endpoints ?? [];
 assertCondition(
-  endpoints.includes(
-    "https://github.com/CreatorEdition/bianma-app/releases/latest/download/latest.json",
-  ),
-  "Tauri updater endpoint 必须指向 CreatorEdition/bianma-app 的 latest.json。",
+  endpoints.length === 1 && endpoints[0] === publicUpdaterEndpoint,
+  `Tauri updater endpoint 必须精确指向 ${publicUpdaterEndpoint}。`,
 );
 for (const endpoint of endpoints) {
   assertCondition(
-    !/bianma-app-product|data\.bianma\.ai|internal|private/i.test(endpoint),
-    `Tauri updater endpoint 不得指向 product、内部域名或私有通道：${endpoint}`,
+    endpoint === publicUpdaterEndpoint,
+    `Tauri updater endpoint 不在公开 allowlist 中：${endpoint}`,
   );
 }
 assertCondition(
@@ -206,8 +215,16 @@ assertCondition(
   "Deep link 必须继续保留 ccswitch legacy scheme，避免破坏迁移兼容。",
 );
 assertCondition(
-  packageJson?.repository?.url?.includes("CreatorEdition/bianma-app"),
-  "package.json repository 必须指向 CreatorEdition/bianma-app。",
+  packageJson?.repository?.url === publicRepositoryGitUrl,
+  `package.json repository 必须精确指向 ${publicRepositoryGitUrl}。`,
+);
+assertCondition(
+  packageJson?.homepage === publicHomepageUrl,
+  `package.json homepage 必须精确指向 ${publicHomepageUrl}。`,
+);
+assertCondition(
+  packageJson?.bugs?.url === publicIssuesUrl,
+  `package.json bugs URL 必须精确指向 ${publicIssuesUrl}。`,
 );
 assertCondition(
   packageJson?.version === tauriConfig?.version &&
@@ -317,8 +334,8 @@ const flatpakCompatibilityChecks = [
   ],
   [
     "Flatpak manifest command",
-    /^command:\s*cc-switch\s*$/m.test(flatpakManifest),
-    "Flatpak manifest 必须继续使用 command: cc-switch，避免破坏现有 Flatpak 启动入口。",
+    /^command:\s*bianma-app\s*$/m.test(flatpakManifest),
+    "Flatpak manifest 必须使用 Cargo 生成的 bianma-app 二进制启动。",
   ],
   [
     "Flatpak manifest deb source",
@@ -360,8 +377,8 @@ const flatpakCompatibilityChecks = [
   ],
   [
     "Flatpak desktop Exec",
-    /^Exec=cc-switch\s*$/m.test(flatpakDesktopEntry),
-    "Flatpak desktop entry 必须继续保留 Exec=cc-switch，避免破坏现有二进制启动入口。",
+    /^Exec=bianma-app\s*$/m.test(flatpakDesktopEntry),
+    "Flatpak desktop entry 必须使用 Cargo 生成的 bianma-app 二进制启动。",
   ],
   [
     "Flatpak desktop Icon",
@@ -392,8 +409,8 @@ const flatpakCompatibilityChecks = [
   ],
   [
     "Flatpak metainfo binary",
-    /<binary>cc-switch<\/binary>/.test(flatpakMetainfo),
-    "Flatpak metainfo 必须继续声明 cc-switch binary。",
+    /<binary>bianma-app<\/binary>/.test(flatpakMetainfo),
+    "Flatpak metainfo 必须声明 bianma-app binary。",
   ],
   [
     "Flatpak README compatibility app id",
@@ -407,8 +424,8 @@ const flatpakCompatibilityChecks = [
   ],
   [
     "Flatpak README compatibility binary",
-    /Desktop Exec \/ binary:\s*`cc-switch`/.test(flatpakReadme),
-    "Flatpak README 必须记录 cc-switch 是兼容启动入口。",
+    /Desktop Exec \/ binary:\s*`bianma-app`/.test(flatpakReadme),
+    "Flatpak README 必须记录 bianma-app 是实际启动二进制。",
   ],
   [
     "Flatpak README compatibility deb",

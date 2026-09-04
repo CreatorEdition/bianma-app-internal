@@ -113,7 +113,7 @@ async fn test_providers_latency_impl(
     let mut success = 0;
     let mut failed = 0;
 
-    for (target, endpoint_result) in targets.into_iter().zip(endpoint_results.into_iter()) {
+    for (target, endpoint_result) in targets.into_iter().zip(endpoint_results) {
         let latency_ms = endpoint_result.latency.map(latency_to_i64);
         let status_i64 = endpoint_result.status.map(i64::from);
         let is_success = endpoint_result.error.is_none()
