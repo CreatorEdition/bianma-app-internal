@@ -4,7 +4,6 @@ import { isTextEditableTarget } from "@/utils/domUtils";
 export type AppKeyboardShortcutView =
   | "home"
   | "services"
-  | "strategy"
   | "stats"
   | "providers"
   | "settings"
@@ -29,12 +28,7 @@ interface UseAppKeyboardShortcutsParams {
 
 function getEscapeTargetView(view: AppKeyboardShortcutView) {
   if (view === "skillsDiscovery") return "skills";
-  if (
-    view === "home" ||
-    view === "services" ||
-    view === "strategy" ||
-    view === "stats"
-  ) {
+  if (view === "home" || view === "services" || view === "stats") {
     return view;
   }
   return view === "settings" ? "home" : "services";
@@ -63,12 +57,7 @@ export function useAppKeyboardShortcuts({
       if (document.body.style.overflow === "hidden") return;
 
       const view = currentViewRef.current;
-      if (
-        view === "home" ||
-        view === "services" ||
-        view === "strategy" ||
-        view === "stats"
-      ) {
+      if (view === "home" || view === "services" || view === "stats") {
         return;
       }
 

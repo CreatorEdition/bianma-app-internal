@@ -1,8 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { installRendererMock } from "@/dev/rendererMock";
 import App from "./App";
 import { UpdateProvider } from "./contexts/UpdateContext";
 import "./index.css";
+
+installRendererMock();
 // 导入国际化配置
 import i18n from "./i18n";
 import { QueryClientProvider } from "@tanstack/react-query";

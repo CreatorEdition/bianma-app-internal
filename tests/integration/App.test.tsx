@@ -164,6 +164,24 @@ vi.mock("@/components/AppSwitcher", () => ({
   ),
 }));
 
+vi.mock("@/components/control-plane/RouteCenterPanel", () => ({
+  RouteCenterPanel: ({ onOpenAdvanced }: any) => (
+    <div data-testid="route-center-page">
+      <button onClick={onOpenAdvanced}>advanced-providers</button>
+    </div>
+  ),
+}));
+
+vi.mock("@/components/universal", () => ({
+  UniversalProviderPanel: ({ simpleMode, onOpenAdvanced }: any) => (
+    <div data-testid={simpleMode ? "upstreams-page" : "universal-page"}>
+      {onOpenAdvanced ? (
+        <button onClick={onOpenAdvanced}>advanced-providers</button>
+      ) : null}
+    </div>
+  ),
+}));
+
 vi.mock("@/components/UpdateBadge", () => ({
   UpdateBadge: ({ onClick }: any) => (
     <button onClick={onClick}>update-badge</button>
@@ -206,6 +224,13 @@ const openServices = () => {
   fireEvent.click(screen.getByTestId("primary-nav-services"));
 };
 
+const openAdvancedProviders = async () => {
+  openServices();
+  await screen.findByTestId("upstreams-page");
+  fireEvent.click(screen.getByText("advanced-providers"));
+  await screen.findByTestId("provider-list");
+};
+
 const APP_IMPORT_TIMEOUT_MS = 20000;
 
 describe("App integration with MSW", () => {
@@ -232,25 +257,21 @@ describe("App integration with MSW", () => {
     expect(localStorage.getItem("cc-switch-last-view")).toBeNull();
   });
 
-  it("exposes the alpha primary path as real views", async () => {
+  it("默认主路径只展示统一路由中心，不要求先选择客户端", async () => {
     renderApp(App);
 
     expect(screen.getByTestId("primary-nav-home")).toHaveAttribute(
       "aria-current",
       "page",
     );
+    expect(screen.getByTestId("route-center-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("app-switcher")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("provider-list")).not.toBeInTheDocument();
 
     openServices();
-    await waitFor(() =>
-      expect(screen.getByTestId("provider-list").textContent).toContain(
-        "claude-1",
-      ),
-    );
-
-    fireEvent.click(screen.getByTestId("primary-nav-strategy"));
-    await waitFor(() =>
-      expect(screen.getByTestId("strategy-page")).toBeInTheDocument(),
-    );
+    expect(await screen.findByTestId("upstreams-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("app-switcher")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("provider-list")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("primary-nav-stats"));
     await waitFor(() =>
@@ -264,11 +285,17 @@ describe("App integration with MSW", () => {
         "page",
       ),
     );
+
+    await screen.findByTestId("route-center-page");
+    fireEvent.click(screen.getByText("advanced-providers"));
+    await screen.findByTestId("provider-list");
+    expect(screen.getByText("客户端例外配置")).toBeInTheDocument();
+    expect(screen.getByTestId("app-switcher")).toBeInTheDocument();
   });
 
   it("covers basic provider flows via real hooks", async () => {
     renderApp(App);
-    openServices();
+    await openAdvancedProviders();
 
     await waitFor(() =>
       expect(screen.getByTestId("provider-list").textContent).toContain(
@@ -325,13 +352,6 @@ describe("App integration with MSW", () => {
 
   it("shows toast when auto sync fails in background", async () => {
     renderApp(App);
-    openServices();
-
-    await waitFor(() =>
-      expect(screen.getByTestId("provider-list").textContent).toContain(
-        "claude-1",
-      ),
-    );
 
     emitTauriEvent("webdav-sync-status-updated", {
       source: "auto",
@@ -364,7 +384,7 @@ describe("App integration with MSW", () => {
     setLiveProviderIds("openclaw", ["deepseek-copy"]);
 
     renderApp(App);
-    openServices();
+    await openAdvancedProviders();
 
     fireEvent.click(screen.getByText("switch-openclaw"));
 
@@ -410,7 +430,7 @@ describe("App integration with MSW", () => {
       .mockRejectedValueOnce(new Error("broken config"));
 
     renderApp(App);
-    openServices();
+    await openAdvancedProviders();
 
     fireEvent.click(screen.getByText("switch-openclaw"));
 

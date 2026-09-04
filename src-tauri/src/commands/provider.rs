@@ -448,7 +448,7 @@ pub fn sync_universal_provider(
     app: AppHandle,
     state: State<'_, AppState>,
     id: String,
-) -> Result<bool, String> {
+) -> Result<crate::services::provider::UniversalProviderSyncResult, String> {
     let result =
         ProviderService::sync_universal_to_apps(state.inner(), &id).map_err(|e| e.to_string())?;
 

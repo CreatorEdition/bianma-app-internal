@@ -9,6 +9,7 @@ const getAllMock = vi.hoisted(() => vi.fn());
 const upsertMock = vi.hoisted(() => vi.fn());
 const deleteMock = vi.hoisted(() => vi.fn());
 const syncMock = vi.hoisted(() => vi.fn());
+const formPropsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("sonner", () => ({
   toast: {
@@ -27,7 +28,17 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/components/universal/UniversalProviderFormModal", () => ({
-  UniversalProviderFormModal: () => null,
+  UniversalProviderFormModal: (props: {
+    isOpen: boolean;
+    onSave: (provider: UniversalProvider) => void;
+  }) => {
+    formPropsMock(props);
+    return props.isOpen ? (
+      <button onClick={() => props.onSave(createProvider("new", "New"))}>
+        submit-provider
+      </button>
+    ) : null;
+  },
 }));
 
 vi.mock("@/components/ConfirmDialog", () => ({
@@ -67,7 +78,21 @@ const createProvider = (id: string, name: string): UniversalProvider => ({
   },
   baseUrl: "https://api.example.com",
   apiKey: "test-key",
-  models: {},
+  models: {
+    claude: { model: "gpt-5.4" },
+    codex: { model: "gpt-5.4" },
+    gemini: { model: "gpt-5.4" },
+  },
+});
+
+const successfulSyncResult = (id: string) => ({
+  providerId: id,
+  success: true,
+  apps: ["claude", "codex", "gemini"].map((app) => ({
+    app,
+    success: true,
+    becameCurrent: false,
+  })),
 });
 
 describe("UniversalProviderPanel", () => {
@@ -78,6 +103,8 @@ describe("UniversalProviderPanel", () => {
     upsertMock.mockReset();
     deleteMock.mockReset();
     syncMock.mockReset();
+    formPropsMock.mockReset();
+    localStorage.clear();
 
     getAllMock.mockResolvedValue({
       p1: createProvider("p1", "Provider One"),
@@ -85,7 +112,100 @@ describe("UniversalProviderPanel", () => {
     });
     upsertMock.mockResolvedValue(true);
     deleteMock.mockResolvedValue(true);
-    syncMock.mockResolvedValue(true);
+    syncMock.mockImplementation(async (id: string) => successfulSyncResult(id));
+  });
+
+  it("简易模式新建上游只保存，客户端准备留到路由中心启动", async () => {
+    render(<UniversalProviderPanel simpleMode />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Provider One")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("添加上游"));
+    fireEvent.click(screen.getByText("submit-provider"));
+
+    await waitFor(() => {
+      expect(upsertMock).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "new" }),
+      );
+    });
+    expect(syncMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).toHaveBeenCalledWith(
+      "统一上游已保存，返回路由中心一键启动即可接入",
+    );
+  });
+
+  it("简易模式编辑上游只更新统一配置", async () => {
+    render(<UniversalProviderPanel simpleMode />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Provider One")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getAllByTitle("编辑")[0]);
+    fireEvent.click(screen.getByText("submit-provider"));
+
+    await waitFor(() => {
+      expect(upsertMock).toHaveBeenCalled();
+    });
+    expect(syncMock).not.toHaveBeenCalled();
+  });
+
+  it("简易模式只标记一个当前上游", async () => {
+    localStorage.setItem("bianma-universal-active-provider", "p2");
+
+    render(<UniversalProviderPanel simpleMode />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle("当前上游")).toBeInTheDocument();
+    });
+    expect(screen.getAllByTitle("当前上游")).toHaveLength(1);
+    expect(screen.getAllByTitle("设为当前上游")).toHaveLength(1);
+  });
+
+  it("简易模式不会让部分客户端配置成为当前上游", async () => {
+    const partialProvider = createProvider("p2", "Partial Provider");
+    partialProvider.apps.codex = false;
+    partialProvider.models.codex = undefined;
+    localStorage.setItem("bianma-universal-active-provider", "p2");
+    getAllMock.mockResolvedValue({
+      p1: createProvider("p1", "Provider One"),
+      p2: partialProvider,
+    });
+
+    render(<UniversalProviderPanel simpleMode />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle("当前上游")).toBeInTheDocument();
+    });
+    expect(screen.getAllByTitle("当前上游")).toHaveLength(1);
+    expect(screen.queryByTitle("设为当前上游")).not.toBeInTheDocument();
+  });
+
+  it("删除当前上游后回退到下一个可用上游", async () => {
+    localStorage.setItem("bianma-universal-active-provider", "p2");
+    getAllMock.mockReset();
+    getAllMock
+      .mockResolvedValueOnce({
+        p1: createProvider("p1", "Provider One"),
+        p2: createProvider("p2", "Provider Two"),
+      })
+      .mockResolvedValueOnce({
+        p1: createProvider("p1", "Provider One"),
+      });
+
+    render(<UniversalProviderPanel simpleMode />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle("当前上游")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("delete-provider-p2"));
+    fireEvent.click(screen.getByText("删除"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Provider Two")).not.toBeInTheDocument();
+      expect(screen.getByTitle("当前上游")).toBeInTheDocument();
+    });
+    expect(screen.getAllByTitle("当前上游")).toHaveLength(1);
   });
 
   it("单个同步成功后显示最近同步成功并传入正确 provider id", async () => {

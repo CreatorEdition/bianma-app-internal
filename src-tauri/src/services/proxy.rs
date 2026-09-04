@@ -2166,6 +2166,107 @@ model = "gpt-5.1-codex"
 
     #[tokio::test]
     #[serial]
+    async fn takeover_before_hot_switch_preserves_target_provider_credential() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        let legacy_provider = Provider::with_id(
+            "legacy-current".to_string(),
+            "Legacy current".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_API_KEY": "legacy-provider-token",
+                    "ANTHROPIC_BASE_URL": "https://legacy.example"
+                }
+            }),
+            None,
+        );
+        let unified_provider = Provider::with_id(
+            "universal-claude-primary".to_string(),
+            "Unified primary".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_API_KEY": "unified-provider-token",
+                    "ANTHROPIC_BASE_URL": "https://unified.example"
+                }
+            }),
+            None,
+        );
+
+        db.save_provider("claude", &legacy_provider)
+            .expect("save legacy provider");
+        db.save_provider("claude", &unified_provider)
+            .expect("save unified provider");
+        db.set_current_provider("claude", &legacy_provider.id)
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Claude, Some(&legacy_provider.id))
+            .expect("set local current provider");
+
+        service
+            .write_claude_live(&json!({
+                "env": {
+                    "ANTHROPIC_AUTH_TOKEN": "old-live-token",
+                    "ANTHROPIC_BASE_URL": "https://live.example"
+                }
+            }))
+            .expect("seed legacy live config");
+
+        service
+            .backup_live_config_strict(&AppType::Claude)
+            .await
+            .expect("backup legacy live config");
+        service
+            .sync_live_to_provider(&AppType::Claude)
+            .await
+            .expect("sync live token to legacy provider");
+        service
+            .takeover_live_config_strict(&AppType::Claude)
+            .await
+            .expect("take over legacy live config");
+        service
+            .hot_switch_provider("claude", &unified_provider.id)
+            .await
+            .expect("hot switch to unified provider");
+
+        let legacy_after = db
+            .get_provider_by_id(&legacy_provider.id, "claude")
+            .expect("get legacy provider")
+            .expect("legacy provider exists");
+        assert_eq!(
+            legacy_after
+                .settings_config
+                .get("env")
+                .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+                .and_then(|value| value.as_str()),
+            Some("old-live-token"),
+            "the old Live token belongs to the provider that was current during takeover"
+        );
+
+        let unified_after = db
+            .get_provider_by_id(&unified_provider.id, "claude")
+            .expect("get unified provider")
+            .expect("unified provider exists");
+        assert_eq!(
+            unified_after
+                .settings_config
+                .get("env")
+                .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+                .and_then(|value| value.as_str()),
+            Some("unified-provider-token"),
+            "switching after takeover must not overwrite the selected provider credential"
+        );
+        assert_eq!(
+            crate::settings::get_effective_current_provider(&db, &AppType::Claude)
+                .expect("get effective current provider"),
+            Some(unified_provider.id.clone())
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn switch_proxy_target_updates_live_backup_when_taken_over() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");

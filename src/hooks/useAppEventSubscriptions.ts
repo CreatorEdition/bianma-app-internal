@@ -13,6 +13,7 @@ interface WebDavSyncStatusUpdatedPayload {
 
 interface UseAppEventSubscriptionsOptions {
   activeApp: AppId;
+  watchActiveProvider?: boolean;
   refetchProviders: () => Promise<unknown>;
   queryClient: QueryClient;
   t: TFunction;
@@ -20,11 +21,14 @@ interface UseAppEventSubscriptionsOptions {
 
 export function useAppEventSubscriptions({
   activeApp,
+  watchActiveProvider = true,
   refetchProviders,
   queryClient,
   t,
 }: UseAppEventSubscriptionsOptions) {
   useEffect(() => {
+    if (!watchActiveProvider) return;
+
     let unsubscribe: (() => void) | undefined;
     let active = true;
 
@@ -52,7 +56,7 @@ export function useAppEventSubscriptions({
       active = false;
       unsubscribe?.();
     };
-  }, [activeApp, refetchProviders]);
+  }, [activeApp, refetchProviders, watchActiveProvider]);
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
