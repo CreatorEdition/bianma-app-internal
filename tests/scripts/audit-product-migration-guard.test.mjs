@@ -60,11 +60,11 @@ const createFixture = () => {
   return root;
 };
 
-const runGuard = (root) => {
+const runGuard = (root, guardArgs = ["--worktree"]) => {
   try {
     const output = execFileSync(
       process.execPath,
-      [guardScript, "--worktree", "--repo-root", root],
+      [guardScript, ...guardArgs, "--repo-root", root],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     return { status: 0, output };
@@ -74,6 +74,12 @@ const runGuard = (root) => {
       output: `${error.stdout ?? ""}${error.stderr ?? ""}`,
     };
   }
+};
+
+const commitAll = (root, message) => {
+  runGit(root, ["add", "-A"]);
+  runGit(root, ["commit", "--quiet", "-m", message]);
+  return runGit(root, ["rev-parse", "HEAD"]).trim();
 };
 
 afterEach(() => {
@@ -134,5 +140,95 @@ describe("audit-product-migration-guard worktree mode", () => {
     );
 
     expect(entries).toEqual([{ path: relativePath, text: "new" }]);
+  });
+});
+
+describe("audit-product-migration-guard committed mode", () => {
+  it("accepts a clean committed tree", () => {
+    const root = createFixture();
+    const head = runGit(root, ["rev-parse", "HEAD"]).trim();
+
+    const result = runGuard(root, ["--committed", "--tree", head]);
+
+    expect(result.status).toBe(0);
+    expect(result.output).toContain("mode=committed");
+  });
+
+  it("blocks a committed collaboration directory without logging its path", () => {
+    const root = createFixture();
+    const internalPath = path.join(root, ".teamwork", "progress", "private.md");
+    mkdirSync(path.dirname(internalPath), { recursive: true });
+    writeFileSync(internalPath, "internal progress\n", "utf8");
+    const head = commitAll(root, "add internal progress");
+
+    const result = runGuard(root, ["--committed", "--tree", head]);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("内部协作目录");
+    expect(result.output).not.toContain("private.md");
+  });
+
+  it("blocks an add-then-delete collaboration path anywhere in the range", () => {
+    const root = createFixture();
+    const base = runGit(root, ["rev-parse", "HEAD"]).trim();
+    const internalPath = path.join(root, ".teamwork", "progress", "private.md");
+    mkdirSync(path.dirname(internalPath), { recursive: true });
+    writeFileSync(internalPath, "internal progress\n", "utf8");
+    commitAll(root, "add internal progress");
+    rmSync(path.join(root, ".teamwork"), { recursive: true, force: true });
+    const head = commitAll(root, "remove internal progress");
+
+    const result = runGuard(root, [
+      "--committed",
+      "--tree",
+      head,
+      "--base",
+      base,
+      "--head",
+      head,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("内部协作目录");
+  });
+
+  it("allows a range whose only change removes an old collaboration path", () => {
+    const root = createFixture();
+    const internalPath = path.join(root, ".teamwork", "progress", "private.md");
+    mkdirSync(path.dirname(internalPath), { recursive: true });
+    writeFileSync(internalPath, "internal progress\n", "utf8");
+    const base = commitAll(root, "historical internal progress");
+    rmSync(path.join(root, ".teamwork"), { recursive: true, force: true });
+    const head = commitAll(root, "remove historical internal progress");
+
+    const result = runGuard(root, [
+      "--committed",
+      "--tree",
+      head,
+      "--base",
+      base,
+      "--head",
+      head,
+    ]);
+
+    expect(result.status).toBe(0);
+  });
+
+  it("fails closed for an all-zero base object id", () => {
+    const root = createFixture();
+    const head = runGit(root, ["rev-parse", "HEAD"]).trim();
+
+    const result = runGuard(root, [
+      "--committed",
+      "--tree",
+      head,
+      "--base",
+      "0000000000000000000000000000000000000000",
+      "--head",
+      head,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("全零对象");
   });
 });

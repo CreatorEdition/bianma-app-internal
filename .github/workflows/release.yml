@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -20,6 +22,14 @@ jobs:
 
       - name: Audit public release boundary
         run: node scripts/audit-public-release-preflight.mjs
+
+      - name: Audit committed public tree boundary
+        env:
+          TREE_SHA: ${{ github.sha }}
+        run: >-
+          node scripts/audit-product-migration-guard.mjs
+          --committed
+          --tree "$TREE_SHA"
 
       - name: Explain release boundary
         run: |

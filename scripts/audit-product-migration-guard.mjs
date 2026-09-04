@@ -10,7 +10,18 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
-const mode = args.includes("--worktree") ? "worktree" : "staged";
+const requestedModes = ["--staged", "--worktree", "--committed"].filter(
+  (flag) => args.includes(flag),
+);
+if (requestedModes.length > 1) {
+  console.error("迁移 denylist 审计模式不能同时指定多个模式。");
+  process.exit(2);
+}
+const mode = args.includes("--committed")
+  ? "committed"
+  : args.includes("--worktree")
+    ? "worktree"
+    : "staged";
 const repoRootArgIndex = args.indexOf("--repo-root");
 const repoRoot = path.resolve(
   repoRootArgIndex >= 0
@@ -29,6 +40,12 @@ const runGit = (gitArgs) =>
     cwd: repoRoot,
     encoding: "utf8",
   }).trim();
+
+const runGitRaw = (gitArgs) =>
+  execFileSync("git", ["-c", "core.quotePath=false", ...gitArgs], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
 
 const listGit = (gitArgs) =>
   runGit(gitArgs).split(/\r?\n/).filter(Boolean).map(normalizePath);
@@ -51,6 +68,13 @@ const pathBlockers = [
   ["多 key 池文件", /apiKeyPool|ApiKeyPool/i],
   ["私有策略链文件", /(^|\/)strategy(\/|\.)|load-balanc/i],
 ];
+
+// Committed-tree mode is intentionally limited to the collaboration directory.
+// The remaining entries describe migration content and are not promoted to
+// permanent public-repository path policy by this change.
+const committedPathBlockers = pathBlockers.filter(
+  ([label]) => label === "内部协作目录",
+);
 
 const requiredDocAssertions = [
   [
@@ -180,11 +204,159 @@ const checkBoundaryDocs = () => {
   }
 };
 
-const candidatePaths = getCandidatePaths();
-for (const relativePath of candidatePaths) {
-  checkPathBlockers(relativePath);
+const getArgValue = (flag) => {
+  const index = args.indexOf(flag);
+  if (index < 0) {
+    return undefined;
+  }
+  return args[index + 1];
+};
+
+const isZeroObjectId = (value) => /^0+$/.test(value ?? "");
+
+const verifyCommit = (value, label) => {
+  if (!value || isZeroObjectId(value)) {
+    failures.push(`${label} 缺失或为全零对象，拒绝降级审计。`);
+    return null;
+  }
+
+  try {
+    return runGit([
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      `${value}^{commit}`,
+    ]);
+  } catch {
+    failures.push(`${label} 无法解析为提交对象，拒绝降级审计。`);
+    return null;
+  }
+};
+
+const verifyTree = (value) => {
+  if (!value || isZeroObjectId(value)) {
+    failures.push("最终 tree 缺失或为全零对象，拒绝降级审计。");
+    return null;
+  }
+
+  for (const suffix of ["^{commit}", "^{tree}"]) {
+    try {
+      runGit([
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        `${value}${suffix}`,
+      ]);
+      return value;
+    } catch {
+      // Try the other supported object type before failing closed.
+    }
+  }
+
+  failures.push("最终 tree 无法解析为提交或 tree 对象，拒绝降级审计。");
+  return null;
+};
+
+const listTreePaths = (treeish) =>
+  runGitRaw(["ls-tree", "-r", "-z", "--name-only", treeish])
+    .split("\0")
+    .filter(Boolean)
+    .map(normalizePath);
+
+const shortObjectId = (value) => value.slice(0, 12);
+
+const checkCommittedTree = (treeish, sourceLabel, seenFailures) => {
+  let paths;
+  try {
+    paths = listTreePaths(treeish);
+  } catch {
+    failures.push(
+      `${sourceLabel} ${shortObjectId(treeish)} 无法读取 Git tree，拒绝降级审计。`,
+    );
+    return;
+  }
+
+  for (const relativePath of paths) {
+    for (const [label, pattern] of committedPathBlockers) {
+      if (!pattern.test(relativePath)) {
+        continue;
+      }
+
+      const key = `${label}:${sourceLabel}:${shortObjectId(treeish)}`;
+      if (!seenFailures.has(key)) {
+        seenFailures.add(key);
+        failures.push(
+          `提交树包含禁止路径（${label}，${sourceLabel} ${shortObjectId(treeish)}）。`,
+        );
+      }
+    }
+  }
+};
+
+const auditCommittedObjects = () => {
+  const tree = verifyTree(getArgValue("--tree"));
+  if (!tree) {
+    return;
+  }
+
+  let shallowRepository = false;
+  try {
+    shallowRepository =
+      runGit(["rev-parse", "--is-shallow-repository"]) === "true";
+  } catch {
+    failures.push("无法确定 Git 历史是否完整，拒绝降级审计。");
+  }
+  if (shallowRepository) {
+    failures.push(
+      "Git 仓库是 shallow clone，拒绝在不完整历史上执行提交树审计。",
+    );
+  }
+
+  const baseValue = getArgValue("--base");
+  const headValue = getArgValue("--head");
+  if ((baseValue && !headValue) || (!baseValue && headValue)) {
+    failures.push("--base 和 --head 必须同时提供，拒绝部分范围审计。");
+  }
+
+  const seenFailures = new Set();
+  checkCommittedTree(tree, "tree", seenFailures);
+
+  if (!baseValue && !headValue) {
+    return;
+  }
+
+  const base = verifyCommit(baseValue, "base 提交");
+  const head = verifyCommit(headValue, "head 提交");
+  if (!base || !head || shallowRepository) {
+    return;
+  }
+
+  let commits;
+  try {
+    commits = runGit(["rev-list", "--reverse", `${base}..${head}`])
+      .split(/\r?\n/)
+      .filter(Boolean);
+  } catch {
+    failures.push("无法枚举 base..head 提交范围，拒绝降级审计。");
+    return;
+  }
+
+  for (const commit of commits) {
+    checkCommittedTree(commit, "commit", seenFailures);
+  }
+};
+
+let candidatePathCount = null;
+if (mode === "committed") {
+  auditCommittedObjects();
+} else {
+  const candidatePaths = getCandidatePaths();
+  candidatePathCount = candidatePaths.length;
+  for (const relativePath of candidatePaths) {
+    checkPathBlockers(relativePath);
+  }
+  checkDiffContent(candidatePaths);
 }
-checkDiffContent(candidatePaths);
 checkBoundaryDocs();
 
 if (failures.length > 0) {
@@ -196,5 +368,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `product 迁移 denylist 审计通过：mode=${mode}，候选文件=${candidatePaths.length}，禁迁边界文档仍完整。`,
+  `product 迁移 denylist 审计通过：mode=${mode}${candidatePathCount === null ? "" : `，候选文件=${candidatePathCount}`}，禁迁边界文档仍完整。`,
 );

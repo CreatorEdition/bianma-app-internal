@@ -22,6 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node.js
@@ -31,6 +32,18 @@ jobs:
 
       - name: Audit public release boundary
         run: node scripts/audit-public-release-preflight.mjs
+
+      - name: Audit committed public tree boundary
+        env:
+          TREE_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          node scripts/audit-product-migration-guard.mjs
+          --committed
+          --tree "$TREE_SHA"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
 
   frontend:
     name: Frontend Checks
