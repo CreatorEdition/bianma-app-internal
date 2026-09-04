@@ -1,5 +1,12 @@
 import { useTranslation } from "react-i18next";
-import { Edit2, Trash2, RefreshCw, Globe } from "lucide-react";
+import {
+  Circle,
+  CircleCheck,
+  Edit2,
+  Trash2,
+  RefreshCw,
+  Globe,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import type { UniversalProvider } from "@/types";
@@ -14,7 +21,9 @@ interface UniversalProviderCardProps {
   provider: UniversalProvider;
   onEdit: (provider: UniversalProvider) => void;
   onDelete: (id: string) => void;
-  onSync: (id: string) => void;
+  isActive?: boolean;
+  onSetActive?: (id: string) => void;
+  onSync?: (id: string) => void;
   selected?: boolean;
   onSelectChange?: (id: string, selected: boolean) => void;
   syncStatus?: UniversalProviderSyncStatus;
@@ -26,6 +35,8 @@ export function UniversalProviderCard({
   provider,
   onEdit,
   onDelete,
+  isActive = false,
+  onSetActive,
   onSync,
   selected = false,
   onSelectChange,
@@ -82,6 +93,23 @@ export function UniversalProviderCard({
           </div>
         </div>
 
+        {simpleMode && onSetActive ? (
+          <Button
+            variant={isActive ? "secondary" : "ghost"}
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => onSetActive(provider.id)}
+            aria-label={isActive ? "当前上游" : "设为当前上游"}
+            title={isActive ? "当前上游" : "设为当前上游"}
+          >
+            {isActive ? (
+              <CircleCheck className="h-4 w-4" />
+            ) : (
+              <Circle className="h-4 w-4" />
+            )}
+          </Button>
+        ) : null}
+
         {/* 操作按钮 */}
         <div
           className={`flex items-center gap-1 transition-opacity ${
@@ -90,7 +118,7 @@ export function UniversalProviderCard({
               : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
           }`}
         >
-          {!simpleMode || syncStatus?.status === "error" ? (
+          {onSync && (!simpleMode || syncStatus?.status === "error") ? (
             <Button
               variant="ghost"
               size="icon"
