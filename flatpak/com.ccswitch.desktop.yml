@@ -4,7 +4,7 @@ runtime: org.gnome.Platform
 runtime-version: '46'
 sdk: org.gnome.Sdk
 
-command: cc-switch
+command: bianma-app
 
 finish-args:
   - --share=ipc
@@ -75,7 +75,7 @@ modules:
         url: https://github.com/AyatanaIndicators/libayatana-appindicator.git
         tag: 0.5.93
 
-  - name: cc-switch
+  - name: bianma-app
     buildsystem: simple
     sources:
       # Placed in flatpak/ directory by CI or local build script

@@ -388,6 +388,12 @@ export function ProviderForm({
     onConfigChange: handleSettingsConfigChange,
   });
 
+  const isCopilotProvider = isGithubCopilotProvider({
+    templateProviderType: templatePreset?.providerType,
+    initialProviderType: initialData?.meta?.providerType,
+    baseUrl,
+  });
+
   const {
     useCommonConfig,
     commonConfigSnippet,
@@ -673,11 +679,6 @@ export function ProviderForm({
     // 非官方供应商必填校验：端点和 API Key
     // cloud_provider（如 Bedrock）通过模板变量处理认证，跳过通用校验
     // GitHub Copilot 使用 OAuth 认证，不需要 API Key
-    const isCopilotProvider = isGithubCopilotProvider({
-      templateProviderType: templatePreset?.providerType,
-      initialProviderType: initialData?.meta?.providerType,
-      baseUrl,
-    });
     const credentialError = validateNonOfficialCredentials({
       appId,
       category,
@@ -996,6 +997,11 @@ export function ProviderForm({
     setSelectedPresetId(value);
     if (value === "custom") {
       setActivePreset(null);
+      if (appId === "claude") {
+        setLocalApiFormat("anthropic");
+        setLocalApiKeyField("ANTHROPIC_AUTH_TOKEN");
+        setLocalIsFullUrl(false);
+      }
       form.reset(defaultValues);
 
       const customPresetResetPlan = getCustomPresetResetPlan(appId);
@@ -1134,16 +1140,9 @@ export function ProviderForm({
             websiteUrl={claudeWebsiteUrl}
             isPartner={isClaudePartner}
             partnerPromotionKey={claudePartnerPromotionKey}
-            isCopilotPreset={
-              templatePreset?.providerType === "github_copilot" ||
-              initialData?.meta?.providerType === "github_copilot" ||
-              baseUrl.includes("githubcopilot.com")
-            }
+            isCopilotPreset={isCopilotProvider}
             usesOAuth={
-              templatePreset?.requiresOAuth === true ||
-              templatePreset?.providerType === "github_copilot" ||
-              initialData?.meta?.providerType === "github_copilot" ||
-              baseUrl.includes("githubcopilot.com")
+              templatePreset?.requiresOAuth === true || isCopilotProvider
             }
             isCopilotAuthenticated={isCopilotAuthenticated}
             selectedGitHubAccountId={selectedGitHubAccountId}

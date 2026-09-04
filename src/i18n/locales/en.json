@@ -143,6 +143,11 @@
     "openTerminal": "Open Terminal",
     "terminalOpened": "Terminal opened",
     "terminalOpenFailed": "Failed to open terminal",
+    "latencyNotTested": "Not tested",
+    "latencyFailed": "Failed",
+    "latencyNoResponse": "No response",
+    "badgeUsageScript": "Usage script",
+    "badgeFavorited": "Favorite",
     "name": "Provider Name",
     "namePlaceholder": "e.g., Claude Official",
     "websiteUrl": "Website URL",
@@ -176,6 +181,7 @@
     "switchSuccess": "Switch successful!",
     "addToConfigSuccess": "Added to config",
     "removeFromConfigSuccess": "Removed from config",
+    "removeFromConfigFailed": "Failed to remove from config",
     "switchFailedTitle": "Switch failed",
     "switchFailed": "Switch failed: {{error}}",
     "autoImported": "Default provider created from existing configuration",
@@ -193,6 +199,7 @@
     "deleteFailed": "Failed to delete provider: {{error}}",
     "settingsSaved": "Settings saved",
     "settingsSaveFailed": "Failed to save settings: {{error}}",
+    "providerDirectorySyncFailed": "Settings were saved, but current providers could not be synced to the new configuration directory",
     "proxyRequiredForSwitch": "This provider {{reason}}, requires the proxy service to work properly. Start the proxy first.",
     "proxyReasonCopilot": "uses GitHub Copilot as a Claude provider",
     "proxyReasonOpenAIChat": "uses OpenAI Chat API format",
@@ -234,7 +241,7 @@
     },
     "autoSync": {
       "title": "Enable Auto Sync",
-      "message": "When auto sync is enabled, every database change will be automatically uploaded to the WebDAV server.\n\nThis may result in significant network traffic. Please ensure your network and WebDAV service can handle frequent data transfers.",
+      "message": "When auto sync is enabled, changes in the selected scopes will be automatically uploaded to the WebDAV server. Changes outside the selected scopes will not trigger an automatic upload.\n\nThis may result in significant network traffic. Please ensure your network and WebDAV service can handle frequent data transfers.",
       "confirm": "I understand, enable"
     }
   },

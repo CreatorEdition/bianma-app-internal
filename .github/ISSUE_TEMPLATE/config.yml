@@ -1,17 +1,17 @@
 blank_issues_enabled: false
 contact_links:
   - name: "Code of Conduct / 行为准则"
-    url: "https://github.com/CreatorEdition/bianma-app/discussions"
+    url: "https://github.com/CreatorEdition/bianma-app-internal/discussions"
     about: |
       For moderation or conduct concerns, contact the maintainers here first and request a private follow-up before sharing sensitive details.
       如涉及行为准则或社区治理问题，请先从这里联系维护者；若包含敏感信息，请先要求转入私下跟进渠道。
   - name: "Security Vulnerabilities / 安全漏洞"
-    url: "https://github.com/CreatorEdition/bianma-app/security/advisories/new"
+    url: "https://github.com/CreatorEdition/bianma-app-internal/security/advisories/new"
     about: |
       Report security vulnerabilities through GitHub Security Advisories.
       请通过 GitHub 安全公告报告安全漏洞。
   - name: "Discussions / 讨论区"
-    url: "https://github.com/CreatorEdition/bianma-app/discussions"
+    url: "https://github.com/CreatorEdition/bianma-app-internal/discussions"
     about: |
       General discussions and community help.
       一般讨论和社区帮助。

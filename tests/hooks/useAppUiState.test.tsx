@@ -44,7 +44,7 @@ describe("useAppUiState", () => {
     });
     expect(result.current.settingsDefaultTab).toBe("about");
     expect(setCurrentView).toHaveBeenNthCalledWith(1, "settings");
-    expect(setCurrentView).toHaveBeenNthCalledWith(2, "strategy");
+    expect(setCurrentView).toHaveBeenNthCalledWith(2, "home");
     expect(setCurrentView).toHaveBeenNthCalledWith(3, "stats");
     expect(setCurrentView).toHaveBeenNthCalledWith(4, "settings");
   });

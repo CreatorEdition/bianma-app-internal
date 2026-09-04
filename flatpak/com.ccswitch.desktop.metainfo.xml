@@ -17,9 +17,9 @@
 
   <launchable type="desktop-id">com.ccswitch.desktop.desktop</launchable>
   <provides>
-    <binary>cc-switch</binary>
+    <binary>bianma-app</binary>
   </provides>
 
-  <url type="homepage">https://github.com/CreatorEdition/bianma-app</url>
-  <url type="bugtracker">https://github.com/CreatorEdition/bianma-app/issues</url>
+  <url type="homepage">https://github.com/CreatorEdition/bianma-app-internal</url>
+  <url type="bugtracker">https://github.com/CreatorEdition/bianma-app-internal/issues</url>
 </component>

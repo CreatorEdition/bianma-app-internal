@@ -4,7 +4,7 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 
 ## 仓库状态
 
-`bianma-app` 现在是 Bianma 的唯一正式开源主仓。后续源码、公开协作、Release、Updater 与二进制分发默认都以本仓为准；历史 `bianma-app-product` 仅作为迁移源与待归档目录。
+`bianma-app-internal` 现在是 Bianma 的唯一正式开源主仓（应用品牌仍为 `bianma-app`）。后续源码、公开协作、Release、Updater 与二进制分发默认都以本仓为准；历史 `bianma-app-product` 仅作为迁移源与待归档目录。
 
 ## 快速开始
 
@@ -12,6 +12,10 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 2. 进入仓库后运行 `pnpm install` 以拉取依赖。
 3. 使用 `pnpm dev` 启动本地开发服务器并热更新 UI。
 4. 若需自定义开发环境变量，可按需在仓库根目录创建 `.env` 文件并自行添加所需变量。
+
+## 默认使用方式
+
+Bianma 是本地路由工具，默认体验按“配置一次、统一接入”设计：普通用户只需添加一个上游的 API 地址、API Key 与默认模型，再从路由页一键启动本地入口。Claude Code、Codex 与 Gemini 的逐客户端渠道、模型映射、Header 或 User-Agent 差异均属于高级例外配置，不在默认页面展开。
 
 ## 资源导航
 

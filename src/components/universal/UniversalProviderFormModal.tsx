@@ -486,18 +486,20 @@ requires_openai_auth = true`;
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowAdvanced((value) => !value)}
-          className="flex w-full items-center justify-between border-y border-border py-3 text-sm font-medium"
-        >
-          <span>高级配置</span>
-          <ChevronDown
-            className={`h-4 w-4 transition-transform ${showAdvanced ? "rotate-180" : ""}`}
-          />
-        </button>
+        {!simpleMode ? (
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((value) => !value)}
+            className="flex w-full items-center justify-between border-y border-border py-3 text-sm font-medium"
+          >
+            <span>高级配置</span>
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${showAdvanced ? "rotate-180" : ""}`}
+            />
+          </button>
+        ) : null}
 
-        {showAdvanced && (
+        {!simpleMode && showAdvanced && (
           <div className="space-y-6">
             <div className="space-y-2">
               <Label htmlFor="name">渠道名称（可选）</Label>
