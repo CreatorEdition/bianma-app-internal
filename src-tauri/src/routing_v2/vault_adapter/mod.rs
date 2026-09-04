@@ -47,21 +47,30 @@ mod tests {
         fn delete_canary(&mut self) -> Result<(), VaultCapabilityError>;
     }
 
-    /// 验证二进制 canary 的创建、读取与删除顺序；任何底层异常都收敛为固定码。
+    /// 验证二进制 canary 的创建、读取与清理顺序；任何底层异常都收敛为固定码。
     fn verify_round_trip(
         entry: &mut impl TestCredentialEntry,
         canary: &[u8],
     ) -> Result<(), VaultCapabilityError> {
-        entry.write_canary(canary)?;
+        // 写入失败时也必须尝试清理，避免失败前已存在的 canary 残留。
+        let write_result = entry.write_canary(canary);
 
-        let read_result = entry.read_canary();
+        let read_result = if write_result.is_ok() {
+            Some(entry.read_canary())
+        } else {
+            None
+        };
         let cleanup_result = entry.delete_canary();
         if cleanup_result.is_err() {
             return Err(VaultCapabilityError::CleanupFailed);
         }
 
+        if let Err(error) = write_result {
+            return Err(error);
+        }
+
         match read_result {
-            Ok(value) if value == canary => Ok(()),
+            Some(Ok(value)) if value == canary => Ok(()),
             _ => Err(VaultCapabilityError::RoundTripFailed),
         }
     }
@@ -125,6 +134,7 @@ mod tests {
     #[derive(Default)]
     struct FakeCredentialEntry {
         stored: Option<Vec<u8>>,
+        fail_write: bool,
         fail_read: bool,
         fail_cleanup: bool,
         delete_count: usize,
@@ -132,6 +142,9 @@ mod tests {
 
     impl TestCredentialEntry for FakeCredentialEntry {
         fn write_canary(&mut self, canary: &[u8]) -> Result<(), VaultCapabilityError> {
+            if self.fail_write {
+                return Err(VaultCapabilityError::Unavailable);
+            }
             self.stored = Some(canary.to_vec());
             Ok(())
         }
@@ -184,6 +197,22 @@ mod tests {
         assert_eq!(
             verify_round_trip(&mut entry, canary.as_bytes()),
             Err(VaultCapabilityError::RoundTripFailed)
+        );
+        assert!(entry.stored.is_none());
+        assert_eq!(entry.delete_count, 1);
+    }
+
+    #[test]
+    fn write_failure_preserves_error_and_still_attempts_cleanup() {
+        let canary = TestCanary::random();
+        let mut entry = FakeCredentialEntry {
+            fail_write: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            verify_round_trip(&mut entry, canary.as_bytes()),
+            Err(VaultCapabilityError::Unavailable)
         );
         assert!(entry.stored.is_none());
         assert_eq!(entry.delete_count, 1);

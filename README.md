@@ -43,7 +43,7 @@ bianma-app 是 Claude Code、Codex CLI、Gemini CLI、OpenCode 与 OpenClaw 等�
 - `cargo clippy --manifest-path src-tauri/Cargo.toml -p routing-core --all-targets --locked -- -D warnings`
 - `cargo bench --manifest-path src-tauri/Cargo.toml -p routing-core --bench route_planner --locked`
 
-`routing_v2::vault_adapter` 目前只是系统凭据库 capability PoC，不是生产 Vault，也不读取或迁移任何 Provider Secret。受控设备可显式运行其 ignored 测试；测试只写入随机 canary、读取验证后立即删除，不得在 CI 或非受控设备上自动执行：
+`routing_v2::vault_adapter` 目前只是系统凭据库 capability PoC，不是生产 Vault，也不读取或迁移任何 Provider Secret。受控设备可显式运行其 ignored 测试；测试只写入随机 canary、读取验证后尝试立即删除；删除失败时 canary 可能残留，不得在 CI 或非受控设备上自动执行：
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --locked -p bianma-app routing_v2::vault_adapter::tests::native_keyring_round_trip_writes_no_persistent_test_credential --lib -- --ignored
