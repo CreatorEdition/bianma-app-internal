@@ -1,14 +1,24 @@
 //! Bianma 的低开销 Stage-first 路由规划核心。
 //!
-//! 本 crate 只根据不可变内存快照生成有界的 `A -> B -> C` 计划，不执行 HTTP、
-//! 重试、健康检查、凭据解析、数据库访问或上下文治理。客户端差异在更上层归一化；
-//! 默认配置因此可以让所有客户端共用同一份路由策略。
+//! 本 crate 只根据不可变内存快照生成有界的 `A -> B -> C` 计划，并定义一次发送
+//! 结束后的保守重放门禁；不执行 HTTP、等待、健康检查、凭据解析、数据库访问或
+//! 上下文治理。客户端差异在更上层归一化，默认配置因此可以共用同一份路由策略。
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 /// 单次激活计划允许的最大候选数量。
 pub const MAX_ROUTE_TARGETS: usize = 16;
+
+// 当前切片只定义固定大小的发送证据合同，生产 Transport 尚未接线。状态构造路径必须
+// 留在 crate 内，避免外部调用方把普通 HTTP 状态或错误文本伪装成安全重放证据。
+#[cfg_attr(not(test), allow(dead_code))]
+mod attempt;
+
+pub use attempt::{
+    AttemptFailure, AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState,
+    ReplayDecision, ReplayPermitReason, ReplayStopReason, SendPhase, UpstreamWriteState,
+};
 
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
