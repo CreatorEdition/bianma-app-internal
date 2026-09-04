@@ -81,7 +81,8 @@ export function parseModelFetchStructuredError(
   const context = parsed.context ?? {};
   const endpoint =
     typeof context.endpoint === "string" ? context.endpoint : undefined;
-  const detail = typeof context.detail === "string" ? context.detail : undefined;
+  const detail =
+    typeof context.detail === "string" ? context.detail : undefined;
   const status =
     typeof context.status === "number" ? context.status : undefined;
 

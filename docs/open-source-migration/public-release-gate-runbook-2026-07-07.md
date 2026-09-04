@@ -16,7 +16,7 @@
    - 不能直接复制 `bianma-app-product` 的 secret 名称和私有 workflow。
 
 3. **Updater 与 `latest.json`**
-   - `src-tauri/tauri.conf.json` endpoint 当前指向 `CreatorEdition/bianma-app`。
+   - `src-tauri/tauri.conf.json` endpoint 当前指向 `CreatorEdition/bianma-app-internal`。
    - 正式上传前必须先验证 `latest.json` 生成来源、签名、公钥匹配和回滚策略。
 
 4. **跨平台构建矩阵**
@@ -70,7 +70,7 @@ node scripts/audit-public-release-preflight.mjs
 - workflow 只保留 `workflow_dispatch`，没有 tag/push、`workflow_run`、`schedule` 或 `release` 发布触发。
 - workflow 没有 `contents: write`、`id-token: write`、`gh release upload/create/edit`、GitHub Release action、`tauri-apps/tauri-action` 或 `actions/upload-artifact`。
 - workflow 没有 `TAURI_SIGNING_PRIVATE_KEY`、`APPLE_CERTIFICATE`、`APPLE_PASSWORD`、`APPLE_ID`、`APPLE_TEAM_ID`、`KEYCHAIN_PASSWORD`、`notarytool`、`GH_TOKEN`、`GITHUB_TOKEN`、`RELEASE_REPO` 等 product 私有发布链路。
-- Tauri updater endpoint 仍指向 `CreatorEdition/bianma-app`，且不指向 `bianma-app-product`、`data.bianma.ai`、internal 或 private 通道。
+- Tauri updater endpoint 仍指向 `CreatorEdition/bianma-app-internal`，且不指向 `bianma-app-product`、`data.bianma.ai` 或 private 通道。
 - `package.json`、`src-tauri/Cargo.toml` 与 `src-tauri/tauri.conf.json` 的版本号一致，并继续保持 `0.0.1` 占位版本。
 - 公开发布人工审批 checklist 存在，且继续保持 blocked / 未勾选状态。
 - 公开 updater / `latest.json` 门禁存在，且继续保持 blocked / 禁止上传状态。

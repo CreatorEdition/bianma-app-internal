@@ -19,7 +19,6 @@ import {
   Cpu,
   Home,
   Boxes,
-  Route,
   Gauge,
   PanelLeft,
 } from "lucide-react";
@@ -57,7 +56,6 @@ import {
 } from "@/lib/storageKeys";
 import { AppSwitcher } from "@/components/AppSwitcher";
 import { ProviderWorkspacePanel } from "@/components/providers/ProviderWorkspacePanel";
-import { RouteCenterDashboard } from "@/components/control-plane/RouteCenterDashboard";
 import { RouteCenterPanel } from "@/components/control-plane/RouteCenterPanel";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
@@ -113,7 +111,6 @@ const getInitialApp = (): AppId => {
 const VALID_VIEWS: View[] = [
   "home",
   "services",
-  "strategy",
   "stats",
   "providers",
   "settings",
@@ -220,11 +217,13 @@ function App() {
     isRunning: isProxyRunning,
     takeoverStatus,
     status: proxyStatus,
+    startProxyServer,
+    stopWithRestore,
+    setTakeoverForApp,
+    switchProxyProvider,
+    isPending,
   } = useProxyStatus();
   const isCurrentAppTakeoverActive = takeoverStatus?.[activeApp] || false;
-  const takeoverCount = takeoverStatus
-    ? Object.values(takeoverStatus).filter(Boolean).length
-    : 0;
   const activeProviderId = useMemo(() => {
     const target = proxyStatus?.active_targets?.find(
       (t) => t.app_type === activeApp,
@@ -255,7 +254,6 @@ function App() {
   const isPrimaryView =
     currentView === "home" ||
     currentView === "services" ||
-    currentView === "strategy" ||
     currentView === "stats";
   const isOpenClawView =
     activeApp === "openclaw" &&
@@ -327,12 +325,17 @@ function App() {
       switch (currentView) {
         case "home":
           return (
-            <RouteCenterDashboard
-              status={proxyStatus}
-              isProxyRunning={isProxyRunning}
-              takeoverCount={takeoverCount}
+            <RouteCenterPanel
+              onOpenAdvanced={() => setCurrentView("providers")}
               onOpenUpstreams={() => setCurrentView("services")}
-              onOpenRoutes={() => setCurrentView("strategy")}
+              status={proxyStatus}
+              isRunning={isProxyRunning}
+              takeoverStatus={takeoverStatus}
+              startProxyServer={startProxyServer}
+              stopWithRestore={stopWithRestore}
+              setTakeoverForApp={setTakeoverForApp}
+              switchProxyProvider={switchProxyProvider}
+              isPending={isPending}
             />
           );
         case "services":
@@ -343,12 +346,6 @@ function App() {
                 onOpenAdvanced={() => setCurrentView("providers")}
               />
             </div>
-          );
-        case "strategy":
-          return (
-            <RouteCenterPanel
-              onOpenAdvanced={() => setCurrentView("providers")}
-            />
           );
         case "stats":
           return (
@@ -421,6 +418,15 @@ function App() {
           return (
             <div className="px-6 flex flex-col flex-1 min-h-0 overflow-hidden">
               <div className="flex-1 overflow-y-auto overflow-x-hidden pb-12 px-1">
+                <div className="mx-auto mb-5 max-w-6xl border-b border-border py-5">
+                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                    Advanced
+                  </p>
+                  <h1 className="mt-2 text-xl font-semibold">客户端例外配置</h1>
+                  <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                    普通使用无需在这里逐个设置。仅在某个客户端需要独立渠道、模型映射或兼容参数时调整。
+                  </p>
+                </div>
                 <AnimatePresence mode="wait">
                   <motion.div
                     key={activeApp}
@@ -862,8 +868,8 @@ function App() {
               {[
                 {
                   view: "home",
-                  label: "概览",
-                  detail: "状态与一键启动",
+                  label: "路由中心",
+                  detail: "统一入口与一键启动",
                   icon: Home,
                 },
                 {
@@ -871,12 +877,6 @@ function App() {
                   label: "上游",
                   detail: "渠道与模型",
                   icon: Boxes,
-                },
-                {
-                  view: "strategy",
-                  label: "路由",
-                  detail: "统一入口与接入状态",
-                  icon: Route,
                 },
                 {
                   view: "stats",

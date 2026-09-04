@@ -141,17 +141,15 @@ pub(crate) fn map_responses_stop_reason(
                 "end_turn"
             }
         }
-        "incomplete" => {
+        "incomplete"
             if matches!(
                 incomplete_reason,
                 Some("max_output_tokens") | Some("max_tokens")
-            ) || incomplete_reason.is_none()
-            {
-                "max_tokens"
-            } else {
-                "end_turn"
-            }
+            ) || incomplete_reason.is_none() =>
+        {
+            "max_tokens"
         }
+        "incomplete" => "end_turn",
         _ => "end_turn",
     })
 }

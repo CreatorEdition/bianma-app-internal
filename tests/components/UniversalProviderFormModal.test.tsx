@@ -79,5 +79,7 @@ describe("UniversalProviderFormModal", () => {
 
     expect(screen.getByText("保存")).toBeInTheDocument();
     expect(screen.queryByText("保存并同步")).not.toBeInTheDocument();
+    expect(screen.queryByText("高级配置")).not.toBeInTheDocument();
+    expect(screen.queryByText("启用的应用")).not.toBeInTheDocument();
   });
 });

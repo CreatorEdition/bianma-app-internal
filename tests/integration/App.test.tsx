@@ -164,15 +164,6 @@ vi.mock("@/components/AppSwitcher", () => ({
   ),
 }));
 
-vi.mock("@/components/control-plane/RouteCenterDashboard", () => ({
-  RouteCenterDashboard: ({ onOpenUpstreams, onOpenRoutes }: any) => (
-    <div data-testid="route-dashboard">
-      <button onClick={onOpenUpstreams}>open-upstreams</button>
-      <button onClick={onOpenRoutes}>open-routes</button>
-    </div>
-  ),
-}));
-
 vi.mock("@/components/control-plane/RouteCenterPanel", () => ({
   RouteCenterPanel: ({ onOpenAdvanced }: any) => (
     <div data-testid="route-center-page">
@@ -273,7 +264,7 @@ describe("App integration with MSW", () => {
       "aria-current",
       "page",
     );
-    expect(screen.getByTestId("route-dashboard")).toBeInTheDocument();
+    expect(screen.getByTestId("route-center-page")).toBeInTheDocument();
     expect(screen.queryByTestId("app-switcher")).not.toBeInTheDocument();
     expect(screen.queryByTestId("provider-list")).not.toBeInTheDocument();
 
@@ -281,11 +272,6 @@ describe("App integration with MSW", () => {
     expect(await screen.findByTestId("upstreams-page")).toBeInTheDocument();
     expect(screen.queryByTestId("app-switcher")).not.toBeInTheDocument();
     expect(screen.queryByTestId("provider-list")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId("primary-nav-strategy"));
-    await waitFor(() =>
-      expect(screen.getByTestId("route-center-page")).toBeInTheDocument(),
-    );
 
     fireEvent.click(screen.getByTestId("primary-nav-stats"));
     await waitFor(() =>
@@ -299,6 +285,12 @@ describe("App integration with MSW", () => {
         "page",
       ),
     );
+
+    await screen.findByTestId("route-center-page");
+    fireEvent.click(screen.getByText("advanced-providers"));
+    await screen.findByTestId("provider-list");
+    expect(screen.getByText("客户端例外配置")).toBeInTheDocument();
+    expect(screen.getByTestId("app-switcher")).toBeInTheDocument();
   });
 
   it("covers basic provider flows via real hooks", async () => {

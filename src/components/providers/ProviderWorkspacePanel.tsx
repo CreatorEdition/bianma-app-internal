@@ -162,17 +162,22 @@ function getConfiguredModels(
   return [];
 }
 
-function formatLatency(result?: LatencySummary): string {
+function formatLatency(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  result?: LatencySummary,
+): string {
   if (!result) {
-    return "未测速";
+    return t("provider.latencyNotTested", { defaultValue: "未测速" });
   }
   if (result.error) {
-    return "失败";
+    return t("provider.latencyFailed", { defaultValue: "失败" });
   }
   if (typeof result.latencyMs === "number") {
     return `${Math.round(result.latencyMs)} ms`;
   }
-  return result.status ? `${result.status}` : "无响应";
+  return result.status
+    ? `${result.status}`
+    : t("provider.latencyNoResponse", { defaultValue: "无响应" });
 }
 
 export function ProviderWorkspacePanel({
@@ -508,8 +513,7 @@ export function ProviderWorkspacePanel({
         }
       }
 
-      const requestSeq =
-        (discoveryRequestSeqRef.current[provider.id] ?? 0) + 1;
+      const requestSeq = (discoveryRequestSeqRef.current[provider.id] ?? 0) + 1;
       discoveryRequestSeqRef.current[provider.id] = requestSeq;
 
       setProviderDiscoveryState(provider.id, {
@@ -754,15 +758,25 @@ export function ProviderWorkspacePanel({
     const badges = [
       selectedProvider.category,
       selectedConnection?.baseUrl ? "API" : undefined,
-      selectedProvider.meta?.usage_script?.enabled ? "用量脚本" : undefined,
-      selectedProvider.meta?.favoriteProvider ? "已收藏" : undefined,
+      selectedProvider.meta?.usage_script?.enabled
+        ? t("provider.badgeUsageScript", { defaultValue: "用量脚本" })
+        : undefined,
+      selectedProvider.meta?.favoriteProvider
+        ? t("provider.badgeFavorited", { defaultValue: "已收藏" })
+        : undefined,
       activeApp === "openclaw" && openclawDefaultModel?.primary
         ? openclawDefaultModel.primary
         : undefined,
     ];
 
     return badges.filter((badge): badge is string => Boolean(badge));
-  }, [activeApp, openclawDefaultModel?.primary, selectedConnection, selectedProvider]);
+  }, [
+    activeApp,
+    openclawDefaultModel?.primary,
+    selectedConnection,
+    selectedProvider,
+    t,
+  ]);
 
   const proxySummaryItems = useMemo(
     () => [
@@ -1002,7 +1016,7 @@ export function ProviderWorkspacePanel({
                             : "text-muted-foreground",
                         )}
                       >
-                        {formatLatency(latency)}
+                        {formatLatency(t, latency)}
                       </span>
                     </div>
 
@@ -1333,7 +1347,9 @@ export function ProviderWorkspacePanel({
                           key={item.key}
                           type="button"
                           size="sm"
-                          variant={modelScope === item.key ? "default" : "ghost"}
+                          variant={
+                            modelScope === item.key ? "default" : "ghost"
+                          }
                           className="h-8 px-3"
                           onClick={() => setModelScope(item.key)}
                         >

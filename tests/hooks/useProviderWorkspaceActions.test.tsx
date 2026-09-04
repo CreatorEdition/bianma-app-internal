@@ -188,6 +188,73 @@ describe("useProviderWorkspaceActions", () => {
     expect(clearConfirmAction).toHaveBeenCalledTimes(1);
   });
 
+  it("shows an error and clears confirm state when removing from live config fails", async () => {
+    removeFromLiveConfigMock.mockRejectedValueOnce(new Error("remove failed"));
+    const queryClientMock = createQueryClientMock();
+    const clearConfirmAction = vi.fn();
+    const confirmAction = {
+      provider: createProvider({ id: "provider-remove-failed" }),
+      action: "remove" as const,
+    };
+
+    const { result } = renderHook(() =>
+      useProviderWorkspaceActions({
+        activeApp: "claude",
+        providers: {},
+        addProvider: vi.fn(),
+        deleteProvider: vi.fn(),
+        refetchProviders: vi.fn(),
+        queryClient: queryClientMock as unknown as QueryClient,
+        t,
+        confirmAction,
+        clearConfirmAction,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.handleConfirmAction();
+    });
+
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "从配置移除失败: remove failed",
+    );
+    expect(clearConfirmAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an error and clears confirm state when deleting a provider fails", async () => {
+    const deleteProvider = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("delete failed"));
+    const clearConfirmAction = vi.fn();
+    const confirmAction = {
+      provider: createProvider({ id: "provider-delete-failed" }),
+      action: "delete" as const,
+    };
+
+    const { result } = renderHook(() =>
+      useProviderWorkspaceActions({
+        activeApp: "claude",
+        providers: {},
+        addProvider: vi.fn(),
+        deleteProvider,
+        refetchProviders: vi.fn(),
+        queryClient: createQueryClientMock() as unknown as QueryClient,
+        t,
+        confirmAction,
+        clearConfirmAction,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.handleConfirmAction();
+    });
+
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "删除供应商失败: delete failed",
+    );
+    expect(clearConfirmAction).toHaveBeenCalledTimes(1);
+  });
+
   it("stops duplication when sort order update fails", async () => {
     updateSortOrderMock.mockRejectedValueOnce(new Error("sort failed"));
     const addProvider = vi.fn().mockResolvedValue(undefined);

@@ -3,7 +3,7 @@ pub const PRODUCT_DISPLAY_NAME: &str = "bianma.ai";
 #[allow(dead_code)]
 pub const GITHUB_API_USER_AGENT: &str = "bianma.ai";
 pub const RELEASES_LATEST_URL: &str =
-    "https://github.com/CreatorEdition/bianma-app/releases/latest";
+    "https://github.com/CreatorEdition/bianma-app-internal/releases/latest";
 pub const PRIMARY_DEEPLINK_SCHEME: &str = "bianma";
 pub const LEGACY_DEEPLINK_SCHEME: &str = "ccswitch";
 
