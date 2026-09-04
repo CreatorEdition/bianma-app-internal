@@ -17,7 +17,7 @@ The installed runtime is `bianma-app`, but the current Flatpak packaging pipelin
 - Exported bundle name: `CC-Switch-Linux.flatpak`
 - Deep-link schemes: `bianma`, `ccswitch`
 
-User-facing Flatpak metadata now uses `bianma.ai` and links to `CreatorEdition/bianma-app-internal`. The legacy app id, desktop filename, intermediate deb filename, and exported bundle name remain compatibility handles for existing tooling and package consumers; the installed executable is the `bianma-app` binary produced by Cargo. The desktop entry registers both `bianma://` and legacy `ccswitch://` handlers so old import links keep working after Flatpak installation.
+User-facing Flatpak metadata now uses `bianma.ai` and links to `CreatorEdition/bianma-app`. The legacy app id, desktop filename, intermediate deb filename, and exported bundle name remain compatibility handles for existing tooling and package consumers; the installed executable is the `bianma-app` binary produced by Cargo. The desktop entry registers both `bianma://` and legacy `ccswitch://` handlers so old import links keep working after Flatpak installation.
 
 ## Dependencies
 

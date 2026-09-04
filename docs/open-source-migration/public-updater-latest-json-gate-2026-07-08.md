@@ -13,7 +13,7 @@ signature_key_match_status: pending
 
 - [ ] latest.json source verified：确认 `latest.json` 的生成来源、输入 artifact、版本号和平台矩阵。
 - [ ] updater signature verified：确认 Tauri updater 签名、公钥、私钥保管方式和 key rotation 策略。
-- [ ] public endpoint verified：确认 endpoint 仍为 `CreatorEdition/bianma-app-internal`，且不指向 product、private 或 `data.bianma.ai`。
+- [ ] public endpoint verified：确认 endpoint 仍为 `CreatorEdition/bianma-app`，且不指向 product、private 或 `data.bianma.ai`。
 - [ ] rollback plan verified：确认坏版本回滚、撤回 release、客户端失败处理和人工公告流程。
 - [ ] upload approval recorded：记录人工审批人、审批时间、校验和、下载链接和最终 go/no-go 结论。
 

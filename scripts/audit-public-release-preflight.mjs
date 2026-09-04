@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const publicRepositoryUrl =
-  "https://github.com/CreatorEdition/bianma-app-internal";
+  "https://github.com/CreatorEdition/bianma-app";
 const publicRepositoryGitUrl = `git+${publicRepositoryUrl}.git`;
 const publicHomepageUrl = `${publicRepositoryUrl}#readme`;
 const publicIssuesUrl = `${publicRepositoryUrl}/issues`;

@@ -21,11 +21,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CreatorEdition/bianma-app-internal.git"
+    "url": "git+https://github.com/CreatorEdition/bianma-app.git"
   },
-  "homepage": "https://github.com/CreatorEdition/bianma-app-internal#readme",
+  "homepage": "https://github.com/CreatorEdition/bianma-app#readme",
   "bugs": {
-    "url": "https://github.com/CreatorEdition/bianma-app-internal/issues"
+    "url": "https://github.com/CreatorEdition/bianma-app/issues"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.0",

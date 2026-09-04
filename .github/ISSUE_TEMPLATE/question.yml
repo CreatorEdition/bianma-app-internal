@@ -10,12 +10,12 @@ body:
       label: Self Checks / 自检
       options:
         - label: |
-            I have read the [Chinese manual / FAQ entry](https://github.com/CreatorEdition/bianma-app-internal/blob/main/docs/user-manual/zh/README.md).
-            我已阅读[中文手册 / FAQ 入口](https://github.com/CreatorEdition/bianma-app-internal/blob/main/docs/user-manual/zh/README.md)。
+            I have read the [Chinese manual / FAQ entry](https://github.com/CreatorEdition/bianma-app/blob/main/docs/user-manual/zh/README.md).
+            我已阅读[中文手册 / FAQ 入口](https://github.com/CreatorEdition/bianma-app/blob/main/docs/user-manual/zh/README.md)。
           required: true
         - label: |
-            I have searched for [existing issues](https://github.com/CreatorEdition/bianma-app-internal/issues), including closed ones.
-            我已搜索过[已有的 Issue](https://github.com/CreatorEdition/bianma-app-internal/issues)，包括已关闭的。
+            I have searched for [existing issues](https://github.com/CreatorEdition/bianma-app/issues), including closed ones.
+            我已搜索过[已有的 Issue](https://github.com/CreatorEdition/bianma-app/issues)，包括已关闭的。
           required: true
 
   - type: dropdown
