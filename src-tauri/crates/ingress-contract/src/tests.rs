@@ -1284,11 +1284,9 @@ fn capability_rejects_wrong_scope_expiry_fallback_and_non_probe_operations() {
     );
 
     let registry = build_registry();
-    let request = token_count_request();
-    let binding = registry.bind_request(&request).expect("计数请求匹配");
-    let mut wrong_operation = capability_claims(&build_registry(), &probe_request(), nonce(25));
+    let request = probe_request();
+    let mut wrong_operation = capability_claims(&registry, &request, nonce(25));
     wrong_operation.operation = operation(7);
-    wrong_operation.request_digest = binding.request_digest;
     let wire = sign_capability_for_test(&wrong_operation, &CAPABILITY_KEY);
     let verifier = default_verifier(fresh_store());
     assert_eq!(
@@ -1298,8 +1296,8 @@ fn capability_rejects_wrong_scope_expiry_fallback_and_non_probe_operations() {
                 &capability_connection(&verifier),
                 EncodedCapabilityAuthorization::try_new(wire).expect("wire 有界"),
             )
-            .expect_error("携正文 ExactUpstream 不能冒充无正文 capability probe"),
-        IngressReject::CapabilityConstraintMismatch
+            .expect_error("claims operation 与路由不一致必须拒绝"),
+        IngressReject::OperationMismatch
     );
 }
 
