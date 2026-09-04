@@ -14,12 +14,13 @@ pub const MAX_ROUTE_TARGETS: usize = 16;
 // 留在 crate 内，避免外部调用方把普通 HTTP 状态或错误文本伪装成安全重放证据。
 #[cfg_attr(not(test), allow(dead_code))]
 mod attempt;
+#[cfg_attr(not(test), allow(dead_code))]
+mod coordinator;
 
 pub use attempt::{
     AttemptFailure, AttemptOutcome, ChargeState, DeliveryState, DownstreamCommitState,
     ReplayDecision, ReplayPermitReason, ReplayStopReason, SendPhase, UpstreamWriteState,
 };
-
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
