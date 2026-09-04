@@ -12,6 +12,7 @@ CLAUDE.md
 GEMINI.md
 /.claude
 /.codex
+.teamwork/
 /.gemini
 /.cc-switch
 /.idea
