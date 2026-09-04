@@ -40,6 +40,7 @@ pub(crate) enum LegacyProviderCatalogFailureCode {
     InvalidEndpointId,
     OrphanEndpoint,
     UnsafeEndpointUrl,
+    UnsafeWebsiteUrl,
 }
 
 /// 尚未进入 routing v2 的隔离记录。
@@ -167,11 +168,27 @@ fn read_legacy_providers(
             continue;
         }
 
+        let normalized_website_url = match website_url {
+            Some(url) => match normalize_safe_url(&url) {
+                Ok(safe_url) => Some(safe_url.display_base_url),
+                Err(()) => {
+                    quarantined.push(LegacyProviderCatalogQuarantine {
+                        source_provider_id: source_provider_id.clone(),
+                        source_app_type: source_app_type.clone(),
+                        source_endpoint_id: None,
+                        failure_code: LegacyProviderCatalogFailureCode::UnsafeWebsiteUrl,
+                    });
+                    None
+                }
+            },
+            None => None,
+        };
+
         providers.push(LegacyProviderCatalogRecord {
             source_provider_id,
             source_app_type,
             display_name,
-            website_url: website_url.and_then(|url| normalize_safe_url(&url).ok().map(|_| url)),
+            website_url: normalized_website_url,
             endpoints: Vec::new(),
         });
     }
@@ -204,11 +221,7 @@ fn read_legacy_endpoints(
         let (source_endpoint_id, source_provider_id, source_app_type, raw_url) =
             row.map_err(|error| AppError::Database(format!("读取旧端点目录失败: {error}")))?;
 
-        if !seen_endpoint_sources.insert((
-            source_app_type.clone(),
-            source_provider_id.clone(),
-            source_endpoint_id,
-        )) {
+        if !seen_endpoint_sources.insert(source_endpoint_id) {
             return Err(AppError::InvalidInput(
                 "旧端点目录存在重复来源，已拒绝发现".to_string(),
             ));
@@ -339,7 +352,7 @@ fn normalize_safe_url(raw_url: &str) -> Result<SafeUrl, ()> {
     }
 
     Ok(SafeUrl {
-        display_base_url: raw_url.to_string(),
+        display_base_url: parsed.as_str().to_string(),
         canonical_origin,
         base_path: parsed.path().to_string(),
     })
@@ -377,7 +390,7 @@ fn validate_legacy_catalog_schema(conn: &Connection) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LegacyProviderCatalogFailureCode, LegacyProviderCatalogReadPort,
+        normalize_safe_url, LegacyProviderCatalogFailureCode, LegacyProviderCatalogReadPort,
         LEGACY_ENDPOINT_CATALOG_QUERY, LEGACY_PROVIDER_CATALOG_WITHOUT_WEBSITE_QUERY,
         LEGACY_PROVIDER_CATALOG_WITH_WEBSITE_QUERY,
     };
@@ -513,18 +526,55 @@ mod tests {
         assert_eq!(catalog.providers.len(), 1);
         assert_eq!(catalog.providers[0].website_url, None);
         assert!(catalog.providers[0].endpoints.is_empty());
-        assert_eq!(catalog.quarantined.len(), 5);
-        assert!(catalog.quarantined.iter().all(|record| {
-            record.failure_code == LegacyProviderCatalogFailureCode::UnsafeEndpointUrl
-        }));
+        assert_eq!(catalog.quarantined.len(), 6);
+        assert_eq!(
+            catalog
+                .quarantined
+                .iter()
+                .filter(|record| {
+                    record.failure_code == LegacyProviderCatalogFailureCode::UnsafeWebsiteUrl
+                })
+                .count(),
+            1
+        );
+        assert_eq!(
+            catalog
+                .quarantined
+                .iter()
+                .filter(|record| {
+                    record.failure_code == LegacyProviderCatalogFailureCode::UnsafeEndpointUrl
+                })
+                .count(),
+            5
+        );
+        let website_quarantine = catalog
+            .quarantined
+            .iter()
+            .find(|record| {
+                record.failure_code == LegacyProviderCatalogFailureCode::UnsafeWebsiteUrl
+            })
+            .expect("非法 website_url 必须进入隔离记录");
+        assert_eq!(website_quarantine.source_endpoint_id, None);
         assert!(catalog.quarantined.iter().all(
             |record| record.source_provider_id == "alpha" && record.source_app_type == "claude"
         ));
         assert!(catalog
             .quarantined
             .iter()
+            .filter(|record| {
+                record.failure_code == LegacyProviderCatalogFailureCode::UnsafeEndpointUrl
+            })
             .all(|record| record.source_endpoint_id.is_some()));
         Ok(())
+    }
+
+    #[test]
+    fn normalize_safe_url_uses_url_parser_canonical_display() {
+        let normalized = normalize_safe_url("https://EXAMPLE.com:443/v1/").expect("URL 应可规范化");
+
+        assert_eq!(normalized.display_base_url, "https://example.com/v1/");
+        assert_eq!(normalized.canonical_origin, "https://example.com");
+        assert_eq!(normalized.base_path, "/v1/");
     }
 
     #[test]
@@ -623,7 +673,8 @@ mod tests {
     }
 
     #[test]
-    fn catalog_read_fails_closed_for_duplicate_endpoint_source() -> Result<(), AppError> {
+    fn catalog_read_fails_closed_for_duplicate_endpoint_source_across_providers(
+    ) -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(
             "CREATE TABLE providers (
@@ -640,11 +691,13 @@ mod tests {
                  url TEXT NOT NULL
              );
              INSERT INTO providers (id, app_type, name, settings_config)
-             VALUES ('duplicate', 'claude', 'Provider', '{}');
+             VALUES
+                ('duplicate', 'claude', 'Provider', '{}'),
+                ('other', 'codex', 'Other', '{}');
              INSERT INTO provider_endpoints (id, provider_id, app_type, url)
              VALUES
                 (7, 'duplicate', 'claude', 'https://first.example/v1'),
-                (7, 'duplicate', 'claude', 'https://second.example/v1');",
+                (7, 'other', 'codex', 'https://second.example/v1');",
         )?;
         let database = Database {
             conn: Mutex::new(conn),
