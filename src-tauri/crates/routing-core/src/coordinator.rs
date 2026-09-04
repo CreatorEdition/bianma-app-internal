@@ -214,12 +214,14 @@ mod tests {
         .unwrap();
         let mut tracker = plan(&snapshot).start_attempts().unwrap().begin();
         assert_eq!(tracker.position().index(), 0);
+        tracker.zero_bytes_proven().unwrap();
         let step = tracker.finish(AttemptFailure::Transport, None).advance();
         tracker = match step {
             CoordinatorStep::Next(p) => p.begin(),
             _ => panic!(),
         };
         assert_eq!(tracker.position().index(), 1);
+        tracker.zero_bytes_proven().unwrap();
         let step = tracker.finish(AttemptFailure::Transport, None).advance();
         tracker = match step {
             CoordinatorStep::Next(p) => p.begin(),
@@ -359,7 +361,10 @@ mod tests {
             len: 2,
         };
         let tracker = plan.start_attempts().unwrap().begin();
-        match tracker.finish(AttemptFailure::Transport, None).advance() {
+        let mut tracker = tracker;
+        tracker.zero_bytes_proven().unwrap();
+        let step = tracker.finish(AttemptFailure::Transport, None).advance();
+        match step {
             CoordinatorStep::Stop(CoordinatorStopReason::InvalidPlan(PlanError::UnknownTarget)) => {
             }
             _ => panic!(),
