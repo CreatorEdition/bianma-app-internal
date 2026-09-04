@@ -164,6 +164,20 @@ pub struct GlobalProxyConfig {
     pub enable_logging: bool,
 }
 
+/// 代理服务只允许本机回环地址，避免未鉴权的上游凭据暴露到局域网。
+pub fn is_loopback_listen_address(address: &str) -> bool {
+    matches!(address.trim(), "localhost" | "127.0.0.1" | "::1")
+}
+
+/// 将允许的回环地址规范化为可用于绑定和客户端配置的地址。
+pub fn normalized_loopback_listen_address(address: &str) -> Option<&str> {
+    match address.trim() {
+        "localhost" | "127.0.0.1" => Some("127.0.0.1"),
+        "::1" => Some("::1"),
+        _ => None,
+    }
+}
+
 /// 应用级代理配置（每个 app 独立）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -360,6 +374,21 @@ impl LogConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loopback_listen_address_is_required() {
+        assert!(is_loopback_listen_address("127.0.0.1"));
+        assert!(is_loopback_listen_address(" localhost "));
+        assert!(is_loopback_listen_address("::1"));
+        assert!(!is_loopback_listen_address("0.0.0.0"));
+        assert!(!is_loopback_listen_address("192.168.1.10"));
+        assert_eq!(
+            normalized_loopback_listen_address("localhost"),
+            Some("127.0.0.1")
+        );
+        assert_eq!(normalized_loopback_listen_address("::1"), Some("::1"));
+        assert_eq!(normalized_loopback_listen_address("0.0.0.0"), None);
+    }
 
     #[test]
     fn test_rectifier_config_default_enabled() {

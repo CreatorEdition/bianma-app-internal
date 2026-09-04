@@ -15,15 +15,17 @@ use super::{
 use crate::database::Database;
 use axum::{
     extract::DefaultBodyLimit,
+    http::{header::ORIGIN, HeaderMap, StatusCode},
+    middleware::{self, Next},
+    response::Response,
     routing::{get, post},
     Router,
 };
 use hyper_util::rt::TokioIo;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::{oneshot, RwLock};
 use tokio::task::JoinHandle;
-use tower_http::cors::{Any, CorsLayer};
 
 /// 代理服务器状态（共享）
 #[derive(Clone)]
@@ -87,10 +89,22 @@ impl ProxyServer {
             return Err(ProxyError::AlreadyRunning);
         }
 
-        let addr: SocketAddr =
-            format!("{}:{}", self.config.listen_address, self.config.listen_port)
-                .parse()
-                .map_err(|e| ProxyError::BindFailed(format!("无效的地址: {e}")))?;
+        if !is_loopback_listen_address(&self.config.listen_address) {
+            return Err(ProxyError::BindFailed(
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+            ));
+        }
+
+        let listen_address = normalized_loopback_listen_address(&self.config.listen_address)
+            .ok_or_else(|| {
+                ProxyError::BindFailed(
+                    "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+                )
+            })?;
+        let listen_ip: IpAddr = listen_address
+            .parse()
+            .map_err(|e| ProxyError::BindFailed(format!("无效的地址: {e}")))?;
+        let addr = SocketAddr::new(listen_ip, self.config.listen_port);
 
         // 创建关闭通道
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -275,60 +289,59 @@ impl ProxyServer {
     }
 
     fn build_router(&self) -> Router {
-        let cors = CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any);
+        let model_routes = protect_model_routes(
+            Router::new()
+                // Claude API (支持带前缀和不带前缀两种格式)
+                .route("/v1/messages", post(handlers::handle_messages))
+                .route("/claude/v1/messages", post(handlers::handle_messages))
+                // OpenAI Chat Completions API (Codex CLI，支持带前缀和不带前缀)
+                .route("/chat/completions", post(handlers::handle_chat_completions))
+                .route(
+                    "/v1/chat/completions",
+                    post(handlers::handle_chat_completions),
+                )
+                .route(
+                    "/v1/v1/chat/completions",
+                    post(handlers::handle_chat_completions),
+                )
+                .route(
+                    "/codex/v1/chat/completions",
+                    post(handlers::handle_chat_completions),
+                )
+                // OpenAI Responses API (Codex CLI，支持带前缀和不带前缀)
+                .route("/responses", post(handlers::handle_responses))
+                .route("/v1/responses", post(handlers::handle_responses))
+                .route("/v1/v1/responses", post(handlers::handle_responses))
+                .route("/codex/v1/responses", post(handlers::handle_responses))
+                // OpenAI Responses Compact API (Codex CLI 远程压缩，透传)
+                .route(
+                    "/responses/compact",
+                    post(handlers::handle_responses_compact),
+                )
+                .route(
+                    "/v1/responses/compact",
+                    post(handlers::handle_responses_compact),
+                )
+                .route(
+                    "/v1/v1/responses/compact",
+                    post(handlers::handle_responses_compact),
+                )
+                .route(
+                    "/codex/v1/responses/compact",
+                    post(handlers::handle_responses_compact),
+                )
+                // Gemini API (支持带前缀和不带前缀)
+                .route("/v1beta/*path", post(handlers::handle_gemini))
+                .route("/gemini/v1beta/*path", post(handlers::handle_gemini)),
+        );
 
         Router::new()
-            // 健康检查
+            // 健康检查不使用上游凭据，保留本机可读。
             .route("/health", get(handlers::health_check))
             .route("/status", get(handlers::get_status))
-            // Claude API (支持带前缀和不带前缀两种格式)
-            .route("/v1/messages", post(handlers::handle_messages))
-            .route("/claude/v1/messages", post(handlers::handle_messages))
-            // OpenAI Chat Completions API (Codex CLI，支持带前缀和不带前缀)
-            .route("/chat/completions", post(handlers::handle_chat_completions))
-            .route(
-                "/v1/chat/completions",
-                post(handlers::handle_chat_completions),
-            )
-            .route(
-                "/v1/v1/chat/completions",
-                post(handlers::handle_chat_completions),
-            )
-            .route(
-                "/codex/v1/chat/completions",
-                post(handlers::handle_chat_completions),
-            )
-            // OpenAI Responses API (Codex CLI，支持带前缀和不带前缀)
-            .route("/responses", post(handlers::handle_responses))
-            .route("/v1/responses", post(handlers::handle_responses))
-            .route("/v1/v1/responses", post(handlers::handle_responses))
-            .route("/codex/v1/responses", post(handlers::handle_responses))
-            // OpenAI Responses Compact API (Codex CLI 远程压缩，透传)
-            .route(
-                "/responses/compact",
-                post(handlers::handle_responses_compact),
-            )
-            .route(
-                "/v1/responses/compact",
-                post(handlers::handle_responses_compact),
-            )
-            .route(
-                "/v1/v1/responses/compact",
-                post(handlers::handle_responses_compact),
-            )
-            .route(
-                "/codex/v1/responses/compact",
-                post(handlers::handle_responses_compact),
-            )
-            // Gemini API (支持带前缀和不带前缀)
-            .route("/v1beta/*path", post(handlers::handle_gemini))
-            .route("/gemini/v1beta/*path", post(handlers::handle_gemini))
+            .merge(model_routes)
             // 提高默认请求体大小限制（避免 413 Payload Too Large）
             .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
-            .layer(cors)
             .with_state(self.state.clone())
     }
 
@@ -353,5 +366,87 @@ impl ProxyServer {
             .provider_router
             .reset_provider_breaker(provider_id, app_type)
             .await;
+    }
+}
+
+/// 浏览器请求会自动携带 `Origin`；模型路由拒绝此类请求，避免网页借用本机上游凭据。
+fn has_browser_origin(headers: &HeaderMap) -> bool {
+    headers.contains_key(ORIGIN)
+}
+
+fn protect_model_routes<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router.layer(middleware::from_fn(reject_browser_origin))
+}
+
+async fn reject_browser_origin(
+    request: axum::extract::Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if has_browser_origin(request.headers()) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(request).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Method, Request},
+    };
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use tower::Service;
+
+    #[tokio::test]
+    async fn browser_origin_is_rejected_before_model_routing() {
+        let model_handler_reached = Arc::new(AtomicBool::new(false));
+        let reached = model_handler_reached.clone();
+        let model_routes = protect_model_routes(Router::new().route(
+            "/v1/responses",
+            post(move || {
+                let reached = reached.clone();
+                async move {
+                    reached.store(true, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        ));
+        let mut app = Router::new()
+            .route("/health", get(|| async { StatusCode::OK }))
+            .merge(model_routes);
+
+        let blocked = app
+            .call(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/responses")
+                    .header(ORIGIN, "https://malicious.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+        assert!(!model_handler_reached.load(Ordering::SeqCst));
+
+        let health = app
+            .call(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/health")
+                    .header(ORIGIN, "https://malicious.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
     }
 }

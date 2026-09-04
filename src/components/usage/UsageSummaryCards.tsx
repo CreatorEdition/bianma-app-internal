@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
 import { useUsageSummary } from "@/lib/query/usage";
 import { Activity, DollarSign, Layers, Database, Loader2 } from "lucide-react";
-import { motion } from "framer-motion";
 import { fmtUsd, parseFiniteNumber } from "./format";
 
 interface UsageSummaryCardsProps {
@@ -99,24 +98,9 @@ export function UsageSummaryCards({
     ];
   }, [summary, t]);
 
-  const container = {
-    hidden: { opacity: 0 },
-    show: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1,
-      },
-    },
-  };
-
-  const item = {
-    hidden: { opacity: 0, y: 20 },
-    show: { opacity: 1, y: 0 },
-  };
-
   if (isLoading) {
     return (
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[...Array(4)].map((_, i) => (
           <Card
             key={i}
@@ -132,14 +116,9 @@ export function UsageSummaryCards({
   }
 
   return (
-    <motion.div
-      variants={container}
-      initial="hidden"
-      animate="show"
-      className="grid gap-4 md:grid-cols-4"
-    >
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       {stats.map((stat, i) => (
-        <motion.div key={i} variants={item}>
+        <div key={i}>
           <Card className="relative h-full overflow-hidden border border-border/50 bg-gradient-to-br from-card/50 to-background/50 backdrop-blur-xl hover:from-card/60 hover:to-background/60 transition-all shadow-sm">
             <CardContent className="p-5">
               <div className="flex items-start justify-between mb-2">
@@ -163,8 +142,8 @@ export function UsageSummaryCards({
               )}
             </CardContent>
           </Card>
-        </motion.div>
+        </div>
       ))}
-    </motion.div>
+    </div>
   );
 }

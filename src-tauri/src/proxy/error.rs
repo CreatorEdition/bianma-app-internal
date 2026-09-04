@@ -26,6 +26,10 @@ pub enum ProxyError {
     #[error("请求转发失败: {0}")]
     ForwardFailed(String),
 
+    /// 请求可能已写入上游，禁止自动切换 Provider 再次发送。
+    #[error("上游交付状态不明，已停止自动重试: {0}")]
+    DeliveryUnknown(String),
+
     #[error("无可用的Provider")]
     NoAvailableProvider,
 
@@ -125,6 +129,7 @@ impl IntoResponse for ProxyError {
                         (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
                     }
                     ProxyError::ForwardFailed(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+                    ProxyError::DeliveryUnknown(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
                     ProxyError::NoAvailableProvider => {
                         (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
                     }

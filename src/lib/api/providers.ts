@@ -7,6 +7,19 @@ import type {
   UniversalProvider,
   UniversalProvidersMap,
 } from "@/types";
+
+export interface UniversalProviderAppSyncResult {
+  app: string;
+  success: boolean;
+  becameCurrent: boolean;
+  error?: string;
+}
+
+export interface UniversalProviderSyncResult {
+  providerId: string;
+  success: boolean;
+  apps: UniversalProviderAppSyncResult[];
+}
 import { modelFetchApi } from "./model-fetch";
 import type { AppId } from "./types";
 
@@ -256,7 +269,7 @@ export const universalProvidersApi = {
   /**
    * 手动同步统一供应商到各应用
    */
-  async sync(id: string): Promise<boolean> {
+  async sync(id: string): Promise<UniversalProviderSyncResult> {
     return await invoke("sync_universal_provider", { id });
   },
 };

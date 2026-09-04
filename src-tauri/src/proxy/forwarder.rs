@@ -1255,11 +1255,11 @@ impl RequestForwarder {
             }
             let reqwest_resp = request.body(body_bytes).send().await.map_err(|e| {
                 if e.is_timeout() {
-                    ProxyError::Timeout(format!("请求超时: {e}"))
+                    ProxyError::DeliveryUnknown(format!("请求超时: {e}"))
                 } else if e.is_connect() {
                     ProxyError::ForwardFailed(format!("连接失败: {e}"))
                 } else {
-                    ProxyError::ForwardFailed(e.to_string())
+                    ProxyError::DeliveryUnknown(e.to_string())
                 }
             })?;
             ProxyResponse::Reqwest(reqwest_resp)
@@ -1357,25 +1357,29 @@ impl RequestForwarder {
     }
 
     fn categorize_proxy_error(&self, error: &ProxyError) -> ErrorCategory {
-        match error {
-            // 网络和上游错误：都应该尝试下一个供应商
-            ProxyError::Timeout(_) => ErrorCategory::Retryable,
-            ProxyError::ForwardFailed(_) => ErrorCategory::Retryable,
-            ProxyError::ProviderUnhealthy(_) => ErrorCategory::Retryable,
-            // 上游 HTTP 错误：无论状态码如何，都尝试下一个供应商
-            // 原因：不同供应商有不同的限制和认证，一个供应商的 4xx 错误
-            // 不代表其他供应商也会失败
-            ProxyError::UpstreamError { .. } => ErrorCategory::Retryable,
-            // Provider 级配置/转换问题：换一个 Provider 可能就能成功
-            ProxyError::ConfigError(_) => ErrorCategory::Retryable,
-            ProxyError::TransformError(_) => ErrorCategory::Retryable,
-            ProxyError::AuthError(_) => ErrorCategory::Retryable,
-            ProxyError::StreamIdleTimeout(_) => ErrorCategory::Retryable,
-            // 无可用供应商：所有供应商都试过了，无法重试
-            ProxyError::NoAvailableProvider => ErrorCategory::NonRetryable,
-            // 其他错误（数据库/内部错误等）：不是换供应商能解决的问题
-            _ => ErrorCategory::NonRetryable,
-        }
+        classify_proxy_error_for_failover(error)
+    }
+}
+
+fn classify_proxy_error_for_failover(error: &ProxyError) -> ErrorCategory {
+    match error {
+        // 网络和上游错误：都应该尝试下一个供应商
+        ProxyError::Timeout(_) => ErrorCategory::Retryable,
+        ProxyError::ForwardFailed(_) => ErrorCategory::Retryable,
+        ProxyError::DeliveryUnknown(_) => ErrorCategory::NonRetryable,
+        ProxyError::ProviderUnhealthy(_) => ErrorCategory::Retryable,
+        // 已收到上游 HTTP 响应，说明本次请求已明确送达。
+        // 旧 Forwarder 缺少可信的“未执行”回执，禁止盲目切换 Provider 重放。
+        ProxyError::UpstreamError { .. } => ErrorCategory::NonRetryable,
+        // Provider 级配置/转换问题：换一个 Provider 可能就能成功
+        ProxyError::ConfigError(_) => ErrorCategory::Retryable,
+        ProxyError::TransformError(_) => ErrorCategory::Retryable,
+        ProxyError::AuthError(_) => ErrorCategory::Retryable,
+        ProxyError::StreamIdleTimeout(_) => ErrorCategory::Retryable,
+        // 无可用供应商：所有供应商都试过了，无法重试
+        ProxyError::NoAvailableProvider => ErrorCategory::NonRetryable,
+        // 其他错误（数据库/内部错误等）：不是换供应商能解决的问题
+        _ => ErrorCategory::NonRetryable,
     }
 }
 
@@ -1460,6 +1464,9 @@ fn summarize_proxy_error(error: &ProxyError) -> String {
         }
         ProxyError::ForwardFailed(message) => {
             format!("请求转发失败: {}", summarize_text_for_log(message, 180))
+        }
+        ProxyError::DeliveryUnknown(message) => {
+            format!("上游交付状态不明: {}", summarize_text_for_log(message, 180))
         }
         ProxyError::TransformError(message) => {
             format!("响应转换失败: {}", summarize_text_for_log(message, 180))
@@ -1614,6 +1621,33 @@ fn summarize_text_for_log(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivery_unknown_never_allows_provider_failover() {
+        assert_eq!(
+            classify_proxy_error_for_failover(&ProxyError::DeliveryUnknown(
+                "response parse failed".to_string(),
+            )),
+            ErrorCategory::NonRetryable
+        );
+        assert_eq!(
+            classify_proxy_error_for_failover(&ProxyError::ForwardFailed(
+                "connect failed".to_string(),
+            )),
+            ErrorCategory::Retryable
+        );
+
+        for status in [400, 429, 500] {
+            assert_eq!(
+                classify_proxy_error_for_failover(&ProxyError::UpstreamError {
+                    status,
+                    body: Some("upstream response".to_string()),
+                }),
+                ErrorCategory::NonRetryable,
+                "已收到 {status} 响应后不得切换 Provider 重放"
+            );
+        }
+    }
     use axum::http::header::{HeaderValue, ACCEPT};
     use axum::http::HeaderMap;
     use serde_json::json;

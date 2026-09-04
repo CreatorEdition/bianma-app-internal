@@ -49,12 +49,31 @@ pub struct SwitchResult {
     pub warnings: Vec<String>,
 }
 
+/// 统一供应商同步到单个客户端的结果。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UniversalProviderAppSyncResult {
+    pub app: String,
+    pub success: bool,
+    pub became_current: bool,
+    pub error: Option<String>,
+}
+
+/// 统一供应商同步结果，保留每个客户端的独立状态。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UniversalProviderSyncResult {
+    pub provider_id: String,
+    pub success: bool,
+    pub apps: Vec<UniversalProviderAppSyncResult>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
     use crate::database::Database;
-    use crate::provider::ProviderMeta;
+    use crate::provider::{ProviderMeta, UniversalProviderApps};
     use crate::proxy::types::ProxyConfig;
     use crate::store::AppState;
     use serde_json::json;
@@ -141,6 +160,22 @@ mod tests {
         }
 
         result
+    }
+
+    fn universal_provider(id: &str) -> UniversalProvider {
+        let mut provider = UniversalProvider::new(
+            id.to_string(),
+            "统一上游".to_string(),
+            "custom".to_string(),
+            "https://api.example.com".to_string(),
+            "test-key".to_string(),
+        );
+        provider.apps = UniversalProviderApps {
+            claude: true,
+            codex: true,
+            gemini: true,
+        };
+        provider
     }
 
     fn openclaw_provider(id: &str) -> Provider {
@@ -924,6 +959,95 @@ base_url = "http://localhost:8080"
             assert_eq!(
                 written, previous_content,
                 "OMO config should roll back to its previous on-disk contents"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn sync_first_universal_provider_becomes_current_for_each_client() {
+        with_test_home(|state, _| {
+            let provider = universal_provider("first");
+            ProviderService::upsert_universal(state, provider).expect("保存统一上游");
+
+            let result =
+                ProviderService::sync_universal_to_apps(state, "first").expect("同步统一上游");
+
+            assert!(result.success);
+            assert!(result.apps.iter().all(|app| app.success));
+            assert!(result.apps.iter().all(|app| app.became_current));
+            assert_eq!(
+                state
+                    .db
+                    .get_current_provider("claude")
+                    .expect("读取 Claude 当前上游"),
+                Some("universal-claude-first".to_string())
+            );
+            assert_eq!(
+                state
+                    .db
+                    .get_current_provider("codex")
+                    .expect("读取 Codex 当前上游"),
+                Some("universal-codex-first".to_string())
+            );
+            assert_eq!(
+                state
+                    .db
+                    .get_current_provider("gemini")
+                    .expect("读取 Gemini 当前上游"),
+                Some("universal-gemini-first".to_string())
+            );
+
+            let runtime = tokio::runtime::Runtime::new().expect("创建运行时");
+            let router = crate::proxy::ProviderRouter::new(state.db.clone());
+            let selected = runtime
+                .block_on(router.select_providers("claude"))
+                .expect("路由器应选中首次上游");
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].id, "universal-claude-first");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn sync_universal_provider_does_not_replace_existing_current_provider() {
+        with_test_home(|state, _| {
+            let existing = Provider::with_id(
+                "existing".to_string(),
+                "已有上游".to_string(),
+                json!({}),
+                None,
+            );
+            state
+                .db
+                .save_provider("claude", &existing)
+                .expect("保存已有上游");
+            state
+                .db
+                .set_current_provider("claude", "existing")
+                .expect("设置已有当前上游");
+
+            let mut provider = universal_provider("next");
+            provider.apps.codex = false;
+            provider.apps.gemini = false;
+            ProviderService::upsert_universal(state, provider).expect("保存统一上游");
+
+            let result =
+                ProviderService::sync_universal_to_apps(state, "next").expect("同步统一上游");
+            let claude = result
+                .apps
+                .iter()
+                .find(|app| app.app == "claude")
+                .expect("Claude 同步结果");
+
+            assert!(claude.success);
+            assert!(!claude.became_current);
+            assert_eq!(
+                state
+                    .db
+                    .get_current_provider("claude")
+                    .expect("读取当前上游"),
+                Some("existing".to_string())
             );
         });
     }
@@ -2418,57 +2542,107 @@ impl ProviderService {
         Ok(true)
     }
 
-    /// 同步统一供应商到各应用
-    pub fn sync_universal_to_apps(state: &AppState, id: &str) -> Result<bool, AppError> {
+    fn sync_universal_app(
+        state: &AppState,
+        app_type: AppType,
+        provider: Option<Provider>,
+        disabled_provider_id: &str,
+    ) -> UniversalProviderAppSyncResult {
+        let app = app_type.as_str().to_string();
+        let Some(mut provider) = provider else {
+            let result = state
+                .db
+                .delete_provider(app_type.as_str(), disabled_provider_id);
+            return match result {
+                Ok(()) => UniversalProviderAppSyncResult {
+                    app,
+                    success: true,
+                    became_current: false,
+                    error: None,
+                },
+                Err(error) => UniversalProviderAppSyncResult {
+                    app,
+                    success: false,
+                    became_current: false,
+                    error: Some(error.to_string()),
+                },
+            };
+        };
+
+        let result = (|| -> Result<bool, AppError> {
+            if let Some(existing) = state
+                .db
+                .get_provider_by_id(&provider.id, app_type.as_str())?
+            {
+                let mut merged = existing.settings_config.clone();
+                Self::merge_json(&mut merged, &provider.settings_config);
+                provider.settings_config = merged;
+            }
+            state.db.save_provider(app_type.as_str(), &provider)?;
+
+            if app_type.is_additive_mode()
+                || crate::settings::get_effective_current_provider(&state.db, &app_type)?.is_some()
+            {
+                return Ok(false);
+            }
+
+            state
+                .db
+                .set_current_provider_if_none(app_type.as_str(), &provider.id)
+        })();
+
+        match result {
+            Ok(became_current) => UniversalProviderAppSyncResult {
+                app,
+                success: true,
+                became_current,
+                error: None,
+            },
+            Err(error) => UniversalProviderAppSyncResult {
+                app,
+                success: false,
+                became_current: false,
+                error: Some(error.to_string()),
+            },
+        }
+    }
+
+    /// 同步统一供应商到各应用，并保留逐客户端结果。
+    pub fn sync_universal_to_apps(
+        state: &AppState,
+        id: &str,
+    ) -> Result<UniversalProviderSyncResult, AppError> {
         let provider = state
             .db
             .get_universal_provider(id)?
             .ok_or_else(|| AppError::Message(format!("统一供应商 {id} 不存在")))?;
 
-        // 同步到 Claude
-        if let Some(mut claude_provider) = provider.to_claude_provider() {
-            // 合并已有配置
-            if let Some(existing) = state.db.get_provider_by_id(&claude_provider.id, "claude")? {
-                let mut merged = existing.settings_config.clone();
-                Self::merge_json(&mut merged, &claude_provider.settings_config);
-                claude_provider.settings_config = merged;
-            }
-            state.db.save_provider("claude", &claude_provider)?;
-        } else {
-            // 如果禁用了 Claude，删除对应的子供应商
-            let claude_id = format!("universal-claude-{id}");
-            let _ = state.db.delete_provider("claude", &claude_id);
-        }
+        let apps = vec![
+            Self::sync_universal_app(
+                state,
+                AppType::Claude,
+                provider.to_claude_provider(),
+                &format!("universal-claude-{id}"),
+            ),
+            Self::sync_universal_app(
+                state,
+                AppType::Codex,
+                provider.to_codex_provider(),
+                &format!("universal-codex-{id}"),
+            ),
+            Self::sync_universal_app(
+                state,
+                AppType::Gemini,
+                provider.to_gemini_provider(),
+                &format!("universal-gemini-{id}"),
+            ),
+        ];
 
-        // 同步到 Codex
-        if let Some(mut codex_provider) = provider.to_codex_provider() {
-            // 合并已有配置
-            if let Some(existing) = state.db.get_provider_by_id(&codex_provider.id, "codex")? {
-                let mut merged = existing.settings_config.clone();
-                Self::merge_json(&mut merged, &codex_provider.settings_config);
-                codex_provider.settings_config = merged;
-            }
-            state.db.save_provider("codex", &codex_provider)?;
-        } else {
-            let codex_id = format!("universal-codex-{id}");
-            let _ = state.db.delete_provider("codex", &codex_id);
-        }
-
-        // 同步到 Gemini
-        if let Some(mut gemini_provider) = provider.to_gemini_provider() {
-            // 合并已有配置
-            if let Some(existing) = state.db.get_provider_by_id(&gemini_provider.id, "gemini")? {
-                let mut merged = existing.settings_config.clone();
-                Self::merge_json(&mut merged, &gemini_provider.settings_config);
-                gemini_provider.settings_config = merged;
-            }
-            state.db.save_provider("gemini", &gemini_provider)?;
-        } else {
-            let gemini_id = format!("universal-gemini-{id}");
-            let _ = state.db.delete_provider("gemini", &gemini_id);
-        }
-
-        Ok(true)
+        Ok(UniversalProviderSyncResult {
+            provider_id: id.to_string(),
+            success: apps.iter().all(|app| app.success),
+            apps,
+        })
     }
 
     /// 递归合并 JSON：base 为底，patch 覆盖同名字段

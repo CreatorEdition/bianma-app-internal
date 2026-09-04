@@ -176,6 +176,12 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取代理配置失败: {e}"))?;
 
+        if !is_loopback_listen_address(&config.listen_address) {
+            return Err(
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+            );
+        }
+
         // 3. 若已在运行：确保持久化状态（如需要）并返回当前信息
         if let Some(server) = self.server.read().await.as_ref() {
             let status = server.get_status().await;
@@ -870,7 +876,7 @@ impl ProxyService {
         Ok(())
     }
 
-    /// 构造写入 Live 的代理地址（处理 0.0.0.0 / IPv6 等特殊情况）
+    /// 构造写入 Live 的代理地址。
     async fn build_proxy_urls(&self) -> Result<(String, String), String> {
         let config = self
             .db
@@ -878,13 +884,16 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取代理配置失败: {e}"))?;
 
-        // listen_address 可能是 0.0.0.0（用于监听所有网卡），但客户端无法用 0.0.0.0 连接；
-        // 因此写回到各应用配置时，优先使用本机回环地址。
-        let connect_host = match config.listen_address.as_str() {
-            "0.0.0.0" => "127.0.0.1".to_string(),
-            "::" => "::1".to_string(),
-            _ => config.listen_address.clone(),
-        };
+        if !is_loopback_listen_address(&config.listen_address) {
+            return Err(
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+            );
+        }
+        let connect_host = normalized_loopback_listen_address(&config.listen_address)
+            .ok_or_else(|| {
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string()
+            })?
+            .to_string();
         let connect_host_for_url = if connect_host.contains(':') && !connect_host.starts_with('[') {
             format!("[{connect_host}]")
         } else {
@@ -1817,6 +1826,12 @@ impl ProxyService {
 
     /// 更新代理配置
     pub async fn update_config(&self, config: &ProxyConfig) -> Result<(), String> {
+        let Some(listen_address) = normalized_loopback_listen_address(&config.listen_address)
+        else {
+            return Err(
+                "代理监听地址必须是本机回环地址（127.0.0.1、localhost 或 ::1）".to_string(),
+            );
+        };
         // 记录旧配置用于判定是否需要重启
         let previous = self
             .db
@@ -1826,6 +1841,7 @@ impl ProxyService {
 
         // 保存到数据库（保持 live_takeover_active 状态不变）
         let mut new_config = config.clone();
+        new_config.listen_address = listen_address.to_string();
         new_config.live_takeover_active = previous.live_takeover_active;
 
         self.db
@@ -2161,6 +2177,107 @@ model = "gpt-5.1-codex"
         assert!(
             !env.contains_key("ANTHROPIC_AUTH_TOKEN"),
             "should not add ANTHROPIC_AUTH_TOKEN when absent"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn takeover_before_hot_switch_preserves_target_provider_credential() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        let service = ProxyService::new(db.clone());
+
+        let legacy_provider = Provider::with_id(
+            "legacy-current".to_string(),
+            "Legacy current".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_API_KEY": "legacy-provider-token",
+                    "ANTHROPIC_BASE_URL": "https://legacy.example"
+                }
+            }),
+            None,
+        );
+        let unified_provider = Provider::with_id(
+            "universal-claude-primary".to_string(),
+            "Unified primary".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_API_KEY": "unified-provider-token",
+                    "ANTHROPIC_BASE_URL": "https://unified.example"
+                }
+            }),
+            None,
+        );
+
+        db.save_provider("claude", &legacy_provider)
+            .expect("save legacy provider");
+        db.save_provider("claude", &unified_provider)
+            .expect("save unified provider");
+        db.set_current_provider("claude", &legacy_provider.id)
+            .expect("set db current provider");
+        crate::settings::set_current_provider(&AppType::Claude, Some(&legacy_provider.id))
+            .expect("set local current provider");
+
+        service
+            .write_claude_live(&json!({
+                "env": {
+                    "ANTHROPIC_AUTH_TOKEN": "old-live-token",
+                    "ANTHROPIC_BASE_URL": "https://live.example"
+                }
+            }))
+            .expect("seed legacy live config");
+
+        service
+            .backup_live_config_strict(&AppType::Claude)
+            .await
+            .expect("backup legacy live config");
+        service
+            .sync_live_to_provider(&AppType::Claude)
+            .await
+            .expect("sync live token to legacy provider");
+        service
+            .takeover_live_config_strict(&AppType::Claude)
+            .await
+            .expect("take over legacy live config");
+        service
+            .hot_switch_provider("claude", &unified_provider.id)
+            .await
+            .expect("hot switch to unified provider");
+
+        let legacy_after = db
+            .get_provider_by_id(&legacy_provider.id, "claude")
+            .expect("get legacy provider")
+            .expect("legacy provider exists");
+        assert_eq!(
+            legacy_after
+                .settings_config
+                .get("env")
+                .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+                .and_then(|value| value.as_str()),
+            Some("old-live-token"),
+            "the old Live token belongs to the provider that was current during takeover"
+        );
+
+        let unified_after = db
+            .get_provider_by_id(&unified_provider.id, "claude")
+            .expect("get unified provider")
+            .expect("unified provider exists");
+        assert_eq!(
+            unified_after
+                .settings_config
+                .get("env")
+                .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+                .and_then(|value| value.as_str()),
+            Some("unified-provider-token"),
+            "switching after takeover must not overwrite the selected provider credential"
+        );
+        assert_eq!(
+            crate::settings::get_effective_current_provider(&db, &AppType::Claude)
+                .expect("get effective current provider"),
+            Some(unified_provider.id.clone())
         );
     }
 
