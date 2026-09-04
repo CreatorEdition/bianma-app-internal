@@ -20,6 +20,6 @@
     <binary>bianma-app</binary>
   </provides>
 
-  <url type="homepage">https://github.com/CreatorEdition/bianma-app-internal</url>
-  <url type="bugtracker">https://github.com/CreatorEdition/bianma-app-internal/issues</url>
+  <url type="homepage">https://github.com/CreatorEdition/bianma-app</url>
+  <url type="bugtracker">https://github.com/CreatorEdition/bianma-app/issues</url>
 </component>

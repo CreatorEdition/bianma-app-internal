@@ -19,5 +19,5 @@
 
 ## Links
 
-- [GitHub Issues](https://github.com/CreatorEdition/bianma-app-internal/issues)
-- [GitHub Repository](https://github.com/CreatorEdition/bianma-app-internal)
+- [GitHub Issues](https://github.com/CreatorEdition/bianma-app/issues)
+- [GitHub Repository](https://github.com/CreatorEdition/bianma-app)
