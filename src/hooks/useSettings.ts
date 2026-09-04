@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { providersApi, settingsApi, type AppId } from "@/lib/api";
 import { useSettingsQuery, useSaveSettingsMutation } from "@/lib/query";
+import { syncCurrentProvidersLiveSafe } from "@/utils/postChangeSync";
 import type { Settings } from "@/types";
 import { useSettingsForm, type SettingsFormState } from "./useSettingsForm";
 import {
@@ -266,6 +267,12 @@ export function useSettings(): UseSettingsResult {
           mergedSettings.openclawConfigDir,
         );
         const previousAppDir = initialAppConfigDir;
+        const providerDirsChanged =
+          sanitizedClaudeDir !== sanitizeDir(data?.claudeConfigDir) ||
+          sanitizedCodexDir !== sanitizeDir(data?.codexConfigDir) ||
+          sanitizedGeminiDir !== sanitizeDir(data?.geminiConfigDir) ||
+          sanitizedOpencodeDir !== sanitizeDir(data?.opencodeConfigDir) ||
+          sanitizedOpenclawDir !== sanitizeDir(data?.openclawConfigDir);
         const { webdavSync: _ignoredWebdavSync, ...restSettings } =
           mergedSettings;
 
@@ -280,6 +287,23 @@ export function useSettings(): UseSettingsResult {
         };
 
         await saveMutation.mutateAsync(payload);
+
+        // 目录覆盖保存成功后，将当前供应商同步到新的 live 配置目录。
+        // 同步失败不回滚已保存的设置，只提示用户稍后重试。
+        if (providerDirsChanged) {
+          const syncResult = await syncCurrentProvidersLiveSafe();
+          if (!syncResult.ok) {
+            console.warn(
+              "[useSettings] Failed to sync current providers after directory change",
+              syncResult.error,
+            );
+            toast.error(
+              t("notifications.providerDirectorySyncFailed", {
+                defaultValue: "设置已保存，但当前供应商未能同步到新的配置目录",
+              }),
+            );
+          }
+        }
 
         await settingsApi.setAppConfigDirOverride(sanitizedAppDir ?? null);
 

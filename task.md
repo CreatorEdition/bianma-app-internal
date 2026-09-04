@@ -4,7 +4,8 @@
 
 - ✅ 已完成（2026-08-13）：从已验证安全基线 `5888952` 独立重建纯 Rust Stage-first 路由规划器。新增无正常依赖、固定容量的 `routing-core` crate；Target 只绑定 Site、ModelDeployment、Endpoint 与 AccountSelector，计划直接借用同一不可变快照并按 Stage 最多选择一个目标。Priority、RoundRobin、LeastPenalty 均被限制在当前 Stage；非法容量、预算、重复目标/部署、非连续 Stage 与无可用候选会在发送前拒绝。本切片未接入旧 Forwarder、HTTP、429/重试、健康、数据库、Secret、ContextPipeline 或 UI；默认产品仍是一套全局统一路由，客户端专属映射与同级均衡仅作为高级配置输入。
 - ✅ 已完成（2026-08-13）：收口旧 Proxy 的接流前安全门禁，并通过 Terra 三轮独立安全复审（0 个剩余 BLOCKING）。代理配置在前端、Tauri 命令、服务、DAO 与最终 bind 五层只允许本机回环地址，模型路由统一拒绝带 `Origin` 的浏览器请求；传输一旦可能写出请求就转为 `DeliveryUnknown`，已经收到任何上游 HTTP 响应也不得切换 Provider 重放。本切片不新增鉴权系统、后台线程、轮询、依赖或 routing-core 功能；可信 429 回执与受控 A→B 留给 routing-core v2。旧 Forwarder 的同 Provider thinking 整流重试作为后续 Attempt 合同审计项，不在本切片扩展。
-- ✅ 已完成（2026-08-13）：重做 RT-002 轻量控制面。产品按工具软件而非用户留存目标优化，默认路径固定为“概览 → 上游 → 路由 → 用量”；首次上游仅要求 API 地址、API Key 与默认模型，保存后自动同步并在无现有选择时成为当前供应商，部分同步失败可见且可直接重试。高阶映射继续下沉高级配置；本切片不修改旧 Forwarder，不新增后台轮询。
+- ✅ 已完成（2026-08-17）：最终收口 RT-002 默认路径为“路由中心 → 上游 → 用量”。首页直接执行统一上游准备、启动本地入口和支持客户端接入，不再用一个说明型概览页跳转到第二个路由页；简易上游只保存 API 地址、API Key 与默认模型，逐客户端兼容同步统一延后到首页的一键启动。简易模式维护一个明确的当前上游，按稳定顺序回退，且只有完整覆盖 Claude/Codex/Gemini 的配置才有资格成为全局上游。启动时遵守兼容层契约，先接管并同步旧 Live Token，再热切换到选定统一上游；首页同时核验 takeover 与 `active_targets`，只有三端目标一致才显示“统一路由已接入”，失败不会虚报 3/3。当前上游准备失败时不启动代理、不接管客户端；备用候选失败只降级提示。简易表单不再渲染客户端开关和逐客户端模型映射，高级入口降为首页齿轮按钮。本切片删除重复首页组件，未新增依赖、额外轮询、后台任务、routing-core 或旧 Forwarder 逻辑；69 个前端测试文件 / 403 项、TypeScript、本次修改文件的 Prettier、diff check 与 renderer 生产构建通过。另补充 Rust 凭据顺序回归测试；`cargo fmt --check` 通过，focused test 在本机编译至链接阶段后因缺少 MSVC `link.exe` 未能执行。
+- ✅ 已完成（2026-08-13）：首次上游表单默认只显示 API 地址、API Key 与默认模型；客户端切换、逐客户端模型映射、Header 与兼容参数默认隐藏，仅在“客户端例外配置”高级入口中出现。
 - ⚠️ 能力边界：当前 `UniversalProvider` 仍是向 Claude、Codex、Gemini 客户端配置同步的兼容层；多账户/多 API Key 池、JWT 屏蔽、模型级故障链与统一 Header/User-Agent 策略继续由 routing-core v2 实现。
 
 ## 当前定位
@@ -76,9 +77,9 @@
 - ✅ 已完成（2026-04-12）：压缩公开用户手册主路径中的历史 `cc-switch` 命名解释，并统一回指迁移兼容说明。
 - ✅ 已完成（2026-04-12）：继续压缩 FAQ / Skills / 导入说明 / 英日文索引中的历史命名提醒，减少旧标识在公开主路径的前置暴露。
 - ✅ 已完成（2026-04-12）：收束开发者协议文档与 Flatpak 兼容文档中的 legacy 标识说明，统一改为兼容标识清单与迁移导向。
-- ✅ 已完成（2026-07-04）：单仓完全开源收口，`bianma-app` 改为后续唯一正式开发、发布与 updater 目标仓；基础 manifest 已同步到 `bianma-app / 0.0.1 / CreatorEdition/bianma-app`。
-- ✅ 已完成（2026-07-04）：切片 1 清理开源单仓发布身份与 release/updater 残留；前端 release 链接与 Rust fallback 更新入口已指向 `CreatorEdition/bianma-app`，公开 `release.yml` 已改为安全预检占位，不再声明由 `bianma-app-product` 私有仓承接。
-- ✅ 已完成（2026-07-04）：切片 2 清理公开可见品牌入口；主 UI、About 面板、Windows 覆盖窗口标题与 Flatpak 用户可见元数据已统一到 `bianma.ai` / `CreatorEdition/bianma-app`。
+- ✅ 已完成（2026-07-04）：单仓完全开源收口，`bianma-app-internal` 改为后续唯一正式开发、发布与 updater 目标仓；应用品牌仍为 `bianma-app`，基础 manifest 已同步到 `0.0.1 / CreatorEdition/bianma-app-internal`。
+- ✅ 已完成（2026-07-04）：切片 1 清理开源单仓发布身份与 release/updater 残留；前端 release 链接与 Rust fallback 更新入口已指向 `CreatorEdition/bianma-app-internal`，公开 `release.yml` 已改为安全预检占位，不再声明由 `bianma-app-product` 私有仓承接。
+- ✅ 已完成（2026-07-04）：切片 2 清理公开可见品牌入口；主 UI、About 面板、Windows 覆盖窗口标题与 Flatpak 用户可见元数据已统一到 `bianma.ai` / `CreatorEdition/bianma-app-internal`。
 - ✅ 已完成（2026-07-04）：切片 3 清理 i18n 应用标题；中英日 `app.title` 与 `app.description` 已统一到 `bianma.ai` 和本地 AI 编码控制面口径。
 - ✅ 已完成（2026-07-05）：迁移 Provider 批量延迟测速最小切片；已补齐缓存表、DAO、Tauri 命令与前端 API 基础能力，未迁移 ProviderWorkspacePanel 大 UI。
 - ✅ 已完成（2026-07-05）：补齐 Provider Workspace 未来依赖的通用模型发现 API 基础能力；新增 `fetch_provider_models` 命令、结构化错误、前端类型与 API 包装，未迁移 ProviderWorkspacePanel 大 UI。

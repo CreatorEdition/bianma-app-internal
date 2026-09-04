@@ -736,7 +736,7 @@ impl SkillService {
             }
         }
 
-        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        entries.sort_by_key(|a| std::cmp::Reverse(a.created_at));
         Ok(entries)
     }
 
@@ -1230,7 +1230,7 @@ impl SkillService {
         let results: Vec<Result<Vec<DiscoverableSkill>>> =
             futures::future::join_all(fetch_tasks).await;
 
-        for (repo, result) in enabled_repos.into_iter().zip(results.into_iter()) {
+        for (repo, result) in enabled_repos.into_iter().zip(results) {
             match result {
                 Ok(repo_skills) => skills.extend(repo_skills),
                 Err(e) => log::warn!("获取仓库 {}/{} 技能失败: {}", repo.owner, repo.name, e),
@@ -1239,7 +1239,7 @@ impl SkillService {
 
         // 去重并排序
         Self::deduplicate_discoverable_skills(&mut skills);
-        skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        skills.sort_by_key(|a| a.name.to_lowercase());
 
         Ok(skills)
     }
@@ -1306,7 +1306,7 @@ impl SkillService {
             }
         }
 
-        skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        skills.sort_by_key(|a| a.name.to_lowercase());
 
         Ok(skills)
     }
