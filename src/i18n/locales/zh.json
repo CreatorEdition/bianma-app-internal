@@ -143,6 +143,11 @@
     "openTerminal": "打开终端",
     "terminalOpened": "终端已打开",
     "terminalOpenFailed": "打开终端失败",
+    "latencyNotTested": "未测速",
+    "latencyFailed": "失败",
+    "latencyNoResponse": "无响应",
+    "badgeUsageScript": "用量脚本",
+    "badgeFavorited": "已收藏",
     "name": "供应商名称",
     "namePlaceholder": "例如：Claude 官方",
     "websiteUrl": "官网链接",
@@ -176,6 +181,7 @@
     "switchSuccess": "切换成功！",
     "addToConfigSuccess": "已添加到配置",
     "removeFromConfigSuccess": "已从配置移除",
+    "removeFromConfigFailed": "从配置移除失败",
     "switchFailedTitle": "切换失败",
     "switchFailed": "切换失败：{{error}}",
     "autoImported": "已从现有配置创建默认供应商",
@@ -193,6 +199,7 @@
     "deleteFailed": "删除供应商失败：{{error}}",
     "settingsSaved": "设置已保存",
     "settingsSaveFailed": "保存设置失败：{{error}}",
+    "providerDirectorySyncFailed": "设置已保存，但当前供应商未能同步到新的配置目录",
     "proxyRequiredForSwitch": "此供应商{{reason}}，需要代理服务才能正常使用，请先启动代理",
     "proxyReasonCopilot": "使用 GitHub Copilot 作为 Claude 供应商",
     "proxyReasonOpenAIChat": "使用 OpenAI Chat 接口格式",
@@ -234,7 +241,7 @@
     },
     "autoSync": {
       "title": "开启自动同步",
-      "message": "开启自动同步后，每次数据库变更都会自动上传到 WebDAV 服务器。\n\n这可能会产生较高的网络流量消耗，请确保您的网络环境和 WebDAV 服务支持频繁的数据传输。",
+      "message": "开启自动同步后，选定范围内的数据变更会自动上传到 WebDAV 服务器；未选定范围的变更不会触发自动上传。\n\n这可能会产生较高的网络流量消耗，请确保您的网络环境和 WebDAV 服务支持频繁的数据传输。",
       "confirm": "我已了解，继续开启"
     }
   },

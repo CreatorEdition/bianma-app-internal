@@ -84,30 +84,49 @@ export function useProviderWorkspaceActions({
     if (!confirmAction) return;
     const { provider, action } = confirmAction;
 
-    if (action === "remove") {
-      await providersApi.removeFromLiveConfig(provider.id, activeApp);
-      if (activeApp === "opencode") {
-        await queryClient.invalidateQueries({
-          queryKey: ["opencodeLiveProviderIds"],
-        });
-      } else if (activeApp === "openclaw") {
-        await queryClient.invalidateQueries({
-          queryKey: openclawKeys.liveProviderIds,
-        });
-        await queryClient.invalidateQueries({
-          queryKey: openclawKeys.health,
-        });
+    try {
+      if (action === "remove") {
+        await providersApi.removeFromLiveConfig(provider.id, activeApp);
+        if (activeApp === "opencode") {
+          await queryClient.invalidateQueries({
+            queryKey: ["opencodeLiveProviderIds"],
+          });
+        } else if (activeApp === "openclaw") {
+          await queryClient.invalidateQueries({
+            queryKey: openclawKeys.liveProviderIds,
+          });
+          await queryClient.invalidateQueries({
+            queryKey: openclawKeys.health,
+          });
+        }
+        toast.success(
+          t("notifications.removeFromConfigSuccess", {
+            defaultValue: "已从配置移除",
+          }),
+          { closeButton: true },
+        );
+      } else {
+        await deleteProvider(provider.id);
       }
-      toast.success(
-        t("notifications.removeFromConfigSuccess", {
-          defaultValue: "已从配置移除",
-        }),
-        { closeButton: true },
+    } catch (error) {
+      console.error("[App] Failed to confirm provider action", error);
+      const detail = extractErrorMessage(error);
+      const message = t(
+        action === "remove"
+          ? "notifications.removeFromConfigFailed"
+          : "notifications.deleteFailed",
+        {
+          defaultValue:
+            action === "remove" ? "从配置移除失败" : "删除供应商失败",
+          error: detail,
+        },
       );
-    } else {
-      await deleteProvider(provider.id);
+      toast.error(
+        detail && !message.includes(detail) ? `${message}: ${detail}` : message,
+      );
+    } finally {
+      clearConfirmAction();
     }
-    clearConfirmAction();
   }, [
     activeApp,
     clearConfirmAction,

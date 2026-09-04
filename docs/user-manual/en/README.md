@@ -84,5 +84,5 @@ Historical release notes under `docs/release-notes/` are archival records and sh
 
 ## Contributing
 
-- [GitHub Issues](https://github.com/CreatorEdition/bianma-app/issues)
-- [GitHub Repository](https://github.com/CreatorEdition/bianma-app)
+- [GitHub Issues](https://github.com/CreatorEdition/bianma-app-internal/issues)
+- [GitHub Repository](https://github.com/CreatorEdition/bianma-app-internal)

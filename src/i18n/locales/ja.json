@@ -143,6 +143,11 @@
     "openTerminal": "ターミナルを開く",
     "terminalOpened": "ターミナルを開きました",
     "terminalOpenFailed": "ターミナルを開けませんでした",
+    "latencyNotTested": "未測定",
+    "latencyFailed": "失敗",
+    "latencyNoResponse": "応答なし",
+    "badgeUsageScript": "使用量スクリプト",
+    "badgeFavorited": "お気に入り",
     "name": "プロバイダー名",
     "namePlaceholder": "例: Claude Official",
     "websiteUrl": "Web サイト URL",
@@ -176,6 +181,7 @@
     "switchSuccess": "切り替え成功！",
     "addToConfigSuccess": "設定に追加しました",
     "removeFromConfigSuccess": "設定から削除しました",
+    "removeFromConfigFailed": "設定からの削除に失敗しました",
     "switchFailedTitle": "切り替えに失敗しました",
     "switchFailed": "切り替えに失敗しました: {{error}}",
     "autoImported": "既存設定からデフォルトプロバイダーを自動作成しました",
@@ -193,6 +199,7 @@
     "deleteFailed": "プロバイダーの削除に失敗しました: {{error}}",
     "settingsSaved": "設定を保存しました",
     "settingsSaveFailed": "設定の保存に失敗しました: {{error}}",
+    "providerDirectorySyncFailed": "設定は保存されましたが、現在のプロバイダーを新しい設定ディレクトリに同期できませんでした",
     "proxyRequiredForSwitch": "このプロバイダーは{{reason}}、プロキシサービスが必要です。先にプロキシを起動してください",
     "proxyReasonCopilot": "GitHub Copilot を Claude プロバイダーとして使用しており",
     "proxyReasonOpenAIChat": "OpenAI Chat API フォーマットを使用しており",
@@ -234,7 +241,7 @@
     },
     "autoSync": {
       "title": "自動同期を有効にする",
-      "message": "自動同期を有効にすると、データベースの変更ごとに WebDAV サーバーへ自動アップロードされます。\n\nネットワークトラフィックが大幅に増加する可能性があります。ネットワーク環境と WebDAV サービスが頻繁なデータ転送に対応できることをご確認ください。",
+      "message": "自動同期を有効にすると、選択した範囲の変更が WebDAV サーバーへ自動アップロードされます。選択していない範囲の変更では自動アップロードは発生しません。\n\nネットワークトラフィックが大幅に増加する可能性があります。ネットワーク環境と WebDAV サービスが頻繁なデータ転送に対応できることをご確認ください。",
       "confirm": "理解しました、有効にする"
     }
   },

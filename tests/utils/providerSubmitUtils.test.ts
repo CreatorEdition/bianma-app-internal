@@ -63,6 +63,14 @@ describe("providerSubmitUtils", () => {
         baseUrl: "https://example.invalid/v1",
       }),
     ).toBe(false);
+
+    expect(
+      isGithubCopilotProvider({
+        templateProviderType: undefined,
+        initialProviderType: undefined,
+        baseUrl: "https://api.githubcopilot.com.attacker.invalid/v1",
+      }),
+    ).toBe(false);
   });
 
   it("校验 OpenCode provider key 必填", () => {

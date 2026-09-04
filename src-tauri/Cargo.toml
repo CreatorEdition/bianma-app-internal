@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Desktop control plane for Claude Code, Codex & Gemini CLI"
 authors = ["CreatorEdition"]
 license = "MIT"
-repository = "https://github.com/CreatorEdition/bianma-app"
+repository = "https://github.com/CreatorEdition/bianma-app-internal"
 edition = "2021"
 rust-version = "1.85.0"
 
